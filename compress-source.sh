@@ -1,40 +1,44 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 
-PROJECT_NAME="local-ai-images"
-TIMESTAMP="$(date +"%Y%m%d-%H%M%S")"
-ARCHIVE_NAME="${PROJECT_NAME}-${TIMESTAMP}.zip"
+if [ "$#" -ne 1 ]; then
+  printf 'Usage: %s <output-directory>\n' "$0" >&2
+  exit 2
+fi
 
-DEST_DIR="${1:-$HOME/Desktop}"
-DEST_DIR="${DEST_DIR/#\~/$HOME}"
+OUTPUT_DIR="$1"
+if [ ! -d "$OUTPUT_DIR" ]; then
+  printf 'Output directory does not exist: %s\n' "$OUTPUT_DIR" >&2
+  exit 2
+fi
 
-mkdir -p "$DEST_DIR"
-
-ARCHIVE_PATH="${DEST_DIR%/}/${ARCHIVE_NAME}"
+if ! command -v zip >/dev/null 2>&1; then
+  printf 'zip is required. Install it with: sudo apt install zip\n' >&2
+  exit 2
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+ZIP_PATH="$(cd "$OUTPUT_DIR" && pwd)/local-AI-LLM-${TIMESTAMP}.zip"
 
 cd "$SCRIPT_DIR"
 
-zip -r "$ARCHIVE_PATH" . \
-  -x "node_modules/*" \
-  -x ".git/*" \
-  -x "public/build/build.js.map" \
-  -x "*.log" \
-  -x "npm-debug.log*" \
-  -x "yarn-debug.log*" \
-  -x "yarn-error.log*" \
-  -x ".DS_Store" \
-  -x "coverage/*" \
-  -x ".nyc_output/*" \
-  -x "dist/*" \
-  -x "build/*" \
-  -x "tmp/*" \
-  -x "temp/*" \
-  -x ".env" \
-  -x ".env.*" \
-  -x "${ARCHIVE_NAME}"
+zip -r "$ZIP_PATH" . \
+  -x 'node_modules/*' \
+  -x 'dist/*' \
+  -x 'build/*' \
+  -x '.git/*' \
+  -x 'coverage/*' \
+  -x '*.log' \
+  -x '*.tmp' \
+  -x '*.swp' \
+  -x '.DS_Store' \
+  -x '.env' \
+  -x '.env.local' \
+  -x '.env.development' \
+  -x '.env.production' \
+  -x '.env.test' \
+  -x 'config/*.json' \
+  -x '*.zip'
 
-echo "Created archive:"
-echo "$ARCHIVE_PATH"
+printf '%s\n' "$ZIP_PATH"
