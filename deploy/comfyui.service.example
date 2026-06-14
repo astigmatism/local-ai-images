@@ -1,22 +1,25 @@
+# Copy to /etc/systemd/system/comfyui.service, then replace every occurrence of
+# <user> with the logged-in Ubuntu account that owns the ComfyUI checkout.
+# This keeps raw ComfyUI local-only; expose the Local AI Images API instead.
+
 [Unit]
-Description=ComfyUI local image-generation backend
+Description=ComfyUI local image-generation backend for Local AI Images
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/ComfyUI
+User=<user>
+Group=<user>
+WorkingDirectory=/home/<user>/ComfyUI
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/ComfyUI/venv/bin/python main.py --listen 127.0.0.1 --port 8188
+ExecStart=/home/<user>/ComfyUI/venv/bin/python main.py --listen 127.0.0.1 --port 8188
 Restart=on-failure
 RestartSec=5
-User=local-ai-llm
-Group=local-ai-llm
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
-ReadWritePaths=/opt/ComfyUI /srv/comfyui/models /var/lib/comfyui
+ReadWritePaths=/home/<user>/ComfyUI /home/<user>/comfyui-models
 
 [Install]
 WantedBy=multi-user.target

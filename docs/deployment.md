@@ -1,59 +1,66 @@
 # Deployment guide
 
-This project follows the reference app's host-service/systemd style. No new npm dependencies are required. The default image backend is ComfyUI on `127.0.0.1:8188`; the public LAN service is this app on port `8000`.
+Local AI Images follows the reference app's host-service/systemd style. The default image backend is ComfyUI on `127.0.0.1:8188`; the public LAN service is this app on port `8000`.
+
+The intended deployment model is simple: run both the app and ComfyUI under the logged-in Ubuntu account from that user's home directory. Do not create a `local-ai-images` service account unless you intentionally choose a hardened custom layout.
 
 ## Directory layout
 
-Recommended production layout:
+Recommended home-directory layout, using `<user>` as a placeholder for the logged-in Ubuntu account:
 
 ```text
-/opt/local-ai-llm/              # this application
-/opt/ComfyUI/                   # ComfyUI checkout and Python venv
-/srv/comfyui/models/            # operator-supplied model files
-/var/lib/local-ai-image/artifacts/  # generated images and sidecar metadata
+/home/<user>/local-ai-images/          # this application
+/home/<user>/ComfyUI/                  # ComfyUI checkout and Python venv
+/home/<user>/comfyui-models/           # operator-supplied model files
+/home/<user>/local-ai-images/data/     # generated artifacts and runtime data
 ```
 
-Create the service account and directories:
+Create the directories as the logged-in user:
 
 ```bash
-sudo useradd --system --create-home --home-dir /opt/local-ai-llm --shell /usr/sbin/nologin local-ai-llm || true
-sudo mkdir -p /opt/local-ai-llm /opt/ComfyUI /srv/comfyui/models /var/lib/local-ai-image/artifacts
-sudo chown -R local-ai-llm:local-ai-llm /opt/local-ai-llm /opt/ComfyUI /srv/comfyui /var/lib/local-ai-image
+mkdir -p "$HOME/local-ai-images" \
+  "$HOME/ComfyUI" \
+  "$HOME/comfyui-models/checkpoints" \
+  "$HOME/comfyui-models/loras" \
+  "$HOME/comfyui-models/vae" \
+  "$HOME/comfyui-models/controlnet" \
+  "$HOME/local-ai-images/data/artifacts"
 ```
 
-## Install Node application
+## Install the Node application
 
-Copy the source tree to `/opt/local-ai-llm` and install:
+Copy or clone the source tree into `$HOME/local-ai-images`:
 
 ```bash
-cd /opt/local-ai-llm
-sudo -u local-ai-llm npm ci
-sudo -u local-ai-llm cp .env.example .env
-sudo -u local-ai-llm mkdir -p config/workflows data/artifacts
-sudo -u local-ai-llm chmod 600 .env
+cd "$HOME/local-ai-images"
+npm ci
+cp .env.example .env
+mkdir -p config/workflows data/artifacts models
+chmod 600 .env
 ```
 
-Edit `/opt/local-ai-llm/.env`:
+Edit the environment file:
 
 ```bash
-sudoedit /opt/local-ai-llm/.env
+nano "$HOME/local-ai-images/.env"
 ```
 
 Minimum production values:
 
 ```dotenv
+CONFIG_PATH=./config/local-ai-images.json
 IMAGE_GENERATION_ENABLED=true
 IMAGE_BACKEND=comfyui
 COMFYUI_BASE_URL=http://127.0.0.1:8188
-IMAGE_MODEL_PATHS=/srv/comfyui/models
-IMAGE_WORKFLOW_PATH=/opt/local-ai-llm/config/workflows
-IMAGE_ARTIFACT_PATH=/var/lib/local-ai-image/artifacts
+IMAGE_MODEL_PATHS=/home/<user>/comfyui-models
+IMAGE_WORKFLOW_PATH=/home/<user>/local-ai-images/config/workflows
+IMAGE_ARTIFACT_PATH=/home/<user>/local-ai-images/data/artifacts
 IMAGE_ARTIFACT_PUBLIC_BASE_URL=/api/v1/artifacts
 IMAGE_API_KEYS=<long-random-secret>
 REQUIRE_IMAGE_API_AUTH=true
 ```
 
-For local app-only testing without a GPU or ComfyUI:
+Replace `<user>` with the actual Ubuntu username. For local app-only testing without a GPU or ComfyUI, use:
 
 ```dotenv
 IMAGE_BACKEND=mock
@@ -62,37 +69,69 @@ REQUIRE_IMAGE_API_AUTH=false
 IMAGE_API_KEYS=
 ```
 
-## Install ComfyUI host service
+## Install ComfyUI
 
-Follow `docs/image-generation-vm.md` for GPU driver and Python setup. After ComfyUI works from the shell, install the service file:
+Follow `docs/image-generation-vm.md` for GPU driver and Python setup. A typical home-directory ComfyUI install is:
 
 ```bash
-cd /opt/local-ai-llm
-sudo cp deploy/comfyui.service.example /etc/systemd/system/comfyui.service
+cd "$HOME"
+git clone https://github.com/comfyanonymous/ComfyUI.git ComfyUI
+cd "$HOME/ComfyUI"
+python3 -m venv venv
+./venv/bin/pip install --upgrade pip
+./venv/bin/pip install -r requirements.txt
+```
+
+Install the PyTorch CUDA wheel appropriate for your driver/CUDA stack using the command from the official PyTorch selector, then validate CUDA from the ComfyUI venv:
+
+```bash
+"$HOME/ComfyUI/venv/bin/python" - <<'PY'
+import torch
+print(torch.__version__)
+print(torch.cuda.is_available())
+print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')
+PY
+```
+
+Point ComfyUI at the operator model directories with symlinks:
+
+```bash
+ln -sfn "$HOME/comfyui-models/checkpoints" "$HOME/ComfyUI/models/checkpoints"
+ln -sfn "$HOME/comfyui-models/loras" "$HOME/ComfyUI/models/loras"
+ln -sfn "$HOME/comfyui-models/vae" "$HOME/ComfyUI/models/vae"
+ln -sfn "$HOME/comfyui-models/controlnet" "$HOME/ComfyUI/models/controlnet"
+```
+
+## Install systemd services
+
+The example units contain `<user>` placeholders. Install them by replacing the placeholder with the current Ubuntu username:
+
+```bash
+cd "$HOME/local-ai-images"
+sed "s/<user>/$USER/g" deploy/comfyui.service.example | sudo tee /etc/systemd/system/comfyui.service >/dev/null
+sed "s/<user>/$USER/g" deploy/local-ai-images.service.example | sudo tee /etc/systemd/system/local-ai-images.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now comfyui.service
-sudo systemctl status comfyui.service --no-pager
-curl -sS http://127.0.0.1:8188/system_stats | jq .
+sudo systemctl enable --now local-ai-images.service
+```
+
+Check status and logs:
+
+```bash
+systemctl status comfyui.service --no-pager
+systemctl status local-ai-images.service --no-pager
+journalctl -u comfyui.service -f
+journalctl -u local-ai-images.service -f
+```
+
+For nvm-based Node installs, edit `/etc/systemd/system/local-ai-images.service`, comment the `/usr/bin/npm` `ExecStart`, uncomment the nvm `ExecStart`, then reload and restart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart local-ai-images.service
 ```
 
 ComfyUI should listen only on localhost in this deployment. Do not expose ComfyUI directly to the LAN unless you understand and accept the risk.
-
-## Install app systemd service
-
-```bash
-cd /opt/local-ai-llm
-sudo cp deploy/local-ai-llm.service.example /etc/systemd/system/local-ai-llm.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now local-ai-llm.service
-sudo systemctl status local-ai-llm.service --no-pager
-```
-
-View logs:
-
-```bash
-journalctl -u local-ai-llm.service -f
-journalctl -u comfyui.service -f
-```
 
 ## Firewall and network exposure
 
@@ -122,34 +161,56 @@ Submit a real generation request only after at least one checkpoint appears in C
 ```bash
 curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" \
   -H 'content-type: application/json' \
-  -d '{"prompt":"a production smoke test image","model":"YOUR_CHECKPOINT.safetensors","sync_timeout_ms":60000,"output":"url"}' \
+  -d '{
+    "prompt": "cinematic photo of a cozy cabin in snowy mountains",
+    "workflow_id": "sdxl-text-to-image",
+    "width": 1024,
+    "height": 1024,
+    "steps": 25,
+    "output": "url",
+    "sync_timeout_ms": 1000
+  }' \
   "$IMAGE_API_URL/api/v1/generate" | jq .
 ```
 
-## Updating
-
-The existing helper remains available:
+Retrieve an artifact:
 
 ```bash
-cd /opt/local-ai-llm
-sudo -u local-ai-llm ./update-and-restart.sh
+curl -L -H "Authorization: Bearer $IMAGE_API_KEY" \
+  "$IMAGE_API_URL/api/v1/artifacts/ARTIFACT_ID" \
+  --output output.png
+
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" \
+  "$IMAGE_API_URL/api/v1/artifacts/ARTIFACT_ID?metadata=1" | jq .
 ```
 
-Or manually:
+## Update flow
+
+With systemd installed:
 
 ```bash
-cd /opt/local-ai-llm
-sudo systemctl stop local-ai-llm.service
-sudo -u local-ai-llm npm ci
-sudo -u local-ai-llm npm run validate
-sudo systemctl start local-ai-llm.service
+cd "$HOME/local-ai-images"
+./update-and-restart.sh
 ```
 
-## Environment variable reference
+Manual update flow:
+
+```bash
+cd "$HOME/local-ai-images"
+sudo systemctl stop local-ai-images.service
+npm ci
+npm run validate
+sudo systemctl start local-ai-images.service
+```
+
+## Environment reference
 
 | Variable | Purpose |
 | --- | --- |
-| `IMAGE_GENERATION_ENABLED` | Enables `/api/v1/generate`. |
+| `PORT` / `HOST` | App bind address. |
+| `CONFIG_PATH` | Local AI Images runtime config JSON. Defaults to `./config/local-ai-images.json`. |
+| `OLLAMA_BASE_URL` | Retained legacy Ollama compatibility endpoint base URL. |
+| `IMAGE_GENERATION_ENABLED` | Enables the legacy Ollama image endpoint and `/api/v1` image runtime. |
 | `IMAGE_BACKEND` | `comfyui` or `mock`. |
 | `COMFYUI_BASE_URL` | Local ComfyUI API URL. |
 | `COMFYUI_REQUEST_TIMEOUT_MS` | Provider request and generation wait timeout. |
@@ -171,8 +232,6 @@ sudo systemctl start local-ai-llm.service
 
 ### GPU not visible in the guest
 
-Run:
-
 ```bash
 lspci -nn | grep -i nvidia
 nvidia-smi
@@ -182,16 +241,14 @@ If PCI devices are absent, fix passthrough on the hypervisor. If PCI devices exi
 
 ### ComfyUI cannot use CUDA
 
-Run the PyTorch CUDA validation command from `docs/image-generation-vm.md`. If `torch.cuda.is_available()` is false, reinstall the matching PyTorch CUDA wheel and confirm `nvidia-smi` works for the `local-ai-llm` user.
+Run the PyTorch CUDA validation command from `docs/image-generation-vm.md`. If `torch.cuda.is_available()` is false, reinstall the matching PyTorch CUDA wheel and confirm `nvidia-smi` works for the logged-in Ubuntu user.
 
 ### App says ComfyUI unavailable
-
-Check:
 
 ```bash
 systemctl status comfyui.service --no-pager
 curl -sS http://127.0.0.1:8188/system_stats | jq .
-grep '^COMFYUI_BASE_URL=' /opt/local-ai-llm/.env
+grep '^COMFYUI_BASE_URL=' "$HOME/local-ai-images/.env"
 ```
 
 ### Models are not listed
@@ -199,8 +256,6 @@ grep '^COMFYUI_BASE_URL=' /opt/local-ai-llm/.env
 Check `IMAGE_MODEL_PATHS`, file permissions, and supported extensions. The scanner ignores dotfiles and unknown extensions. The app never downloads models.
 
 ### Workflow not found
-
-Use:
 
 ```bash
 curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" "$IMAGE_API_URL/api/v1/workflows" | jq .
@@ -210,11 +265,12 @@ Confirm `workflow_id` matches one of the returned IDs. Invalid JSON in `IMAGE_WO
 
 ### Permission denied writing artifacts
 
-Ensure `IMAGE_ARTIFACT_PATH` is writable by the service user:
+Ensure `IMAGE_ARTIFACT_PATH` is writable by the logged-in Ubuntu user that runs the service:
 
 ```bash
-sudo chown -R local-ai-llm:local-ai-llm /var/lib/local-ai-image
-sudo systemctl restart local-ai-llm.service
+mkdir -p "$HOME/local-ai-images/data/artifacts"
+sudo chown -R "$USER:$USER" "$HOME/local-ai-images/data"
+sudo systemctl restart local-ai-images.service
 ```
 
 ### Out-of-VRAM failures

@@ -17,6 +17,6 @@ test('GET /health returns compatibility health shape and default loaded state', 
     assert.equal(body.default_model, 'qwen3:14b');
     assert.equal(body.default_model_loaded, true);
     assert.equal(Array.isArray(body.running_models), true);
-    assert.equal(body.service, 'Local AI LLM Monitor');
+    assert.equal(body.service, 'Local AI Images');
   });
 });

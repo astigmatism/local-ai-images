@@ -54,7 +54,7 @@ ss -tulpn | grep ':22'
 Set a stable hostname so logs and orchestrator configuration are predictable:
 
 ```bash
-sudo hostnamectl set-hostname local-ai-llm
+sudo hostnamectl set-hostname local-ai-images
 ```
 
 Use your router/DHCP server to reserve an IP address for the host when possible. That is usually safer than hand-editing netplan on a remote-only server. If you must configure a static IP on the host, inspect the active netplan file first:
@@ -87,7 +87,7 @@ The final expected ports are:
 
 - SSH: `22/tcp`
 - Ollama: `11434/tcp`
-- Monitor/portal: `8000/tcp`
+- Local AI Images portal: `8000/tcp`
 
 For LAN-only use, allow from your LAN CIDR instead of the whole internet. Example for `192.168.1.0/24`:
 

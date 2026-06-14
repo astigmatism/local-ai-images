@@ -140,7 +140,7 @@ export function builtinWorkflows(): WorkflowPreset[] {
         '9': {
           class_type: 'SaveImage',
           inputs: {
-            filename_prefix: 'local-ai-image',
+            filename_prefix: 'local-ai-images',
             images: ['8', 0]
           }
         }

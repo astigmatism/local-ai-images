@@ -49,3 +49,16 @@ test('loadRuntimeConfig parses image-generation backend, paths, auth, and queue 
     }
   }
 });
+
+
+test('loadRuntimeConfig uses local-ai-images default config path', () => {
+  const original = process.env.CONFIG_PATH;
+  try {
+    delete process.env.CONFIG_PATH;
+    const config = loadRuntimeConfig();
+    assert.equal(config.configPath, path.resolve(process.cwd(), './config/local-ai-images.json'));
+  } finally {
+    if (original === undefined) delete process.env.CONFIG_PATH;
+    else process.env.CONFIG_PATH = original;
+  }
+});

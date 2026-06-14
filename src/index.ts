@@ -20,7 +20,7 @@ async function main(): Promise<void> {
     server.listen(runtimeConfig.port, runtimeConfig.host, () => resolve());
   });
 
-  logger.info({ host: runtimeConfig.host, port: runtimeConfig.port }, 'Local AI LLM Monitor listening');
+  logger.info({ host: runtimeConfig.host, port: runtimeConfig.port }, 'Local AI Images listening');
 
   if (runtimeConfig.prewarmDefaultModelOnStart) {
     void ollamaClient.prewarmModel(config.default_model, runtimeConfig.prewarmKeepAlive, runtimeConfig.prewarmTimeoutMs)

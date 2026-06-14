@@ -6,7 +6,7 @@ const state = {
   runningModels: [],
   installedModels: [],
   gpus: [],
-  imageApiKey: window.localStorage.getItem('local-ai-image-api-key') || '',
+  imageApiKey: window.localStorage.getItem('local-ai-images-api-key') || '',
   imageHealth: null,
   imageStats: null,
   imageModels: null,
@@ -79,7 +79,7 @@ function renderHealth() {
   target.innerHTML = `
     <p>${statusPill(health.ok)}</p>
     ${renderKeyValues([
-      ['Service', escapeHtml(health.service || 'Local AI LLM Monitor')],
+      ['Service', escapeHtml(health.service || 'Local AI Images')],
       ['App version', escapeHtml(health.version || 'unknown')],
       ['Ollama', escapeHtml(health.ollama?.ok ? `reachable ${health.ollama?.version ? `(v${health.ollama.version})` : ''}` : `unreachable: ${health.error?.message || 'unknown error'}`)],
       ['Default model', `<code>${escapeHtml(health.default_model || '')}</code>`],
@@ -325,15 +325,15 @@ $('#refresh-button').addEventListener('click', refresh);
 $('#api-key-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   state.imageApiKey = $('#api-key-input').value.trim();
-  if (state.imageApiKey) window.localStorage.setItem('local-ai-image-api-key', state.imageApiKey);
-  else window.localStorage.removeItem('local-ai-image-api-key');
+  if (state.imageApiKey) window.localStorage.setItem('local-ai-images-api-key', state.imageApiKey);
+  else window.localStorage.removeItem('local-ai-images-api-key');
   setImageFeedback(state.imageApiKey ? 'Saved API key in this browser only.' : 'Cleared browser API key.');
   await refresh();
 });
 
 $('#clear-key-button').addEventListener('click', async () => {
   state.imageApiKey = '';
-  window.localStorage.removeItem('local-ai-image-api-key');
+  window.localStorage.removeItem('local-ai-images-api-key');
   $('#api-key-input').value = '';
   setImageFeedback('Cleared browser API key.');
   await refresh();

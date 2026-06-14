@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE_NAME="${SERVICE_NAME:-local-ai-llm}"
+SERVICE_NAME="${SERVICE_NAME:-local-ai-images}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="${APP_DIR:-$SCRIPT_DIR}"
 
 log() {
-  printf '[local-ai-llm] %s\n' "$*"
+  printf '[local-ai-images] %s\n' "$*"
 }
 
 have_systemd_service() {
@@ -56,8 +56,8 @@ if have_systemd_service; then
   sudo systemctl --no-pager --full status "${SERVICE_NAME}.service"
 else
   log "Starting application with npm start in the background because systemd service was not found"
-  nohup npm start > local-ai-llm.log 2>&1 &
-  log "Started process $!. Logs: $APP_DIR/local-ai-llm.log"
+  nohup npm start > local-ai-images.log 2>&1 &
+  log "Started process $!. Logs: $APP_DIR/local-ai-images.log"
 fi
 
 log "Update and restart complete"

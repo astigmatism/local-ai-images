@@ -29,7 +29,7 @@ http://<server-ip>:8000/
 
 The portal shows:
 
-- Monitor service state.
+- Local AI Images service state.
 - Ollama connectivity and version when available.
 - Current default model.
 - Whether the default model appears in Ollama's running model list.
@@ -54,7 +54,7 @@ Example:
   "config": {
     "default_model": "qwen3:14b"
   },
-  "path": "/opt/local-ai-llm/config/local-ai-llm.json"
+  "path": "/home/<user>/local-ai-images/config/local-ai-images.json"
 }
 ```
 
@@ -178,7 +178,7 @@ Invalid requests return FastAPI-style `422` responses:
 
 ## Pulling models
 
-This monitor does not automatically pull models during `/model/load`. Pull intentionally through Ollama first:
+Local AI Images does not automatically pull models during `/model/load`. Pull intentionally through Ollama first:
 
 ```bash
 ollama pull qwen3:14b

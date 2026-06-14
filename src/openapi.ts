@@ -146,7 +146,7 @@ const imageGenerationCapabilitySchema = {
   properties: {
     enabled: { type: 'boolean' },
     provider: { const: 'ollama' },
-    currentModel: { ...nullableString, description: 'Model currently selected by local-ai-llm for generation.' },
+    currentModel: { ...nullableString, description: 'Model currently selected by local-ai-images for generation.' },
     installed: { ...nullableBoolean, description: 'Whether the current model is installed, or null when disabled/unverified.' },
     loaded: { ...nullableBoolean, description: 'Whether the current model appears in Ollama running-model state, or null when disabled/unverified.' },
     available: { type: 'boolean', description: 'True only when image generation is enabled, the model is installed, and Ollama reports the image-generation capability.' },
@@ -240,15 +240,15 @@ export function buildOpenApiDocument() {
       description: `Node-based ${SERVICE_NAME} compatibility API and portal runtime (${RUNTIME_NAME}).`
     },
     servers: [
-      { url: 'http://127.0.0.1:8000', description: 'Local monitor URL' }
+      { url: 'http://127.0.0.1:8000', description: 'Local AI Images URL' }
     ],
     paths: {
       '/health': {
         get: {
-          summary: 'Monitor and Ollama health',
+          summary: 'Local AI Images and Ollama health',
           responses: {
             '200': {
-              description: 'Monitor can contact Ollama and report running/default model state',
+              description: 'Local AI Images can contact Ollama and report running/default model state',
               content: {
                 'application/json': {
                   schema: {
@@ -566,7 +566,7 @@ export function buildOpenApiDocument() {
       },
       '/config': {
         get: {
-          summary: 'Read local monitor configuration',
+          summary: 'Read Local AI Images configuration',
           responses: {
             '200': { description: 'Configuration', content: { 'application/json': { schema: { type: 'object', required: ['ok', 'config'], properties: { ok: { const: true }, config: { type: 'object', required: ['default_model'], properties: { default_model: { type: 'string' } } } } } } } },
             '500': { description: 'Config read failed', content: { 'application/json': { schema: errorSchema } } }

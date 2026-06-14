@@ -135,7 +135,7 @@ function normalizeBaseUrl(value: string): string {
 }
 
 export function loadRuntimeConfig(): RuntimeConfig {
-  const configPath = readPath('CONFIG_PATH', './config/local-ai-llm.json');
+  const configPath = readPath('CONFIG_PATH', './config/local-ai-images.json');
   const artifactPath = readPath('IMAGE_ARTIFACT_PATH', './data/artifacts');
   const artifactPublicBaseUrl = readOptionalString('IMAGE_ARTIFACT_PUBLIC_BASE_URL') || '/api/v1/artifacts';
 

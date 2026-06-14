@@ -2,7 +2,7 @@
 
 ## LAN-only assumption
 
-This project assumes a trusted LAN or lab network. Ollama and the monitor portal are powerful local services. Do not expose either service directly to the public internet.
+This project assumes a trusted LAN or lab network. Ollama and the Local AI Images portal are powerful local services. Do not expose either service directly to the public internet.
 
 Expected services:
 
@@ -10,13 +10,13 @@ Expected services:
 |---|---:|---|---|
 | SSH | 22 | LAN/server address | Administrative access |
 | Ollama | 11434 | `127.0.0.1` or LAN | LLM API and model management |
-| Monitor/portal | 8000 | `0.0.0.0` on LAN | Compatibility API and web controls |
+| Local AI Images portal | 8000 | `0.0.0.0` on LAN | Image API, compatibility API, and web controls |
 
 ## Bind address choices
 
-### Monitor portal
+### Local AI Images portal
 
-The orchestrator expects the monitor/control API on `0.0.0.0:8000`.
+The orchestrator should use the Local AI Images API on `0.0.0.0:8000`.
 
 `.env`:
 
@@ -41,14 +41,14 @@ For orchestrator access to Ollama directly:
 Environment="OLLAMA_HOST=0.0.0.0:11434"
 ```
 
-For monitor-only local access:
+For Local AI Images-only local access:
 
 ```ini
 [Service]
 Environment="OLLAMA_HOST=127.0.0.1:11434"
 ```
 
-The monitor itself can still talk to Ollama locally with:
+Local AI Images can still talk to Ollama locally with:
 
 ```text
 OLLAMA_BASE_URL=http://127.0.0.1:11434
@@ -131,6 +131,6 @@ The app redacts `authorization` and `cookie` headers from request logs. Avoid pl
 View logs:
 
 ```bash
-journalctl -u local-ai-llm -f
+journalctl -u local-ai-images.service -f
 journalctl -u ollama -f
 ```

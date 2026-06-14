@@ -1,0 +1,32 @@
+# Copy to /etc/systemd/system/local-ai-images.service, then replace every
+# occurrence of <user> with the logged-in Ubuntu account that owns the checkout.
+# The intended checkout path is /home/<user>/local-ai-images.
+
+[Unit]
+Description=Local AI Images control panel and ComfyUI image API
+After=network-online.target comfyui.service ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=<user>
+Group=<user>
+WorkingDirectory=/home/<user>/local-ai-images
+EnvironmentFile=/home/<user>/local-ai-images/.env
+
+# NodeSource/apt install: npm is normally available in /usr/bin.
+ExecStart=/usr/bin/npm start
+
+# nvm install option: comment ExecStart above, uncomment the line below, and
+# keep the path pointed at the logged-in user's nvm installation.
+# ExecStart=/bin/bash -lc 'source /home/<user>/.nvm/nvm.sh && cd /home/<user>/local-ai-images && npm start'
+
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/<user>/local-ai-images/config /home/<user>/local-ai-images/data /home/<user>/local-ai-images/models
+
+[Install]
+WantedBy=multi-user.target

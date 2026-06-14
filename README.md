@@ -1,4 +1,4 @@
-# Local AI LLM Monitor + ComfyUI Image API
+# Local AI Images
 
 A dependency-light Node control panel for a GPU-enabled Ubuntu host. The original Ollama/LLM monitor endpoints are retained, and the project now adds a stable `/api/v1` machine-to-machine image-generation API backed by ComfyUI for a local RTX 3080 passthrough VM.
 
@@ -77,11 +77,14 @@ Use the image-generation docs first:
 The deployment pattern is host-service/systemd by default:
 
 ```bash
-sudo cp deploy/comfyui.service.example /etc/systemd/system/comfyui.service
-sudo cp deploy/local-ai-llm.service.example /etc/systemd/system/local-ai-llm.service
+sed "s/<user>/$USER/g" deploy/comfyui.service.example | sudo tee /etc/systemd/system/comfyui.service >/dev/null
+sed "s/<user>/$USER/g" deploy/local-ai-images.service.example | sudo tee /etc/systemd/system/local-ai-images.service >/dev/null
 sudo systemctl daemon-reload
-sudo systemctl enable --now comfyui.service local-ai-llm.service
+sudo systemctl enable --now comfyui.service local-ai-images.service
 ```
+
+
+The service examples run under the logged-in Ubuntu user and assume the app checkout is `$HOME/local-ai-images`. Replace `<user>` placeholders before installing, as shown above. For nvm-based Node, use the commented nvm `ExecStart` in `deploy/local-ai-images.service.example`.
 
 Keep ComfyUI bound to `127.0.0.1:8188`; expose only this app to trusted LAN hosts or a reverse proxy.
 
@@ -155,7 +158,7 @@ The original experimental Ollama image endpoint, `POST /api/images/generate`, re
 ./compress-source.sh ~/Desktop
 ```
 
-`update-and-restart.sh` supports systemd operation and defaults to the `local-ai-llm` service name. Override it with:
+`update-and-restart.sh` supports systemd operation and defaults to the `local-ai-images` service name. Override it with:
 
 ```bash
 SERVICE_NAME=my-service-name ./update-and-restart.sh

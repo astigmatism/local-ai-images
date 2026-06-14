@@ -185,7 +185,7 @@ journalctl -u ollama -e --no-pager
 
 ## Default model strategy
 
-Ollama itself does not need to know this project's default model. The monitor app stores the default model in its own JSON config file and uses Ollama's API to pre-warm that model on startup when enabled.
+Ollama itself does not need to know this project's default model. Local AI Images stores the default model in its own JSON config file and uses Ollama's API to pre-warm that model on startup when enabled.
 
 The app default model is controlled by:
 

@@ -13,7 +13,7 @@ function providerRequest(overrides: Partial<ProviderGenerationRequest> = {}): Pr
   return {
     jobId: 'job-1',
     workflow,
-    filenamePrefix: 'local-ai-image/job-1',
+    filenamePrefix: 'local-ai-images/job-1',
     prompt: 'a brass robot in a forest',
     negativePrompt: 'blur',
     model: 'custom.safetensors',

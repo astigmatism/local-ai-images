@@ -73,7 +73,7 @@ nvidia-smi --query-gpu=index,uuid,name,driver_version --format=csv,noheader
 
 ## Inspect memory, utilization, temperature, and power
 
-The monitor app uses a fixed, non-user-controlled `nvidia-smi` query similar to this:
+Local AI Images uses a fixed, non-user-controlled `nvidia-smi` query similar to this:
 
 ```bash
 nvidia-smi \

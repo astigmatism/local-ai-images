@@ -1,5 +1,5 @@
 {
-  "name": "local-ai-llm",
+  "name": "local-ai-images",
   "version": "0.1.0",
   "description": "Local AI control panel with LLM compatibility endpoints and a ComfyUI image-generation API for GPU Ubuntu hosts.",
   "type": "module",

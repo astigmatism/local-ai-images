@@ -374,7 +374,7 @@ async function handleImageApiCapabilities(response: ServerResponse, dependencies
   const workflows = await imageRuntime.workflowStore.list();
   sendJson(response, 200, {
     ok: true,
-    service: 'local-image-generation',
+    service: 'local-ai-images',
     backend: runtimeConfig.imageBackend,
     engine: imageRuntime.provider.name,
     enabled: runtimeConfig.imageGenerationEnabled,
@@ -924,7 +924,7 @@ async function handleImageGeneration(
       ok: false,
       error: {
         code: 'IMAGE_GENERATION_DISABLED',
-        message: 'Image generation is disabled on local-ai-llm. Set IMAGE_GENERATION_ENABLED=true to enable image generation with the current model.'
+        message: 'Image generation is disabled in Local AI Images. Set IMAGE_GENERATION_ENABLED=true to enable image generation with the current model.'
       }
     });
     return;

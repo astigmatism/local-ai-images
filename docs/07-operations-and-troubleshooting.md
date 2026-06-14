@@ -3,15 +3,15 @@
 ## Check service status
 
 ```bash
-systemctl status local-ai-llm --no-pager
+systemctl status local-ai-images.service --no-pager
 systemctl status ollama --no-pager
 ```
 
 ## View logs
 
 ```bash
-journalctl -u local-ai-llm -e --no-pager
-journalctl -u local-ai-llm -f
+journalctl -u local-ai-images.service -e --no-pager
+journalctl -u local-ai-images.service -f
 journalctl -u ollama -e --no-pager
 journalctl -u ollama -f
 ```
@@ -19,7 +19,7 @@ journalctl -u ollama -f
 ## Restart services
 
 ```bash
-sudo systemctl restart local-ai-llm
+sudo systemctl restart local-ai-images.service
 sudo systemctl restart ollama
 ```
 
@@ -36,7 +36,7 @@ From the repository root:
 Override service name or app directory:
 
 ```bash
-SERVICE_NAME=local-ai-llm APP_DIR=/opt/local-ai-llm ./update-and-restart.sh
+SERVICE_NAME=local-ai-images APP_DIR=/home/<user>/local-ai-images ./update-and-restart.sh
 ```
 
 The script:
@@ -59,7 +59,7 @@ It uses `set -euo pipefail` and does not hide test failures.
 The script writes:
 
 ```text
-local-AI-LLM-<timestamp>.zip
+local-ai-images-<timestamp>.zip
 ```
 
 It excludes:
@@ -87,11 +87,11 @@ curl -X POST http://127.0.0.1:8000/model/load \
 curl http://127.0.0.1:8000/openapi.json | jq '.openapi, .info'
 ```
 
-`/gpu` should return one primary GPU in legacy shape. `/gpus` should return both the RTX 3090 and RTX 4080 when drivers are healthy.
+`/gpu` should return one primary GPU in the legacy shape. `/gpus` should return the detected GPU inventory when drivers are healthy.
 
 ## Common Ollama failures
 
-### Ollama unavailable from monitor
+### Ollama unavailable from Local AI Images
 
 Symptoms:
 
@@ -149,10 +149,10 @@ Adjust:
 PREWARM_TIMEOUT_MS=300000
 ```
 
-Restart the monitor after editing `.env`:
+Restart Local AI Images after editing `.env`:
 
 ```bash
-sudo systemctl restart local-ai-llm
+sudo systemctl restart local-ai-images.service
 ```
 
 ## Common NVIDIA failures

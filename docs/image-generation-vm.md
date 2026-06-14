@@ -1,6 +1,6 @@
 # Ubuntu RTX 3080 image-generation VM build guide
 
-This guide describes the target host for the ComfyUI-backed image-generation API added to this project. The reference app remains a small Node service with static assets and systemd deployment; raw ComfyUI should stay bound to localhost, while this app exposes the stable machine-to-machine API and thin control panel.
+This guide describes the target host for the ComfyUI-backed Local AI Images API. The app is a small Node service with a static control panel, retained Ollama/LLM compatibility endpoints, and a stable `/api/v1` machine-to-machine image-generation API. Raw ComfyUI should stay bound to localhost.
 
 ## Recommended VM shape for RTX 3080 passthrough
 
@@ -40,7 +40,7 @@ done
 
 ## Ubuntu guest installation
 
-Install Ubuntu Server, select OpenSSH during setup, and create an administrative user. After first boot:
+Install Ubuntu Server, select OpenSSH during setup, and create an administrative user. The rest of this guide assumes that logged-in account owns the app and ComfyUI checkouts.
 
 ```bash
 sudo apt update
@@ -91,25 +91,43 @@ nvidia-smi
 
 A healthy RTX 3080 passthrough guest should show the card name, driver version, CUDA version, temperature, power, memory, and utilization. If `nvidia-smi` is missing, returns `No devices were found`, or reports driver/library mismatches, fix that before deploying ComfyUI or this app.
 
-## ComfyUI backend installation
+## Node installation
 
-The default deployment pattern keeps ComfyUI as a host service bound to `127.0.0.1:8188`.
+Local AI Images requires a Node version that supports native TypeScript type stripping. The project declares `node >=22.6.0`; Node 24 from NodeSource is a good default on Ubuntu:
 
 ```bash
-sudo useradd --system --create-home --home-dir /opt/local-ai-llm --shell /usr/sbin/nologin local-ai-llm
-sudo mkdir -p /opt/ComfyUI /srv/comfyui/models /var/lib/comfyui
-sudo chown -R local-ai-llm:local-ai-llm /opt/ComfyUI /srv/comfyui /var/lib/comfyui
-sudo -u local-ai-llm git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
-cd /opt/ComfyUI
-sudo -u local-ai-llm python3 -m venv venv
-sudo -u local-ai-llm ./venv/bin/pip install --upgrade pip
-sudo -u local-ai-llm ./venv/bin/pip install -r requirements.txt
+sudo apt update
+sudo apt install -y ca-certificates curl gnupg
+curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
+sudo -E bash /tmp/nodesource_setup.sh
+sudo apt install -y nodejs
+node -v
+npm -v
+```
+
+nvm is also supported. The included systemd service has a commented nvm `ExecStart` option.
+
+## ComfyUI backend installation
+
+The default deployment pattern keeps ComfyUI as a host service bound to `127.0.0.1:8188` and runs it under the logged-in Ubuntu account.
+
+```bash
+mkdir -p "$HOME/comfyui-models/checkpoints" \
+  "$HOME/comfyui-models/loras" \
+  "$HOME/comfyui-models/vae" \
+  "$HOME/comfyui-models/controlnet"
+cd "$HOME"
+git clone https://github.com/comfyanonymous/ComfyUI.git ComfyUI
+cd "$HOME/ComfyUI"
+python3 -m venv venv
+./venv/bin/pip install --upgrade pip
+./venv/bin/pip install -r requirements.txt
 ```
 
 Install the PyTorch build appropriate for your driver/CUDA stack. Use the command recommended by the PyTorch install selector for Linux, pip, Python, and CUDA. Then validate from the ComfyUI virtual environment:
 
 ```bash
-sudo -u local-ai-llm /opt/ComfyUI/venv/bin/python - <<'PY'
+"$HOME/ComfyUI/venv/bin/python" - <<'PY'
 import torch
 print(torch.__version__)
 print(torch.cuda.is_available())
@@ -117,10 +135,11 @@ print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')
 PY
 ```
 
-Install the supplied systemd example:
+Install the supplied systemd example after replacing `<user>` with the current Ubuntu username:
 
 ```bash
-sudo cp deploy/comfyui.service.example /etc/systemd/system/comfyui.service
+cd "$HOME/local-ai-images"
+sed "s/<user>/$USER/g" deploy/comfyui.service.example | sudo tee /etc/systemd/system/comfyui.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now comfyui.service
 curl http://127.0.0.1:8188/system_stats | jq .
@@ -131,20 +150,56 @@ curl http://127.0.0.1:8188/system_stats | jq .
 Do not store model files in git. Use operator-managed directories such as:
 
 ```bash
-sudo mkdir -p /srv/comfyui/models/checkpoints /srv/comfyui/models/loras /srv/comfyui/models/vae /srv/comfyui/models/controlnet
-sudo chown -R local-ai-llm:local-ai-llm /srv/comfyui/models
+mkdir -p "$HOME/comfyui-models/checkpoints" \
+  "$HOME/comfyui-models/loras" \
+  "$HOME/comfyui-models/vae" \
+  "$HOME/comfyui-models/controlnet"
 ```
 
 ComfyUI expects models under its own `models` tree. Either place files directly there or use symlinks:
 
 ```bash
-sudo -u local-ai-llm ln -sfn /srv/comfyui/models/checkpoints /opt/ComfyUI/models/checkpoints
-sudo -u local-ai-llm ln -sfn /srv/comfyui/models/loras /opt/ComfyUI/models/loras
-sudo -u local-ai-llm ln -sfn /srv/comfyui/models/vae /opt/ComfyUI/models/vae
-sudo -u local-ai-llm ln -sfn /srv/comfyui/models/controlnet /opt/ComfyUI/models/controlnet
+ln -sfn "$HOME/comfyui-models/checkpoints" "$HOME/ComfyUI/models/checkpoints"
+ln -sfn "$HOME/comfyui-models/loras" "$HOME/ComfyUI/models/loras"
+ln -sfn "$HOME/comfyui-models/vae" "$HOME/ComfyUI/models/vae"
+ln -sfn "$HOME/comfyui-models/controlnet" "$HOME/ComfyUI/models/controlnet"
 ```
 
-Point this app at the same root with `IMAGE_MODEL_PATHS=/srv/comfyui/models`.
+Point this app at the same root with `IMAGE_MODEL_PATHS=/home/<user>/comfyui-models`, replacing `<user>` with the logged-in Ubuntu username.
+
+## Local AI Images application installation
+
+Copy or clone this repository into the intended home-directory path:
+
+```bash
+mkdir -p "$HOME/local-ai-images"
+cd "$HOME/local-ai-images"
+cp .env.example .env
+npm ci
+npm run validate
+```
+
+Edit `.env` and set at minimum:
+
+```dotenv
+CONFIG_PATH=./config/local-ai-images.json
+IMAGE_BACKEND=comfyui
+COMFYUI_BASE_URL=http://127.0.0.1:8188
+IMAGE_MODEL_PATHS=/home/<user>/comfyui-models
+IMAGE_WORKFLOW_PATH=/home/<user>/local-ai-images/config/workflows
+IMAGE_ARTIFACT_PATH=/home/<user>/local-ai-images/data/artifacts
+IMAGE_API_KEYS=<long-random-secret>
+REQUIRE_IMAGE_API_AUTH=true
+```
+
+Install the app service after replacing `<user>` with the current Ubuntu username:
+
+```bash
+sed "s/<user>/$USER/g" deploy/local-ai-images.service.example | sudo tee /etc/systemd/system/local-ai-images.service >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable --now local-ai-images.service
+systemctl status local-ai-images.service --no-pager
+```
 
 ## First UI test
 

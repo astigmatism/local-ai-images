@@ -309,5 +309,5 @@ function cloneJob(job: ImageJob): ImageJob {
 }
 
 function safeFilenamePrefix(jobId: string): string {
-  return `local-ai-image/${jobId.replace(/[^a-zA-Z0-9_-]/gu, '')}`;
+  return `local-ai-images/${jobId.replace(/[^a-zA-Z0-9_-]/gu, '')}`;
 }

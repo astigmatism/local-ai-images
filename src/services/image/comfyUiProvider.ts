@@ -59,7 +59,7 @@ export class ComfyUiProvider implements ImageGenerationProvider {
   }
 
   async generate(request: ProviderGenerationRequest): Promise<ProviderGenerationResult> {
-    const clientId = `local-ai-image-${crypto.randomUUID()}`;
+    const clientId = `local-ai-images-${crypto.randomUUID()}`;
     const prompt = materializeComfyPrompt(request.workflow, request);
 
     const submitResponse = await this.fetchJson('/prompt', {

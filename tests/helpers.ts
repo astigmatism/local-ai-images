@@ -27,7 +27,7 @@ export function testRuntimeConfig(overrides: Partial<RuntimeConfig> = {}): Runti
     port: 0,
     ollamaBaseUrl: 'http://127.0.0.1:11434',
     ollamaRequestTimeoutMs: 1000,
-    configPath: '/tmp/local-ai-llm-test.json',
+    configPath: '/tmp/local-ai-images-test.json',
     defaultModel: 'qwen3:14b',
     prewarmDefaultModelOnStart: false,
     prewarmTimeoutMs: 1000,
@@ -42,9 +42,9 @@ export function testRuntimeConfig(overrides: Partial<RuntimeConfig> = {}): Runti
     comfyUiBaseUrl: 'http://127.0.0.1:8188',
     comfyUiRequestTimeoutMs: 1000,
     comfyUiPollIntervalMs: 10,
-    imageModelPaths: ['/tmp/local-ai-image-models'],
-    imageWorkflowPath: '/tmp/local-ai-image-workflows',
-    imageArtifactPath: '/tmp/local-ai-image-artifacts',
+    imageModelPaths: ['/tmp/local-ai-images-models'],
+    imageWorkflowPath: '/tmp/local-ai-images-workflows',
+    imageArtifactPath: '/tmp/local-ai-images-artifacts',
     imageArtifactPublicBaseUrl: '/api/v1/artifacts',
     imageDefaultWorkflowId: 'sdxl-text-to-image',
     imageQueueConcurrency: 1,
@@ -58,7 +58,7 @@ export function testRuntimeConfig(overrides: Partial<RuntimeConfig> = {}): Runti
 }
 
 export async function tempConfigStore(defaultModel = 'qwen3:14b'): Promise<ConfigStore> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'local-ai-llm-'));
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'local-ai-images-'));
   return new ConfigStore(path.join(directory, 'config.json'), defaultModel);
 }
 
