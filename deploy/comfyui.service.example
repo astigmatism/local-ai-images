@@ -1,0 +1,22 @@
+[Unit]
+Description=ComfyUI local image-generation backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ComfyUI
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/ComfyUI/venv/bin/python main.py --listen 127.0.0.1 --port 8188
+Restart=on-failure
+RestartSec=5
+User=local-ai-llm
+Group=local-ai-llm
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/ComfyUI /srv/comfyui/models /var/lib/comfyui
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+{
+  "name": "local-ai-llm",
+  "version": "0.1.0",
+  "description": "Local AI control panel with LLM compatibility endpoints and a ComfyUI image-generation API for GPU Ubuntu hosts.",
+  "type": "module",
+  "main": "src/index.ts",
+  "engines": {
+    "node": ">=22.6.0",
+    "npm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "node --experimental-strip-types --watch src/index.ts",
+    "build": "node --experimental-strip-types -e \"console.log('No transpilation required: Node runs TypeScript via native type stripping.')\"",
+    "start": "node --experimental-strip-types src/index.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "typecheck": "node --experimental-strip-types -e \"console.log('Static type checking is optional; run tsc --noEmit if TypeScript is installed.')\"",
+    "validate": "npm test && npm run build"
+  },
+  "keywords": [
+    "ollama",
+    "llm",
+    "comfyui",
+    "stable-diffusion",
+    "image-generation",
+    "nvidia",
+    "gpu",
+    "local-ai",
+    "node"
+  ],
+  "license": "MIT"
+}

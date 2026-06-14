@@ -1,0 +1,97 @@
+{
+  "id": "sdxl-text-to-image",
+  "name": "SDXL text to image",
+  "description": "Default ComfyUI API workflow for one checkpoint, text prompts, KSampler, VAE decode, and image save.",
+  "engine": "comfyui",
+  "defaults": {
+    "width": 1024,
+    "height": 1024,
+    "steps": 28,
+    "cfg_scale": 7,
+    "seed": -1,
+    "sampler_name": "euler",
+    "scheduler": "normal",
+    "checkpoint": "sd_xl_base_1.0.safetensors"
+  },
+  "parameters": [
+    "prompt",
+    "negative_prompt",
+    "model",
+    "width",
+    "height",
+    "steps",
+    "cfg_scale",
+    "seed",
+    "sampler_name",
+    "scheduler"
+  ],
+  "comfyui": {
+    "mappings": {
+      "checkpointNode": "4",
+      "latentImageNode": "5",
+      "positivePromptNode": "6",
+      "negativePromptNode": "7",
+      "samplerNode": "3",
+      "saveImageNode": "9"
+    },
+    "prompt": {
+      "3": {
+        "class_type": "KSampler",
+        "inputs": {
+          "seed": 1,
+          "steps": 28,
+          "cfg": 7,
+          "sampler_name": "euler",
+          "scheduler": "normal",
+          "denoise": 1,
+          "model": ["4", 0],
+          "positive": ["6", 0],
+          "negative": ["7", 0],
+          "latent_image": ["5", 0]
+        }
+      },
+      "4": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {
+          "ckpt_name": "sd_xl_base_1.0.safetensors"
+        }
+      },
+      "5": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {
+          "width": 1024,
+          "height": 1024,
+          "batch_size": 1
+        }
+      },
+      "6": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "text": "",
+          "clip": ["4", 1]
+        }
+      },
+      "7": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "text": "",
+          "clip": ["4", 1]
+        }
+      },
+      "8": {
+        "class_type": "VAEDecode",
+        "inputs": {
+          "samples": ["3", 0],
+          "vae": ["4", 2]
+        }
+      },
+      "9": {
+        "class_type": "SaveImage",
+        "inputs": {
+          "filename_prefix": "local-ai-image",
+          "images": ["8", 0]
+        }
+      }
+    }
+  }
+}
