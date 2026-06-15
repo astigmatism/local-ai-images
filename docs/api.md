@@ -11,7 +11,7 @@ Authorization: Bearer <key>
 X-API-Key: <key>
 ```
 
-If `IMAGE_API_KEYS` is empty and `REQUIRE_IMAGE_API_AUTH=false`, `/api/v1` runs open for development. Production LAN deployments should set both `IMAGE_API_KEYS` and `REQUIRE_IMAGE_API_AUTH=true`.
+If `IMAGE_API_KEYS` is empty and `REQUIRE_IMAGE_API_AUTH=false`, `/api/v1` runs open for development. Production LAN deployments should set both `IMAGE_API_KEYS` and `REQUIRE_IMAGE_API_AUTH=true`. The portal's **Dashboard API key** field stores one of these values in browser local storage so the portal can call protected `/api/v1` endpoints. It is not a ComfyUI key and does not affect model loading except by authorizing the dashboard button clicks.
 
 ## Health and capacity
 
@@ -63,13 +63,13 @@ The scanner reads `IMAGE_MODEL_PATHS` and reports known local model file extensi
 | `isDefault` | True when the model matches the persisted `image_default_model`. |
 | `isLastConfirmedLoaded` | True when the model matches the last successful generation/preload checkpoint. |
 | `canSetDefault` | True for installed checkpoint files. |
-| `canPreload` | True when the model is a checkpoint and the default workflow can receive a checkpoint override. |
+| `canPreload` | True for installed checkpoint files. If the configured preload workflow lacks a checkpoint mapping, the preload action remains visible but the backend response reports the workflow configuration problem honestly. |
 | `canDelete` | True when the file is inside an approved ComfyUI model directory. |
 | `defaultWarning` | Warning text for a configured default that is missing on disk. |
 | `loadedStatus` | `last_confirmed_loaded`, `default_not_confirmed_loaded`, `not_confirmed_loaded`, or `not_applicable`. |
 | `deletePreview` | Exact file name, type, size, and confirmation metadata for safe deletes. |
 
-The response also includes a `preload`/`defaultStatus` object with current default checkpoint, default-file existence, preload-on-startup setting, last preload attempt/result/error, and last confirmed loaded/prewarmed checkpoint.
+The response also includes a `preload`/`defaultStatus` object with current default checkpoint, default-file existence, preload-after-restart setting, last preload attempt/result/error, and last confirmed loaded/prewarmed checkpoint.
 
 ### Default checkpoint
 
@@ -120,7 +120,7 @@ curl -sS -X POST "$IMAGE_API_URL/api/v1/models/preload" \
 
 Omit `model` to preload the current default. A successful preload updates `lastConfirmedLoadedModel`. A failure updates `lastPreloadResult` and `lastPreloadError`.
 
-Enable or disable startup preload:
+Enable or disable preload after restart:
 
 ```bash
 curl -sS -X POST "$IMAGE_API_URL/api/v1/models/preload/startup" \
@@ -129,7 +129,7 @@ curl -sS -X POST "$IMAGE_API_URL/api/v1/models/preload/startup" \
   -d '{"enabled":true}' | jq .
 ```
 
-When startup preload is enabled and the default exists, the app starts the web service, waits for ComfyUI/mock to be reachable within `IMAGE_PRELOAD_TIMEOUT_MS`, and launches a bounded background preload job. The app does not block indefinitely when ComfyUI is unavailable.
+When preload after restart is enabled and the default exists, the app starts the web service, waits for ComfyUI/mock to be reachable within `IMAGE_PRELOAD_TIMEOUT_MS`, and launches a bounded background preload job. The app does not block indefinitely when ComfyUI is unavailable.
 
 ### Safe model delete
 
@@ -272,8 +272,8 @@ Artifact metadata includes job ID, model, workflow ID, prompt, negative prompt, 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `IMAGE_DEFAULT_MODEL` | empty | Initial/fallback checkpoint default when the config file does not contain `image_default_model`. |
-| `IMAGE_PRELOAD_DEFAULT_ON_STARTUP` | `false` | Initial/fallback startup preload setting. |
-| `IMAGE_PRELOAD_TIMEOUT_MS` | `120000` | Bound for manual and startup preload attempts. |
+| `IMAGE_PRELOAD_DEFAULT_ON_STARTUP` | `false` | Initial/fallback preload-after-restart setting. |
+| `IMAGE_PRELOAD_TIMEOUT_MS` | `120000` | Bound for manual and preload after restart attempts. |
 | `IMAGE_PRELOAD_WORKFLOW_ID` | `IMAGE_DEFAULT_WORKFLOW_ID` | Workflow preset used for preload requests. |
 | `IMAGE_PRELOAD_WIDTH` | `512` | Preload request width. |
 | `IMAGE_PRELOAD_HEIGHT` | `512` | Preload request height. |

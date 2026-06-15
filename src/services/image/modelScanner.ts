@@ -6,6 +6,8 @@ const MODEL_EXTENSIONS = new Set(['.safetensors', '.ckpt', '.pt', '.pth', '.bin'
 const TYPE_HINTS: Array<[string, string]> = [
   ['checkpoints', 'checkpoint'],
   ['checkpoint', 'checkpoint'],
+  ['stable-diffusion', 'checkpoint'],
+  ['stable_diffusion', 'checkpoint'],
   ['loras', 'lora'],
   ['lora', 'lora'],
   ['vae', 'vae'],
@@ -96,7 +98,7 @@ async function scanDirectory(rootPath: string, directoryPath: string, output: Mo
 
     const relativePath = path.relative(rootPath, fullPath).split(path.sep).join('/');
     const fileName = path.basename(entry.name);
-    const type = inferModelType(relativePath);
+    const type = inferModelType(relativePath, rootPath, extension);
     const displayName = path.basename(entry.name, extension);
     const comfyName = comfyNameForType(relativePath, fileName, type);
     output.push({
@@ -117,11 +119,25 @@ async function scanDirectory(rootPath: string, directoryPath: string, output: Mo
   }
 }
 
-function inferModelType(relativePath: string): string {
-  const lower = relativePath.toLowerCase();
+function inferModelType(relativePath: string, rootPath: string, extension: string): string {
+  const relativeSegments = relativePath.toLowerCase().split('/').filter(Boolean);
   for (const [needle, type] of TYPE_HINTS) {
-    if (lower.split('/').includes(needle)) return type;
+    if (relativeSegments.includes(needle)) return type;
   }
+
+  // Operators often configure IMAGE_MODEL_PATHS or COMFYUI_CHECKPOINT_PATH to point
+  // directly at ComfyUI's checkpoints directory. In that layout the relative path is
+  // just "model.safetensors", so there is no "checkpoints/" segment to infer from.
+  const rootSegments = path.resolve(rootPath).toLowerCase().split(/[\\/]+/u).filter(Boolean);
+  for (const [needle, type] of TYPE_HINTS) {
+    if (rootSegments.includes(needle)) return type;
+  }
+
+  // A top-level .safetensors or .ckpt file in a scanned model root is treated as a
+  // checkpoint by default so real checkpoint files get load/default controls instead
+  // of becoming inert generic "model" entries.
+  if (extension === '.ckpt' || extension === '.safetensors') return 'checkpoint';
+
   return 'model';
 }
 

@@ -343,6 +343,8 @@ export interface ImageJob {
   metadata: Record<string, unknown>;
 }
 
+export interface PublicArtifactMetadata extends Omit<ArtifactMetadata, 'filePath'> {}
+
 export interface ImageJobSummary {
   id: string;
   status: JobStatus;
@@ -367,9 +369,16 @@ export interface ImageJobSummary {
   output: OutputDelivery;
   artifactCount: number;
   artifactSizes: number[];
+  artifacts: PublicArtifactMetadata[];
+  thumbnailUrl: string | null;
   request: NormalizedGenerationRequest;
   metadata: Record<string, unknown>;
   timings: JobTimingMetrics;
+  queueWaitMs: number | null;
+  executionMs: number | null;
+  totalMs: number | null;
+  secondsPerStep: number | null;
+  stepsPerSecond: number | null;
   error: ImageJob['error'];
 }
 

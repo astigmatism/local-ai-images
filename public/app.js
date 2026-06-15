@@ -13,6 +13,8 @@ const state = {
   activeJobId: null
 };
 
+const thumbnailObjectUrls = new Map();
+
 async function fetchJson(url, options = {}) {
   const headers = { 'content-type': 'application/json', ...(options.headers || {}) };
   if (url.startsWith('/api/v1') && state.imageApiKey) {
@@ -44,8 +46,15 @@ function formatBytes(value) {
 }
 
 function formatNumber(value, suffix = '') {
-  if (value === null || value === undefined) return 'n/a';
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return 'n/a';
   return `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}${suffix}`;
+}
+
+function formatDurationMs(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return 'n/a';
+  const ms = Number(value);
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 })} s`;
 }
 
 function formatDate(value) {
@@ -104,12 +113,45 @@ function selectedPlaygroundModel() {
   return select ? select.value : '';
 }
 
+function imageApiAuthRequiredWithoutKey() {
+  const auth = state.imageHealth?.auth;
+  return Boolean(auth?.enabled && !state.imageApiKey);
+}
+
 function renderImageAuth() {
   $('#api-key-input').value = state.imageApiKey;
   const target = $('#image-auth-status');
-  target.innerHTML = state.imageApiKey
-    ? '<span class="status-pill ok">API key saved locally</span>'
-    : '<span class="status-pill warn">No browser API key set</span>';
+  const help = $('#image-auth-help');
+  const auth = state.imageHealth?.auth;
+
+  if (!auth) {
+    target.innerHTML = state.imageApiKey
+      ? '<span class="status-pill ok">Browser key saved</span>'
+      : '<span class="status-pill warn">Auth status loading</span>';
+    help.textContent = 'This field is only for this portal/browser. It is not a ComfyUI key and does not control model loading.';
+    return;
+  }
+
+  if (!auth.enabled) {
+    target.innerHTML = '<span class="status-pill ok">No API key needed</span>';
+    help.textContent = 'Server-side image API auth is disabled, so the portal can call the dashboard API without a key. This field can stay blank and is not related to ComfyUI model loading.';
+    return;
+  }
+
+  if (auth.configured_key_count === 0) {
+    target.innerHTML = '<span class="status-pill bad">Auth misconfigured</span>';
+    help.textContent = 'The server requires image API auth, but no IMAGE_API_KEYS are configured on the server. Set IMAGE_API_KEYS or disable REQUIRE_IMAGE_API_AUTH.';
+    return;
+  }
+
+  if (state.imageApiKey) {
+    target.innerHTML = '<span class="status-pill ok">Browser key saved</span>';
+    help.textContent = 'This browser will send the saved value as Authorization: Bearer <key> to /api/v1. The key is stored only in this browser local storage.';
+    return;
+  }
+
+  target.innerHTML = '<span class="status-pill warn">API key required</span>';
+  help.textContent = 'Paste one server configured IMAGE_API_KEYS value. This is not a ComfyUI key; it only unlocks protected dashboard API calls from this browser.';
 }
 
 function renderImageHealth() {
@@ -142,7 +184,7 @@ function renderQueue() {
   const target = $('#image-queue-content');
   const queue = state.imageStats?.queue || state.imageHealth?.queue;
   if (!queue) {
-    target.textContent = 'No queue data yet.';
+    target.textContent = imageApiAuthRequiredWithoutKey() ? 'Enter the dashboard API key above to load queue stats.' : 'No queue data yet.';
     return;
   }
   target.innerHTML = `<div class="metrics">
@@ -155,17 +197,36 @@ function renderQueue() {
   </div>`;
 }
 
+function friendlyPreloadError(status) {
+  const error = status?.lastPreloadError;
+  if (!error) return '<span class="muted">none</span>';
+  if (error.code === 'MODEL_PRELOAD_MODEL_REQUIRED') {
+    return '<span class="warn-text">No default checkpoint was selected for that action. Choose an installed checkpoint below, then click Load / Prewarm now, Set as default, or Set default + preload after restart.</span>';
+  }
+  if (error.code === 'IMAGE_PRELOAD_DEFAULT_MISSING') {
+    return '<span class="warn-text">Preload after restart was skipped because no default checkpoint is configured.</span>';
+  }
+  if (error.code === 'IMAGE_PRELOAD_DEFAULT_FILE_MISSING') {
+    return '<span class="danger-text">Preload after restart was skipped because the configured default checkpoint file is missing.</span>';
+  }
+  return `<span class="danger-text">${escapeHtml(error.code)}: ${escapeHtml(error.message)}</span>`;
+}
+
 function renderDefaultModelStatus() {
   const target = $('#default-model-status');
   if (!target) return;
   const status = currentPreloadStatus();
   if (!status) {
-    target.innerHTML = '<p class="muted">No default model lifecycle status yet.</p>';
+    target.innerHTML = imageApiAuthRequiredWithoutKey()
+      ? '<p class="muted">Enter the dashboard API key above to load model lifecycle status.</p>'
+      : '<p class="muted">No default model lifecycle status yet.</p>';
     return;
   }
   const hasDefault = Boolean(status.currentDefaultCheckpoint || status.defaultModel);
   const defaultExists = status.defaultFileExists;
+  const defaultMissing = hasDefault && defaultExists === false;
   const preloadResult = status.lastPreloadResult || 'not_attempted';
+  const canLoadDefault = hasDefault && !defaultMissing && !status.active;
   target.className = 'default-model-panel';
   target.innerHTML = `
     <div class="section-heading">
@@ -174,26 +235,27 @@ function renderDefaultModelStatus() {
         <p class="hint">Loaded status is reported only after a successful preload or generation. ComfyUI does not expose a reliable exact current-checkpoint API.</p>
       </div>
       <div class="badge-row">
-        ${hasDefault ? badge('default configured', 'ok') : badge('no default', 'warn')}
-        ${status.preloadOnStartup ? badge('preload on startup enabled', 'ok') : badge('preload on startup disabled', 'warn')}
+        ${hasDefault ? badge('default configured', 'ok') : badge('no default selected', 'warn')}
+        ${status.preloadOnStartup ? badge('preload after restart enabled', 'ok') : badge('preload after restart disabled', 'warn')}
         ${status.active ? badge('preload running', 'warn') : ''}
       </div>
     </div>
     ${renderKeyValues([
-      ['Current default checkpoint', hasDefault ? `<code>${escapeHtml(status.currentDefaultCheckpoint || status.defaultModel)}</code>` : '<span class="muted">none</span>'],
+      ['Current default checkpoint', hasDefault ? `<code>${escapeHtml(status.currentDefaultCheckpoint || status.defaultModel)}</code>` : '<span class="muted">none selected yet</span>'],
       ['Default file exists', defaultExists === null ? '<span class="muted">n/a</span>' : escapeHtml(defaultExists ? 'yes' : 'no')],
-      ['Preload-on-startup enabled', escapeHtml(status.preloadOnStartup ? 'yes' : 'no')],
+      ['Preload after restart', escapeHtml(status.preloadOnStartup ? 'yes' : 'no')],
       ['Last preload attempt time', escapeHtml(formatDate(status.lastPreloadAttemptTime))],
       ['Last preload result', `<code>${escapeHtml(preloadResult)}</code>`],
-      ['Last preload error', status.lastPreloadError ? `<span class="danger-text">${escapeHtml(status.lastPreloadError.code)}: ${escapeHtml(status.lastPreloadError.message)}</span>` : '<span class="muted">none</span>'],
+      ['Last preload error/message', friendlyPreloadError(status)],
       ['Last confirmed loaded/prewarmed model', status.lastConfirmedLoadedModel ? `<code>${escapeHtml(status.lastConfirmedLoadedModel)}</code>` : '<span class="muted">not confirmed in this process</span>']
     ])}
+    ${!hasDefault ? '<p class="notice warn">No default checkpoint is configured. Use Set as default or Set default + preload after restart from an installed checkpoint below.</p>' : ''}
     ${status.defaultWarning ? `<p class="notice warn">${escapeHtml(status.defaultWarning)}</p>` : ''}
     <div class="button-row lifecycle-actions">
-      <button type="button" data-default-action="load">Load default now</button>
-      <button type="button" class="secondary" data-default-action="enable-preload">Enable preload on startup</button>
-      <button type="button" class="secondary" data-default-action="disable-preload">Disable preload on startup</button>
-      <button type="button" class="secondary danger" data-default-action="clear-default">Clear default</button>
+      <button type="button" data-default-action="load" ${canLoadDefault ? '' : 'disabled'} title="${canLoadDefault ? '' : 'Select a valid default checkpoint first.'}">Load default now</button>
+      <button type="button" class="secondary" data-default-action="enable-preload" ${hasDefault && !defaultMissing ? '' : 'disabled'}>Enable preload after restart</button>
+      <button type="button" class="secondary" data-default-action="disable-preload">Disable preload after restart</button>
+      <button type="button" class="secondary danger" data-default-action="clear-default" ${hasDefault ? '' : 'disabled'}>Clear default</button>
     </div>`;
 }
 
@@ -202,24 +264,29 @@ function renderImageModels() {
   const target = $('#image-models');
   const models = state.imageModels?.models || [];
   if (models.length === 0) {
-    target.innerHTML = '<p class="muted">No local image models found in IMAGE_MODEL_PATHS.</p>';
+    target.innerHTML = imageApiAuthRequiredWithoutKey()
+      ? '<p class="muted">Enter the dashboard API key above to scan installed models.</p>'
+      : '<p class="muted">No local image models found in IMAGE_MODEL_PATHS.</p>';
     renderPlaygroundOptions();
     return;
   }
   const selected = selectedPlaygroundModel();
   target.innerHTML = `<div class="model-list lifecycle-list">${models.map((model) => {
+    const isCheckpoint = model.type === 'checkpoint';
     const isSelected = selected && modelMatches(model, selected);
-    const badges = [badge('installed', 'ok')];
-    if (isSelected) badges.push(badge('selected for playground', 'ok'));
+    const badges = [badge('installed on disk', 'ok')];
+    if (isSelected) badges.push(badge('selected for generation', 'ok'));
     if (model.isDefault) badges.push(badge('default', 'ok'));
     if (model.isLastConfirmedLoaded) badges.push(badge('last loaded/prewarmed', 'ok'));
     if (model.loadedStatus === 'default_not_confirmed_loaded') badges.push(badge('default not confirmed loaded', 'warn'));
     if (model.defaultWarning) badges.push(badge('missing default file', 'bad'));
+    if (!isCheckpoint) badges.push(badge('not a checkpoint', 'warn'));
+    const disabledReason = isCheckpoint ? '' : 'Only checkpoint files can be loaded or set as the default image model.';
     return `<article class="model-item lifecycle-model" data-model-id="${escapeHtml(model.id)}">
       <div class="model-title-row">
         <div>
           <h3><code>${escapeHtml(model.relativePath)}</code></h3>
-          <p class="hint">ComfyUI name: <code>${escapeHtml(modelIdentifier(model))}</code></p>
+          <p class="hint">ComfyUI checkpoint name: <code>${escapeHtml(modelIdentifier(model))}</code></p>
         </div>
         <div class="badge-row">${badges.join('')}</div>
       </div>
@@ -229,15 +296,15 @@ function renderImageModels() {
         ['Modified', escapeHtml(model.modifiedAt || 'n/a')],
         ['Loaded status', `<code>${escapeHtml(model.loadedStatus || 'not_confirmed_loaded')}</code>`],
         ['Can set default', escapeHtml(model.canSetDefault ? 'yes' : 'no')],
-        ['Can preload', escapeHtml(model.canPreload ? 'yes' : 'no')],
+        ['Can load/prewarm', escapeHtml(model.canPreload ? 'yes' : 'no')],
         ['Can delete', escapeHtml(model.canDelete ? 'yes' : 'no')]
       ])}
+      ${model.preloadWarning ? `<p class="notice warn">${escapeHtml(model.preloadWarning)}</p>` : ''}
       ${model.defaultWarning ? `<p class="notice warn">${escapeHtml(model.defaultWarning)}</p>` : ''}
       <div class="button-row model-actions">
-        <button type="button" data-model-action="use">Use in playground</button>
-        <button type="button" data-model-action="load" ${model.canPreload ? '' : 'disabled'}>Load / Prewarm now</button>
-        <button type="button" class="secondary" data-model-action="set-default" ${model.canSetDefault ? '' : 'disabled'}>Set as default</button>
-        <button type="button" class="secondary" data-model-action="set-default-preload" ${model.canSetDefault ? '' : 'disabled'}>Set default + preload on startup</button>
+        <button type="button" data-model-action="load" ${model.canPreload ? '' : 'disabled'} title="${escapeHtml(disabledReason)}">Load / Prewarm now</button>
+        <button type="button" class="secondary" data-model-action="set-default" ${model.canSetDefault ? '' : 'disabled'} title="${escapeHtml(disabledReason)}">Set as default</button>
+        <button type="button" class="secondary" data-model-action="set-default-preload" ${model.canSetDefault ? '' : 'disabled'} title="${escapeHtml(disabledReason)}">Set default + preload after restart</button>
         ${model.isDefault ? '<button type="button" class="secondary" data-model-action="clear-default">Clear default</button>' : ''}
         <button type="button" class="secondary danger" data-model-action="delete" ${model.canDelete ? '' : 'disabled'}>Delete model</button>
         <button type="button" class="secondary" data-model-action="refresh">Refresh scan</button>
@@ -251,7 +318,7 @@ function renderWorkflows() {
   const target = $('#image-workflows');
   const workflows = state.imageWorkflows?.workflows || [];
   if (workflows.length === 0) {
-    target.innerHTML = '<p class="muted">No workflow presets loaded.</p>';
+    target.innerHTML = imageApiAuthRequiredWithoutKey() ? '<p class="muted">Enter the dashboard API key above to load workflow presets.</p>' : '<p class="muted">No workflow presets loaded.</p>';
     renderPlaygroundOptions();
     return;
   }
@@ -268,20 +335,136 @@ function renderWorkflows() {
   renderPlaygroundOptions();
 }
 
+function jobTimings(job) {
+  return job.timings || {
+    queueWaitMs: job.queueWaitMs ?? null,
+    executionMs: job.executionMs ?? null,
+    totalMs: job.totalMs ?? null,
+    secondsPerStep: job.secondsPerStep ?? null,
+    stepsPerSecond: job.stepsPerSecond ?? null
+  };
+}
+
+function jobPrompt(job) {
+  return job.prompt || job.request?.prompt || '';
+}
+
+function jobNegativePrompt(job) {
+  return job.negativePrompt || job.request?.negativePrompt || job.request?.negative_prompt || '';
+}
+
+function jobArtifacts(job) {
+  return Array.isArray(job.artifacts) ? job.artifacts : [];
+}
+
+function firstArtifactUrl(job) {
+  return job.thumbnailUrl || jobArtifacts(job).find((artifact) => artifact?.url)?.url || '';
+}
+
+function hydrateJobThumbnails() {
+  for (const image of document.querySelectorAll('img[data-artifact-url]')) {
+    const url = image.dataset.artifactUrl;
+    if (!url || image.dataset.loaded === '1') continue;
+    if (thumbnailObjectUrls.has(url)) {
+      image.src = thumbnailObjectUrls.get(url);
+      image.hidden = false;
+      image.dataset.loaded = '1';
+      image.nextElementSibling?.remove();
+      continue;
+    }
+    const headers = {};
+    if (url.startsWith('/api/v1') && state.imageApiKey) {
+      headers.authorization = `Bearer ${state.imageApiKey}`;
+    }
+    fetch(url, { headers })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.blob();
+      })
+      .then((blob) => {
+        const objectUrl = URL.createObjectURL(blob);
+        thumbnailObjectUrls.set(url, objectUrl);
+        image.src = objectUrl;
+        const anchor = image.closest('a');
+        if (anchor) anchor.href = objectUrl;
+        image.hidden = false;
+        image.dataset.loaded = '1';
+        image.nextElementSibling?.remove();
+      })
+      .catch(() => {
+        image.hidden = true;
+        image.nextElementSibling?.replaceWith(Object.assign(document.createElement('div'), { className: 'thumb-placeholder', textContent: 'Thumbnail unavailable' }));
+      });
+  }
+}
+
+function renderJobMetrics(job) {
+  const timings = jobTimings(job);
+  const artifacts = jobArtifacts(job);
+  const prompt = jobPrompt(job);
+  const providerMetadata = job.metadata?.provider || job.providerMetadata || job.metadata || {};
+  const tokenValue = providerMetadata?.tokens ?? providerMetadata?.token_count ?? providerMetadata?.prompt_tokens ?? null;
+  return `<div class="metrics job-metrics">
+    <div class="metric"><span>Total time</span><strong>${formatDurationMs(timings.totalMs)}</strong></div>
+    <div class="metric"><span>Execution</span><strong>${formatDurationMs(timings.executionMs)}</strong></div>
+    <div class="metric"><span>Queue wait</span><strong>${formatDurationMs(timings.queueWaitMs)}</strong></div>
+    <div class="metric"><span>Step speed</span><strong>${timings.stepsPerSecond ? `${formatNumber(timings.stepsPerSecond, ' steps/s')}` : 'n/a'}</strong></div>
+    <div class="metric"><span>Steps</span><strong>${escapeHtml(job.steps ?? job.request?.steps ?? 'n/a')}</strong></div>
+    <div class="metric"><span>Prompt chars</span><strong>${escapeHtml(prompt.length)}</strong></div>
+    <div class="metric"><span>Token metrics</span><strong>${tokenValue === null || tokenValue === undefined ? 'n/a' : escapeHtml(tokenValue)}</strong></div>
+    <div class="metric"><span>Artifacts</span><strong>${escapeHtml(artifacts.length || job.artifactCount || 0)}</strong></div>
+  </div>`;
+}
+
 function renderJobs() {
   const target = $('#image-jobs');
   const jobs = state.imageJobs?.jobs || state.imageStats?.recent_jobs || [];
   if (jobs.length === 0) {
-    target.innerHTML = '<p class="muted">No image jobs submitted since this process started.</p>';
+    target.innerHTML = imageApiAuthRequiredWithoutKey()
+      ? '<p class="muted">Enter the dashboard API key above to load recent image jobs.</p>'
+      : '<p class="muted">No image jobs submitted since this process started.</p>';
     return;
   }
-  target.innerHTML = `<div class="job-list">${jobs.map((job) => `<article class="job-item">
-    <div>
-      <h3><code>${escapeHtml(job.id)}</code></h3>
-      <p class="muted">${escapeHtml(job.workflowId || '')} ${job.model ? `| ${escapeHtml(job.model)}` : ''}</p>
-    </div>
-    <span class="status-pill ${job.status === 'succeeded' ? 'ok' : job.status === 'failed' ? 'bad' : 'warn'}">${escapeHtml(job.status)}</span>
-  </article>`).join('')}</div>`;
+  target.innerHTML = `<div class="job-list image-job-list">${jobs.map((job) => {
+    const prompt = jobPrompt(job);
+    const negative = jobNegativePrompt(job);
+    const imageUrl = firstArtifactUrl(job);
+    const artifacts = jobArtifacts(job);
+    const statusClass = job.status === 'succeeded' ? 'ok' : job.status === 'failed' ? 'bad' : 'warn';
+    return `<article class="job-item image-job-card">
+      <div class="job-thumb">
+        ${imageUrl ? `<a href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img data-artifact-url="${escapeHtml(imageUrl)}" alt="Generated image thumbnail for job ${escapeHtml(job.id)}" loading="lazy" hidden><div class="thumb-placeholder">Loading thumbnail...</div></a>` : '<div class="thumb-placeholder">No image yet</div>'}
+      </div>
+      <div class="job-main">
+        <div class="model-title-row">
+          <div>
+            <h3><code>${escapeHtml(job.id)}</code></h3>
+            <p class="muted">${escapeHtml(job.provider || 'provider n/a')} | ${escapeHtml(job.workflowId || 'workflow n/a')} | ${job.model ? `<code>${escapeHtml(job.model)}</code>` : 'model n/a'}</p>
+          </div>
+          <span class="status-pill ${statusClass}">${escapeHtml(job.status)}</span>
+        </div>
+        <p class="prompt-label">Prompt</p>
+        <p class="prompt-text">${prompt ? escapeHtml(prompt) : '<span class="muted">No prompt recorded</span>'}</p>
+        ${negative ? `<p class="prompt-label">Negative prompt</p><p class="prompt-text muted">${escapeHtml(negative)}</p>` : ''}
+        ${renderJobMetrics(job)}
+        ${renderKeyValues([
+          ['Size', escapeHtml(`${job.width ?? job.request?.width ?? 'n/a'} x ${job.height ?? job.request?.height ?? 'n/a'}`)],
+          ['Seed', escapeHtml(job.seed ?? job.request?.seed ?? 'n/a')],
+          ['CFG / sampler', escapeHtml(`${job.cfgScale ?? job.request?.cfgScale ?? job.request?.cfg_scale ?? 'n/a'} / ${job.samplerName ?? job.request?.samplerName ?? job.request?.sampler_name ?? 'n/a'}`)],
+          ['Scheduler', escapeHtml(job.scheduler ?? job.request?.scheduler ?? 'n/a')],
+          ['Created', escapeHtml(formatDate(job.createdAt))],
+          ['Completed', escapeHtml(formatDate(job.completedAt))]
+        ])}
+        ${artifacts.length ? `<p class="hint">Artifact sizes: ${escapeHtml(artifacts.map((artifact) => formatBytes(artifact.sizeBytes)).join(', '))}</p>` : ''}
+        ${job.error ? `<p class="danger-text">${escapeHtml(job.error.code)}: ${escapeHtml(job.error.message)}</p>` : ''}
+        <details>
+          <summary>Raw request and provider metadata</summary>
+          <pre><code>${escapeHtml(JSON.stringify({ request: job.request || {}, metadata: job.metadata || {}, artifacts }, null, 2))}</code></pre>
+        </details>
+      </div>
+    </article>`;
+  }).join('')}</div>`;
+  hydrateJobThumbnails();
 }
 
 function renderGpus() {
@@ -289,7 +472,7 @@ function renderGpus() {
   const gpuSummary = state.imageStats?.gpu || state.imageHealth?.gpu;
   const gpus = gpuSummary?.gpus || [];
   if (!gpuSummary?.ok) {
-    target.innerHTML = `<p class="muted">GPU telemetry unavailable: ${escapeHtml(gpuSummary?.error?.message || 'no data yet')}</p>`;
+    target.innerHTML = `<p class="muted">GPU telemetry unavailable: ${escapeHtml(gpuSummary?.error?.message || (imageApiAuthRequiredWithoutKey() ? 'enter dashboard API key above to load API-backed telemetry' : 'no data yet'))}</p>`;
     return;
   }
   if (gpus.length === 0) {
@@ -332,7 +515,7 @@ function renderModelDownloads() {
   const jobs = downloads?.jobs || [];
   if (!target) return;
   if (!downloads) {
-    target.innerHTML = '<p class="muted">No download metadata loaded.</p>';
+    target.innerHTML = imageApiAuthRequiredWithoutKey() ? '<p class="muted">Enter the dashboard API key above to load model download jobs.</p>' : '<p class="muted">No download metadata loaded.</p>';
     return;
   }
   if (jobs.length === 0) {
@@ -354,7 +537,7 @@ function renderModelCatalog() {
   const entries = state.modelCatalog?.entries || [];
   if (!target) return;
   if (entries.length === 0) {
-    target.innerHTML = '<p class="muted">No local catalog entries configured.</p>';
+    target.innerHTML = imageApiAuthRequiredWithoutKey() ? '<p class="muted">Enter the dashboard API key above to load the local catalog.</p>' : '<p class="muted">No local catalog entries configured.</p>';
     return;
   }
   target.innerHTML = `<div class="model-list compact">${entries.map((entry) => `<article class="model-item">
@@ -379,13 +562,19 @@ function renderPlaygroundOptions() {
   const checkpoints = checkpointModels();
   const previous = modelSelect.value;
   const defaultItem = checkpoints.find((model) => modelMatches(model, defaultModel));
+  const firstCheckpoint = checkpoints[0] || null;
   const selectedValue = checkpoints.some((model) => modelMatches(model, previous))
     ? previous
     : defaultItem
       ? modelIdentifier(defaultItem)
-      : '';
+      : firstCheckpoint
+        ? modelIdentifier(firstCheckpoint)
+        : '';
 
-  modelSelect.innerHTML = `<option value="">${defaultModel ? `Use configured default (${escapeHtml(defaultModel)})` : 'No model selected'}</option>` + checkpoints.map((model) => {
+  const placeholder = checkpoints.length > 0
+    ? 'Choose a checkpoint to send'
+    : 'No checkpoint models found';
+  modelSelect.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>` + checkpoints.map((model) => {
     const labels = [];
     if (model.isDefault) labels.push('default');
     if (model.isLastConfirmedLoaded) labels.push('last loaded/prewarmed');
@@ -411,12 +600,16 @@ function renderPlaygroundStatus() {
   if (!target) return;
   const status = currentPreloadStatus();
   const model = selectedPlaygroundModel() || status?.currentDefaultCheckpoint || '';
+  const checkpoints = checkpointModels();
   if (!model) {
-    target.innerHTML = '<span class="status-pill warn">No model selected and no default exists</span> Select a checkpoint before generating.';
+    target.innerHTML = checkpoints.length === 0
+      ? '<span class="status-pill warn">No checkpoint installed</span> Install or download a checkpoint before generating.'
+      : '<span class="status-pill warn">No checkpoint selected</span> Choose a checkpoint before generating.';
     return;
   }
-  const selectedModel = checkpointModels().find((candidate) => modelMatches(candidate, model));
-  target.innerHTML = `${selectedModel?.isDefault ? badge('default', 'ok') : badge('selected', 'ok')} ${selectedModel?.isLastConfirmedLoaded ? badge('last loaded/prewarmed', 'ok') : badge('not confirmed loaded', 'warn')} Request will send checkpoint <code>${escapeHtml(model)}</code>.`;
+  const selectedModel = checkpoints.find((candidate) => modelMatches(candidate, model));
+  const defaultMissing = status?.currentDefaultCheckpoint && status.defaultFileExists === false;
+  target.innerHTML = `${selectedModel?.isDefault ? badge('default', 'ok') : badge('selected for generation', 'ok')} ${selectedModel?.isLastConfirmedLoaded ? badge('last loaded/prewarmed', 'ok') : badge('not confirmed loaded', 'warn')} ${defaultMissing ? badge('configured default missing', 'bad') : ''} Request will send checkpoint <code>${escapeHtml(model)}</code>.`;
 }
 
 function selectedWorkflow() {
@@ -458,7 +651,7 @@ function buildPlaygroundPayload() {
     scheduler: $('#playground-scheduler')?.value.trim() || undefined,
     output: $('#playground-output')?.value || 'url',
     sync_timeout_ms: Number($('#playground-sync-timeout')?.value || 0),
-    metadata: { source: 'portal-playground' }
+    metadata: { source: 'portal-generator' }
   };
   const model = selectedPlaygroundModel() || status?.currentDefaultCheckpoint || '';
   if (model) payload.model = model;
@@ -480,6 +673,31 @@ function updatePlaygroundPreview() {
   renderPlaygroundStatus();
 }
 
+function renderGenerationResult(result) {
+  const artifacts = result.artifacts || result.job?.artifacts || [];
+  const first = artifacts.find((artifact) => artifact?.url);
+  const job = result.job || {};
+  const statusClass = job.status === 'succeeded' ? 'ok' : job.status === 'failed' ? 'bad' : 'warn';
+  const thumbnail = first?.url
+    ? `<a href="${escapeHtml(first.url)}" target="_blank" rel="noopener"><img class="result-image" data-artifact-url="${escapeHtml(first.url)}" alt="Generated image result" loading="lazy" hidden><div class="thumb-placeholder">Loading result image...</div></a>`
+    : '';
+  return `<div class="generation-result">
+    <p><span class="status-pill ${statusClass}">${escapeHtml(job.status || 'submitted')}</span> Job <code>${escapeHtml(job.id || 'n/a')}</code></p>
+    ${thumbnail}
+    ${renderKeyValues([
+      ['Model', job.model ? `<code>${escapeHtml(job.model)}</code>` : '<span class="muted">n/a</span>'],
+      ['Prompt', escapeHtml(job.prompt || job.request?.prompt || buildPlaygroundPayload().prompt || '')],
+      ['Total time', escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))],
+      ['Execution time', escapeHtml(formatDurationMs(job.executionMs ?? job.timings?.executionMs))],
+      ['Artifacts', escapeHtml(artifacts.length)]
+    ])}
+    <details>
+      <summary>Full API response</summary>
+      <pre><code>${escapeHtml(JSON.stringify(result, null, 2))}</code></pre>
+    </details>
+  </div>`;
+}
+
 function renderAll() {
   renderImageAuth();
   renderImageHealth();
@@ -494,8 +712,26 @@ function renderAll() {
 
 async function refreshImageApi() {
   state.imageError = null;
-  const [health, stats, models, workflows, jobs, downloads, catalog] = await Promise.allSettled([
-    fetchJson('/api/v1/health'),
+
+  const publicHealth = await fetchJson('/health').catch((error) => {
+    state.imageError = error;
+    return null;
+  });
+  if (publicHealth) state.imageHealth = publicHealth;
+
+  if (imageApiAuthRequiredWithoutKey()) {
+    state.imageStats = null;
+    state.imageModels = null;
+    state.imageWorkflows = null;
+    state.imageJobs = null;
+    state.modelDownloads = null;
+    state.modelCatalog = null;
+    state.imageError = new Error('Dashboard API key required for protected /api/v1 calls. Paste one IMAGE_API_KEYS value above.');
+    state.imageError.status = 401;
+    return;
+  }
+
+  const [stats, models, workflows, jobs, downloads, catalog] = await Promise.allSettled([
     fetchJson('/api/v1/stats'),
     fetchJson('/api/v1/models'),
     fetchJson('/api/v1/workflows'),
@@ -504,7 +740,6 @@ async function refreshImageApi() {
     fetchJson('/api/v1/model-catalog')
   ]);
 
-  if (health.status === 'fulfilled') state.imageHealth = health.value;
   if (stats.status === 'fulfilled') state.imageStats = stats.value;
   if (models.status === 'fulfilled') state.imageModels = models.value;
   if (workflows.status === 'fulfilled') state.imageWorkflows = workflows.value;
@@ -512,7 +747,7 @@ async function refreshImageApi() {
   if (downloads.status === 'fulfilled') state.modelDownloads = downloads.value;
   if (catalog.status === 'fulfilled') state.modelCatalog = catalog.value;
 
-  const rejected = [health, stats, models, workflows, jobs, downloads, catalog].find((result) => result.status === 'rejected');
+  const rejected = [stats, models, workflows, jobs, downloads, catalog].find((result) => result.status === 'rejected');
   if (rejected) {
     state.imageError = rejected.reason;
     console.warn(rejected.reason);
@@ -554,27 +789,20 @@ async function handleModelAction(event) {
   if (!model && action !== 'refresh') return;
   const identifier = modelIdentifier(model);
   try {
-    if (action === 'use') {
-      $('#playground-model').value = identifier;
-      updatePlaygroundPreview();
-      renderImageModels();
-      setImageFeedback(`Selected ${identifier} for the playground.`);
-      return;
-    }
     if (action === 'load') {
-      setImageFeedback(`Preloading ${identifier}...`);
+      setImageFeedback(`Loading/prewarming ${identifier}...`);
       await fetchJson('/api/v1/models/preload', { method: 'POST', body: JSON.stringify({ model: identifier }) });
       await refreshModelsOnly(`Loaded/prewarmed ${identifier}.`);
       return;
     }
     if (action === 'set-default') {
       await fetchJson('/api/v1/models/default', { method: 'POST', body: JSON.stringify({ model: identifier }) });
-      await refreshModelsOnly(`Set ${identifier} as default.`);
+      await refreshModelsOnly(`Set ${identifier} as the default checkpoint.`);
       return;
     }
     if (action === 'set-default-preload') {
       await fetchJson('/api/v1/models/default', { method: 'POST', body: JSON.stringify({ model: identifier, preload_on_startup: true }) });
-      await refreshModelsOnly(`Set ${identifier} as default and enabled preload on startup.`);
+      await refreshModelsOnly(`Set ${identifier} as default and enabled preload after restart.`);
       return;
     }
     if (action === 'clear-default') {
@@ -613,7 +841,7 @@ async function handleModelAction(event) {
 
 async function handleDefaultAction(event) {
   const button = event.target.closest('[data-default-action]');
-  if (!button) return;
+  if (!button || button.disabled) return;
   const action = button.dataset.defaultAction;
   try {
     if (action === 'load') {
@@ -624,12 +852,12 @@ async function handleDefaultAction(event) {
     }
     if (action === 'enable-preload') {
       await fetchJson('/api/v1/models/preload/startup', { method: 'POST', body: JSON.stringify({ enabled: true }) });
-      await refreshModelsOnly('Enabled preload on startup.');
+      await refreshModelsOnly('Enabled preload after restart.');
       return;
     }
     if (action === 'disable-preload') {
       await fetchJson('/api/v1/models/preload/startup', { method: 'POST', body: JSON.stringify({ enabled: false }) });
-      await refreshModelsOnly('Disabled preload on startup.');
+      await refreshModelsOnly('Disabled preload after restart.');
       return;
     }
     if (action === 'clear-default') {
@@ -658,7 +886,8 @@ async function handlePlaygroundSubmit(event) {
     const result = await fetchJson('/api/v1/generate', { method: 'POST', body: JSON.stringify(payload) });
     state.activeJobId = result.job?.id || null;
     $('#playground-cancel').disabled = !state.activeJobId;
-    $('#playground-result').innerHTML = `<pre><code>${escapeHtml(JSON.stringify(result, null, 2))}</code></pre>`;
+    $('#playground-result').innerHTML = renderGenerationResult(result);
+    hydrateJobThumbnails();
     await refresh();
   } catch (error) {
     $('#playground-result').innerHTML = `<p class="danger-text">${escapeHtml(error.message)}</p>`;
@@ -674,17 +903,17 @@ async function handlePlaygroundModelButton(action) {
   }
   try {
     if (action === 'load') {
-      setImageFeedback(`Preloading ${model}...`);
+      setImageFeedback(`Loading/prewarming ${model}...`);
       await fetchJson('/api/v1/models/preload', { method: 'POST', body: JSON.stringify({ model }) });
       await refreshModelsOnly(`Loaded/prewarmed ${model}.`);
     }
     if (action === 'default') {
       await fetchJson('/api/v1/models/default', { method: 'POST', body: JSON.stringify({ model }) });
-      await refreshModelsOnly(`Set ${model} as default.`);
+      await refreshModelsOnly(`Set ${model} as the default checkpoint.`);
     }
     if (action === 'startup') {
       await fetchJson('/api/v1/models/default', { method: 'POST', body: JSON.stringify({ model, preload_on_startup: true }) });
-      await refreshModelsOnly(`Set ${model} as default and enabled preload on startup.`);
+      await refreshModelsOnly(`Set ${model} as default and enabled preload after restart.`);
     }
   } catch (error) {
     setImageFeedback(error.message, false);

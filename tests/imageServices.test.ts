@@ -47,6 +47,23 @@ test('ModelScanner scans configured model paths without failing on missing direc
   assert.ok(inventory.models.every((model) => model.sizeBytes !== null));
 });
 
+
+test('ModelScanner treats a configured checkpoints directory as checkpoint models', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'image-checkpoint-root-'));
+  const checkpointDir = path.join(root, 'checkpoints');
+  await fs.mkdir(checkpointDir, { recursive: true });
+  await fs.writeFile(path.join(checkpointDir, 'direct.safetensors'), 'checkpoint');
+
+  const scanner = new ModelScanner([checkpointDir]);
+  const inventory = await scanner.refresh();
+
+  assert.equal(inventory.ok, true);
+  assert.equal(inventory.models.length, 1);
+  assert.equal(inventory.models[0]?.fileName, 'direct.safetensors');
+  assert.equal(inventory.models[0]?.comfyName, 'direct.safetensors');
+  assert.equal(inventory.models[0]?.type, 'checkpoint');
+});
+
 test('WorkflowStore loads builtin and operator workflow presets', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'image-workflows-'));
   const custom = builtinWorkflows()[0]!;

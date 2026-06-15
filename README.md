@@ -30,7 +30,7 @@ Legacy Ollama endpoints from the reference application are still present only as
   - `GET /api/v1/artifacts/{artifactId}`
 - Provider abstraction with ComfyUI as the primary backend and a mock backend for local testing.
 - App-level request validation and workflow preset mapping so callers do not need to submit raw ComfyUI JSON.
-- Local model inventory scanner, persisted default checkpoint, explicit checkpoint preload, startup preload, safe model delete, and operator-supplied workflow directory.
+- Local model inventory scanner, persisted default checkpoint, explicit checkpoint preload, preload after restart, safe model delete, and operator-supplied workflow directory.
 - In-memory async job queue with configurable concurrency/back-pressure.
 - Artifact storage with sidecar metadata and URL/base64/binary/metadata-only result delivery.
 - API-key or bearer-token authentication for `/api/v1` when configured.
@@ -125,7 +125,7 @@ The repository does not include model files, generated images, secrets, or machi
 
 ## Model lifecycle controls
 
-The portal distinguishes installed-on-disk, selected-in-playground, persisted default, last confirmed loaded/prewarmed, and preload-on-startup states. Each installed checkpoint row/card exposes **Use in playground**, **Load / Prewarm now**, **Set as default**, **Set default + preload on startup**, **Delete model**, and **Refresh scan** controls. The default status panel shows the current default checkpoint, missing-file warnings, startup preload state, last preload result/error, and last confirmed loaded/prewarmed model.
+The portal distinguishes installed-on-disk, selected-for-generation, persisted default, last confirmed loaded/prewarmed, and preload-after-restart states. Each installed checkpoint row/card exposes **Load / Prewarm now**, **Set as default**, **Set default + preload after restart**, **Delete model**, and **Refresh scan** controls. The current default row also shows **Clear default**. The default status panel shows the current default checkpoint, missing-file warnings, preload-after-restart state, last preload result/error, and last confirmed loaded/prewarmed model.
 
 ComfyUI does not expose an exact loaded-checkpoint-in-VRAM API through this app, so the portal uses the honest label **Last confirmed loaded/prewarmed model** after a successful preload or generation.
 

@@ -223,7 +223,7 @@ sudo systemctl start local-ai-images.service
 | `IMAGE_DEFAULT_WORKFLOW_ID` | Default workflow preset ID. |
 | `IMAGE_DEFAULT_MODEL` | Initial/fallback default checkpoint when config has no `image_default_model`. |
 | `IMAGE_PRELOAD_DEFAULT_ON_STARTUP` | Initial/fallback setting for prewarming the default checkpoint after app restart. |
-| `IMAGE_PRELOAD_TIMEOUT_MS` | Bound for manual and startup preload attempts. |
+| `IMAGE_PRELOAD_TIMEOUT_MS` | Bound for manual preload and preload-after-restart attempts. |
 | `IMAGE_PRELOAD_WORKFLOW_ID` | Workflow preset used for preload requests. Defaults to `IMAGE_DEFAULT_WORKFLOW_ID`. |
 | `IMAGE_PRELOAD_WIDTH` / `IMAGE_PRELOAD_HEIGHT` | Dimensions for the tiny preload request. |
 | `IMAGE_PRELOAD_STEPS` | Step count for the tiny preload request. |

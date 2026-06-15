@@ -175,6 +175,7 @@ function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
     artifactCount: artifacts.length,
     artifactSizes: artifacts.map((artifact) => artifact.sizeBytes),
     artifacts: artifacts.map((artifact) => publicArtifactMetadata(artifact)),
+    thumbnailUrl: artifacts[0]?.url ?? null,
     request,
     metadata: {},
     timings: job?.timings ?? {

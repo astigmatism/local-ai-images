@@ -41,6 +41,7 @@ export function calculateJobTimings(job: JobMetricInput): JobTimingMetrics {
 }
 
 export function summarizeImageJob(job: ImageJob) {
+  const timings = calculateJobTimings(job);
   return {
     id: job.id,
     status: job.status,
@@ -65,9 +66,21 @@ export function summarizeImageJob(job: ImageJob) {
     output: job.request.output,
     artifactCount: job.artifacts.length,
     artifactSizes: job.artifacts.map((artifact) => artifact.sizeBytes),
+    artifacts: job.artifacts.map(publicArtifactMetadata),
+    thumbnailUrl: job.artifacts[0]?.url ?? null,
     request: job.request,
     metadata: job.metadata,
-    timings: calculateJobTimings(job),
+    timings,
+    queueWaitMs: timings.queueWaitMs,
+    executionMs: timings.executionMs,
+    totalMs: timings.totalMs,
+    secondsPerStep: timings.secondsPerStep,
+    stepsPerSecond: timings.stepsPerSecond,
     error: job.error ? { ...job.error } : null
   };
+}
+
+function publicArtifactMetadata(artifact: ImageJob['artifacts'][number]) {
+  const { filePath: _filePath, ...publicMetadata } = artifact;
+  return publicMetadata;
 }

@@ -107,9 +107,46 @@ test('model default endpoints validate checkpoint models and generation uses def
     assert.equal(jobDetails.job.request.prompt, 'uses default checkpoint');
     assert.equal(jobDetails.job.artifactCount, 1);
 
+    const recentJobs = await (await fetch(`${baseUrl}/api/v1/jobs?limit=5`)).json();
+    const listedJob = recentJobs.jobs.find((job: any) => job.id === generated.job.id);
+    assert.ok(listedJob);
+    assert.equal(listedJob.prompt, 'uses default checkpoint');
+    assert.equal(listedJob.request.prompt, 'uses default checkpoint');
+    assert.equal(listedJob.artifacts.length, 1);
+    assert.ok(listedJob.thumbnailUrl);
+    assert.equal(typeof listedJob.timings.totalMs, 'number');
+
     const cleared = await (await fetch(`${baseUrl}/api/v1/models/default`, { method: 'DELETE' })).json();
     assert.equal(cleared.ok, true);
     assert.equal(cleared.default_model, '');
+  });
+});
+
+
+test('model lifecycle controls stay enabled when IMAGE_MODEL_PATHS points directly at checkpoints', async () => {
+  const env = await tempModelRuntime();
+  const runtimeConfig = testRuntimeConfig({
+    ...env.runtimeConfig,
+    imageModelPaths: [env.checkpointDir]
+  });
+  const store = new ConfigStore(env.configPath, '');
+
+  await withTestServer({ runtimeConfig, configStore: store, ollamaClient: mockOllama() }, async (baseUrl) => {
+    const inventory = await (await fetch(`${baseUrl}/api/v1/models`)).json();
+    const demo = inventory.models.find((model: any) => model.fileName === 'demo.safetensors');
+    assert.ok(demo);
+    assert.equal(demo.type, 'checkpoint');
+    assert.equal(demo.canSetDefault, true);
+    assert.equal(demo.canPreload, true);
+    assert.equal(demo.loadedStatus, 'not_confirmed_loaded');
+
+    const setDefault = await fetch(`${baseUrl}/api/v1/models/default`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'demo.safetensors' })
+    });
+    assert.equal(setDefault.status, 200);
+    assert.equal((await store.readConfig()).image_default_model, 'demo.safetensors');
   });
 });
 
@@ -256,6 +293,72 @@ test('ConfigStore persists image default preload-on-startup setting', async () =
   assert.equal((await reopened.readConfig()).image_preload_default_on_startup, false);
 });
 
+test('top-level checkpoint files expose load and default actions from checkpoint and flat scan roots', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'model-scan-top-level-'));
+  const checkpointRoot = path.join(root, 'ComfyUI', 'models', 'checkpoints');
+  const flatModelRoot = path.join(root, 'flat-model-root');
+  const loraDir = path.join(root, 'ComfyUI', 'models', 'loras');
+  const workflowPath = path.join(root, 'workflows');
+  const artifactPath = path.join(root, 'artifacts');
+  const configPath = path.join(root, 'config.json');
+  await fs.mkdir(checkpointRoot, { recursive: true });
+  await fs.mkdir(flatModelRoot, { recursive: true });
+  await fs.mkdir(loraDir, { recursive: true });
+  await fs.mkdir(workflowPath, { recursive: true });
+  await fs.mkdir(artifactPath, { recursive: true });
+  await fs.writeFile(path.join(checkpointRoot, 'direct-checkpoint.safetensors'), 'checkpoint');
+  await fs.writeFile(path.join(flatModelRoot, 'flat-checkpoint.ckpt'), 'checkpoint');
+
+  const runtimeConfig = testRuntimeConfig({
+    imageGenerationEnabled: true,
+    imageBackend: 'mock',
+    imageModelPaths: [checkpointRoot, flatModelRoot],
+    imageWorkflowPath: workflowPath,
+    imageArtifactPath: artifactPath,
+    modelInstallsEnabled: true,
+    modelInstallMaxBytes: 1024 * 1024,
+    modelCatalogPath: path.join(root, 'model-catalog.json'),
+    modelDownloadMetadataPath: path.join(root, 'model-downloads.json'),
+    modelInstallDirectories: {
+      checkpoint: checkpointRoot,
+      lora: loraDir,
+      vae: path.join(root, 'ComfyUI', 'models', 'vae'),
+      controlnet: path.join(root, 'ComfyUI', 'models', 'controlnet'),
+      upscaler: path.join(root, 'ComfyUI', 'models', 'upscale_models'),
+      other: flatModelRoot
+    },
+    imageDefaultSyncTimeoutMs: 1000
+  });
+
+  await withTestServer({ runtimeConfig, configStore: new ConfigStore(configPath, ''), ollamaClient: mockOllama() }, async (baseUrl) => {
+    const inventory = await (await fetch(`${baseUrl}/api/v1/models`)).json();
+    for (const fileName of ['direct-checkpoint.safetensors', 'flat-checkpoint.ckpt']) {
+      const model = inventory.models.find((item: any) => item.fileName === fileName);
+      assert.ok(model, `${fileName} should be present in inventory`);
+      assert.equal(model.type, 'checkpoint');
+      assert.equal(model.canSetDefault, true);
+      assert.equal(model.canPreload, true);
+      assert.equal(model.loadedStatus, 'not_confirmed_loaded');
+    }
+
+    const setDefault = await (await fetch(`${baseUrl}/api/v1/models/default`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'direct-checkpoint.safetensors' })
+    })).json();
+    assert.equal(setDefault.ok, true);
+    assert.equal(setDefault.default_model, 'direct-checkpoint.safetensors');
+
+    const preloaded = await (await fetch(`${baseUrl}/api/v1/models/preload`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'flat-checkpoint.ckpt' })
+    })).json();
+    assert.equal(preloaded.ok, true);
+    assert.equal(preloaded.preload.lastConfirmedLoadedModel, 'flat-checkpoint.ckpt');
+  });
+});
+
 test('GET /api/v1/models exposes default, preload, delete, missing, and loaded state', async () => {
   const env = await tempModelRuntime();
   const store = new ConfigStore(env.configPath, '');
@@ -328,8 +431,9 @@ test('model preload endpoints validate input and record success and failure stat
     });
     assert.equal(missingDefault.status, 422);
     const missingDefaultBody = await missingDefault.json();
-    assert.equal(missingDefaultBody.preload.lastPreloadResult, 'failed');
-    assert.equal(missingDefaultBody.preload.lastPreloadError.code, 'MODEL_PRELOAD_MODEL_REQUIRED');
+    assert.equal(missingDefaultBody.error.code, 'MODEL_PRELOAD_MODEL_REQUIRED');
+    assert.equal(missingDefaultBody.preload.lastPreloadResult, 'not_attempted');
+    assert.equal(missingDefaultBody.preload.lastPreloadError, null);
 
     const rejectLora = await fetch(`${baseUrl}/api/v1/models/preload`, {
       method: 'POST',

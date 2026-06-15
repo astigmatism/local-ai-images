@@ -142,14 +142,19 @@ export class ModelLifecycleManager {
     }
 
     const source = options.source ?? 'api';
+    // Validate that the caller actually selected a checkpoint or configured a
+    // default before marking the lifecycle as a failed preload attempt. This
+    // keeps a fresh portal from showing a scary persistent "last preload error"
+    // when no model has ever been chosen.
+    const requestedModel = await this.resolveRequestedPreloadModel(options.model);
     const attemptTime = new Date().toISOString();
     this.state.lastPreloadAttemptTime = attemptTime;
     this.state.lastPreloadCompletedTime = null;
     this.state.lastPreloadResult = 'running';
     this.state.lastPreloadError = null;
-    this.state.lastPreloadModel = typeof options.model === 'string' && options.model.trim() ? options.model.trim() : null;
+    this.state.lastPreloadModel = requestedModel;
 
-    this.activePreload = this.runPreload(options, source)
+    this.activePreload = this.runPreload({ ...options, model: requestedModel }, source)
       .finally(() => {
         this.activePreload = null;
       });
@@ -284,14 +289,7 @@ export class ModelLifecycleManager {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.runtimeConfig.imagePreloadTimeoutMs);
     try {
-      const config = await this.configStore.readConfig();
-      const requestedModel = (typeof options.model === 'string' && options.model.trim())
-        ? options.model.trim()
-        : (config.image_default_model || '').trim();
-      if (!requestedModel) {
-        throw new AppError('MODEL_PRELOAD_MODEL_REQUIRED', 'Provide a checkpoint model or configure an image default model before preloading.', 422);
-      }
-
+      const requestedModel = await this.resolveRequestedPreloadModel(options.model);
       const inventory = await this.modelScanner.list();
       const model = findInventoryModel(inventory.models, requestedModel);
       if (!model) {
@@ -357,6 +355,20 @@ export class ModelLifecycleManager {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private async resolveRequestedPreloadModel(model: string | null | undefined): Promise<string> {
+    const requestedModel = typeof model === 'string' && model.trim()
+      ? model.trim()
+      : ((await this.configStore.readConfig()).image_default_model || '').trim();
+    if (!requestedModel) {
+      throw new AppError(
+        'MODEL_PRELOAD_MODEL_REQUIRED',
+        'Choose an installed checkpoint first, or set one as the default checkpoint, then load/prewarm it.',
+        422
+      );
+    }
+    return requestedModel;
   }
 
   private async resolvePreloadWorkflow(): Promise<WorkflowPreset> {

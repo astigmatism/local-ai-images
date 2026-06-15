@@ -1069,7 +1069,7 @@ function decorateSingleModel(
     ? modelMatchesDefault(model, preload.lastConfirmedLoadedModel)
     : false;
   const canSetDefault = model.type === 'checkpoint';
-  const canPreload = canSetDefault && usableByDefaultWorkflow;
+  const canPreload = canSetDefault;
   const canDelete = dependencies.imageRuntime.modelLifecycle.canDeleteModel(model);
   const loadedStatus = model.type !== 'checkpoint'
     ? 'not_applicable'
@@ -1087,6 +1087,9 @@ function decorateSingleModel(
     canDelete,
     deleteRequiresDefaultClear: isDefault,
     defaultWarning: isDefault ? preload?.defaultWarning ?? null : null,
+    preloadWarning: canPreload && !usableByDefaultWorkflow
+      ? 'The configured preload workflow does not advertise a checkpoint-loader mapping. The Load / Prewarm action is still available, but the backend may report a workflow configuration error until IMAGE_PRELOAD_WORKFLOW_ID or the workflow mapping is fixed.'
+      : null,
     loadedStatus,
     usableByDefaultWorkflow,
     deletePreview: dependencies.imageRuntime.modelLifecycle.deletePreview(model, isDefault)
@@ -1684,7 +1687,7 @@ function renderPortalHtml(): string {
     <div>
       <p class="eyebrow">Local AI image-generation appliance</p>
       <h1>${SERVICE_NAME}</h1>
-      <p class="muted">ComfyUI image API, hosted control panel, model installs/defaults, playground testing, async job metrics, artifact storage, and NVIDIA GPU telemetry.</p>
+      <p class="muted">ComfyUI image API, hosted control panel, model installs/defaults, generation testing, async job metrics, artifact storage, and NVIDIA GPU telemetry.</p>
     </div>
     <button id="refresh-button" type="button">Refresh</button>
   </header>
@@ -1693,19 +1696,20 @@ function renderPortalHtml(): string {
     <section class="card">
       <div class="section-heading">
         <div>
-          <h2>Image API access</h2>
-          <p class="hint">The browser stores this key only in local storage and sends it to <code>/api/v1</code> as a bearer token.</p>
+          <h2>Dashboard API key</h2>
+          <p class="hint">Leave this blank unless this server was started with <code>IMAGE_API_KEYS</code> or <code>REQUIRE_IMAGE_API_AUTH=true</code>. This is not a ComfyUI key and does not load models; it only lets this browser call protected <code>/api/v1</code> dashboard endpoints.</p>
         </div>
         <div id="image-auth-status"></div>
       </div>
       <form id="api-key-form" class="auth-row">
         <label>
-          Image API key
-          <input id="api-key-input" type="password" autocomplete="off" placeholder="Paste IMAGE_API_KEYS value for dashboard API calls">
+          Optional API key for this browser
+          <input id="api-key-input" type="password" autocomplete="off" placeholder="Only needed if API auth is enabled">
         </label>
         <button type="submit">Save key</button>
         <button id="clear-key-button" class="secondary" type="button">Clear key</button>
       </form>
+      <p id="image-auth-help" class="hint"></p>
       <div id="image-feedback" class="feedback" aria-live="polite"></div>
     </section>
 
@@ -1788,8 +1792,8 @@ function renderPortalHtml(): string {
     <section class="card">
       <div class="section-heading">
         <div>
-          <h2>Generate / playground</h2>
-          <p class="hint">This form uses the real <code>/api/v1/generate</code> API and shows the equivalent JSON and curl command.</p>
+          <h2>Generate image</h2>
+          <p class="hint">This form sends a real <code>/api/v1/generate</code> request. It shows the exact checkpoint, JSON, and curl command before you submit.</p>
         </div>
         <div id="playground-status"></div>
       </div>
@@ -1798,7 +1802,7 @@ function renderPortalHtml(): string {
         <form id="playground-form" class="stack">
           <div class="form-grid">
             <label>
-              Checkpoint model
+              Checkpoint to send
               <select id="playground-model"></select>
             </label>
             <label>
@@ -1830,9 +1834,9 @@ function renderPortalHtml(): string {
           </div>
           <div class="button-row">
             <button type="submit">Submit generation</button>
-            <button id="playground-load-selected" class="secondary" type="button">Load selected model now</button>
-            <button id="playground-set-selected-default" class="secondary" type="button">Set selected as default</button>
-            <button id="playground-preload-selected-startup" class="secondary" type="button">Preload selected default on startup</button>
+            <button id="playground-load-selected" class="secondary" type="button">Load selected checkpoint now</button>
+            <button id="playground-set-selected-default" class="secondary" type="button">Set selected checkpoint as default</button>
+            <button id="playground-preload-selected-startup" class="secondary" type="button">Set selected default + preload after restart</button>
             <button id="playground-cancel" class="secondary" type="button" disabled>Cancel job</button>
             <button id="apply-workflow-defaults" class="secondary" type="button">Apply workflow defaults</button>
           </div>
@@ -1861,7 +1865,7 @@ function renderPortalHtml(): string {
       </article>
       <article class="card">
         <h2>Recent image jobs</h2>
-        <p class="hint">Diffusion metrics include queue wait, execution time, total time, seconds per step, and steps per second. Token metrics are normally N/A for image jobs.</p>
+        <p class="hint">Shows the prompt text, thumbnail, model/workflow settings, duration, step speed, artifacts, and any reported provider metadata. Token counts are shown as N/A unless a provider reports them.</p>
         <div id="image-jobs" class="placeholder">Loading recent image jobs...</div>
       </article>
     </section>
