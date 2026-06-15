@@ -57,7 +57,7 @@ export function createRequestHandler(dependencies: AppDependencies): RequestHand
 }
 
 async function routeRequest(method: string, url: URL, request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
-  const { configStore, gpuService, ollamaClient, runtimeConfig, logger } = dependencies;
+  const { gpuService, runtimeConfig, logger } = dependencies;
   const pathName = url.pathname;
 
   if (method === 'GET' && pathName === '/') {
@@ -86,17 +86,20 @@ async function routeRequest(method: string, url: URL, request: IncomingMessage, 
   }
 
   if (method === 'GET' && pathName === '/health') {
-    await handleHealth(response, configStore, ollamaClient, runtimeConfig);
+    if (runtimeConfig.legacyOllamaEnabled) {
+      await handleLegacyHealth(response, dependencies.configStore, dependencies.ollamaClient, runtimeConfig);
+      return;
+    }
+    await handleImageApiHealth(response, dependencies);
     return;
   }
 
   if (method === 'GET' && pathName === '/api/capabilities') {
-    await handleCapabilities(response, configStore, ollamaClient, runtimeConfig, logger);
-    return;
-  }
-
-  if (method === 'POST' && pathName === '/api/images/generate') {
-    await handleImageGeneration(request, response, configStore, ollamaClient, runtimeConfig, logger);
+    if (runtimeConfig.legacyOllamaEnabled) {
+      await handleLegacyCapabilities(response, dependencies.configStore, dependencies.ollamaClient, runtimeConfig, logger);
+      return;
+    }
+    await handleImageApiCapabilities(response, dependencies);
     return;
   }
 
@@ -121,6 +124,32 @@ async function routeRequest(method: string, url: URL, request: IncomingMessage, 
     } catch (error: unknown) {
       sendJson(response, statusCodeForError(error, 503), toErrorPayload(error, 'GPU_TELEMETRY_FAILED'));
     }
+    return;
+  }
+
+  if (isLegacyOllamaRoute(method, pathName)) {
+    if (!runtimeConfig.legacyOllamaEnabled) {
+      sendLegacyOllamaDisabled(response, pathName);
+      return;
+    }
+    await routeLegacyOllamaRequest(method, pathName, request, response, dependencies);
+    return;
+  }
+
+  sendJson(response, 404, { ok: false, error: { code: 'NOT_FOUND', message: `No route for ${method} ${pathName}` } });
+}
+
+async function routeLegacyOllamaRequest(
+  method: string,
+  pathName: string,
+  request: IncomingMessage,
+  response: ServerResponse,
+  dependencies: ResolvedAppDependencies
+): Promise<void> {
+  const { configStore, ollamaClient, runtimeConfig, logger } = dependencies;
+
+  if (method === 'POST' && pathName === '/api/images/generate') {
+    await handleLegacyImageGeneration(request, response, configStore, ollamaClient, runtimeConfig, logger);
     return;
   }
 
@@ -241,10 +270,28 @@ async function routeRequest(method: string, url: URL, request: IncomingMessage, 
     } catch (error: unknown) {
       sendJson(response, statusCodeForError(error, 502), toErrorPayload(error, 'MODEL_PREWARM_FAILED'));
     }
-    return;
   }
+}
 
-  sendJson(response, 404, { ok: false, error: { code: 'NOT_FOUND', message: `No route for ${method} ${pathName}` } });
+function isLegacyOllamaRoute(method: string, pathName: string): boolean {
+  return (
+    (method === 'POST' && pathName === '/api/images/generate') ||
+    (method === 'GET' && pathName === '/models/running') ||
+    (method === 'GET' && pathName === '/models/installed') ||
+    ((method === 'GET' || method === 'POST') && pathName === '/config') ||
+    (method === 'POST' && pathName === '/model/load') ||
+    (method === 'POST' && pathName === '/model/prewarm')
+  );
+}
+
+function sendLegacyOllamaDisabled(response: ServerResponse, pathName: string): void {
+  sendJson(response, 410, {
+    ok: false,
+    error: {
+      code: 'LEGACY_OLLAMA_DISABLED',
+      message: `Legacy Ollama compatibility endpoint ${pathName} is disabled. Set LEGACY_OLLAMA_ENABLED=true to enable retained Ollama routes. New image integrations should use /api/v1/generate and related /api/v1 endpoints.`
+    }
+  });
 }
 
 
@@ -715,7 +762,7 @@ interface ImageGenerationCapability {
   reason?: string;
 }
 
-async function handleCapabilities(
+async function handleLegacyCapabilities(
   response: ServerResponse,
   configStore: ConfigStore,
   ollamaClient: OllamaClientLike,
@@ -908,7 +955,7 @@ function unsupportedImageGenerationReason(model: string, capabilities: string[],
   return `Current model ${model} does not report Ollama image-generation capability "image".${reported}${imageInputNote} Select an Ollama image-generation model or configure a separate image-generation provider.`;
 }
 
-async function handleImageGeneration(
+async function handleLegacyImageGeneration(
   request: IncomingMessage,
   response: ServerResponse,
   configStore: ConfigStore,
@@ -1112,7 +1159,7 @@ function validationDetail(loc: Array<string | number>, msg: string, type: string
   };
 }
 
-async function handleHealth(response: ServerResponse, configStore: ConfigStore, ollamaClient: OllamaClientLike, runtimeConfig: RuntimeConfig): Promise<void> {
+async function handleLegacyHealth(response: ServerResponse, configStore: ConfigStore, ollamaClient: OllamaClientLike, runtimeConfig: RuntimeConfig): Promise<void> {
   let config: AppConfig;
   try {
     config = await configStore.readConfig();
@@ -1241,7 +1288,7 @@ function renderPortalHtml(): string {
     <div>
       <p class="eyebrow">Local AI image-generation appliance</p>
       <h1>${SERVICE_NAME}</h1>
-      <p class="muted">ComfyUI image API, hosted control panel, Ollama compatibility controls, and NVIDIA GPU telemetry.</p>
+      <p class="muted">ComfyUI image API, hosted control panel, async job queue, artifact storage, and NVIDIA GPU telemetry.</p>
     </div>
     <button id="refresh-button" type="button">Refresh</button>
   </header>
@@ -1295,59 +1342,10 @@ function renderPortalHtml(): string {
       </article>
     </section>
 
-    <section class="grid two">
-      <article class="card" id="health-card">
-        <h2>Legacy service health</h2>
-        <div id="health-content" class="placeholder">Loading health...</div>
-      </article>
-
-      <article class="card" id="config-card">
-        <h2>Legacy default Ollama model</h2>
-        <form id="config-form" class="stack">
-          <label>
-            Default model
-            <input id="default-model-input" name="default_model" type="text" maxlength="128" placeholder="qwen3:14b">
-          </label>
-          <div class="button-row">
-            <button type="submit">Save default</button>
-            <button id="prewarm-default-button" type="button">Pre-warm default</button>
-          </div>
-        </form>
-        <p class="hint">Startup pre-warm is controlled by <code>PREWARM_DEFAULT_MODEL_ON_START</code>.</p>
-      </article>
-    </section>
-
-    <section class="card">
-      <h2>Load or pre-warm a legacy Ollama model</h2>
-      <form id="load-form" class="inline-form">
-        <label>
-          Model name
-          <input id="load-model-input" name="model" type="text" maxlength="128" required placeholder="llama3.2:latest">
-        </label>
-        <label class="checkbox-label">
-          <input id="make-default-input" name="make_default" type="checkbox">
-          Make default
-        </label>
-        <button type="submit">Load model</button>
-      </form>
-      <div id="operation-feedback" class="feedback" aria-live="polite"></div>
-    </section>
-
-    <section class="grid two">
-      <article class="card">
-        <h2>Running Ollama models</h2>
-        <div id="running-models" class="placeholder">Loading running models...</div>
-      </article>
-      <article class="card">
-        <h2>Installed Ollama models</h2>
-        <div id="installed-models" class="placeholder">Loading installed models...</div>
-      </article>
-    </section>
-
     <section class="card">
       <div class="section-heading">
         <h2>GPU telemetry</h2>
-        <p class="hint"><code>/gpu</code> is legacy single-GPU compatibility. New integrations should use <code>/gpus</code> and <code>/api/v1/stats</code>.</p>
+        <p class="hint">GPU telemetry is read from <code>/api/v1/stats</code>. Compatibility endpoints <code>/gpu</code> and <code>/gpus</code> remain available for existing integrations.</p>
       </div>
       <div id="gpu-list" class="gpu-grid placeholder">Loading GPU telemetry...</div>
     </section>

@@ -178,6 +178,8 @@ curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" \
 
 Artifact metadata includes job ID, model, workflow ID, prompt, negative prompt, seed, request options, provider metadata, and artifact URL. Internal filesystem paths are removed from API responses.
 
-## Legacy endpoints
+## Compatibility endpoints
 
-The original LLM/Ollama monitor endpoints remain available: `/health`, `/gpu`, `/gpus`, `/models/running`, `/models/installed`, `/config`, `/model/load`, `/model/prewarm`, and `/api/images/generate`. New image integrations should use `/api/v1/*`.
+`/health`, `/api/capabilities`, `/gpu`, and `/gpus` remain available without `/api/v1` prefixes for simple probes and compatibility. In the default image-only mode, `/health` and `/api/capabilities` report Local AI Images/ComfyUI image-service state and do **not** contact Ollama.
+
+Retained legacy Ollama routes are disabled by default: `/models/running`, `/models/installed`, `/config`, `/model/load`, `/model/prewarm`, and `/api/images/generate`. They return `LEGACY_OLLAMA_DISABLED` unless `LEGACY_OLLAMA_ENABLED=true` is set. New image integrations should use `/api/v1/*`.

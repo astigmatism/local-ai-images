@@ -138,15 +138,17 @@ export function loadRuntimeConfig(): RuntimeConfig {
   const configPath = readPath('CONFIG_PATH', './config/local-ai-images.json');
   const artifactPath = readPath('IMAGE_ARTIFACT_PATH', './data/artifacts');
   const artifactPublicBaseUrl = readOptionalString('IMAGE_ARTIFACT_PUBLIC_BASE_URL') || '/api/v1/artifacts';
+  const legacyOllamaEnabled = readBoolean('LEGACY_OLLAMA_ENABLED', false);
 
   return {
     host: readString('HOST', '0.0.0.0'),
     port: readNumber('PORT', 8000),
-    ollamaBaseUrl: normalizeBaseUrl(readString('OLLAMA_BASE_URL', 'http://127.0.0.1:11434')),
+    legacyOllamaEnabled,
+    ollamaBaseUrl: normalizeBaseUrl(legacyOllamaEnabled ? readString('OLLAMA_BASE_URL', 'http://127.0.0.1:11434') : readOptionalString('OLLAMA_BASE_URL')),
     ollamaRequestTimeoutMs: readNumber('OLLAMA_REQUEST_TIMEOUT_MS', 30000),
     configPath,
-    defaultModel: readString('DEFAULT_MODEL', 'llama3.2:latest'),
-    prewarmDefaultModelOnStart: readBoolean('PREWARM_DEFAULT_MODEL_ON_START', true),
+    defaultModel: readOptionalString('DEFAULT_MODEL'),
+    prewarmDefaultModelOnStart: legacyOllamaEnabled && readBoolean('PREWARM_DEFAULT_MODEL_ON_START', false),
     prewarmTimeoutMs: readNumber('PREWARM_TIMEOUT_MS', 120000),
     prewarmKeepAlive: readKeepAlive('PREWARM_KEEP_ALIVE', -1),
     imageGenerationEnabled: readBoolean('IMAGE_GENERATION_ENABLED', true),

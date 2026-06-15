@@ -4,8 +4,8 @@
 
 - The machine is a fresh Ubuntu 24 Server installation.
 - SSH access already works.
-- The host is headless.
-- The host has two NVIDIA GPUs installed: RTX 3090 and RTX 4080.
+- The host is headless or managed primarily over SSH.
+- The target GPU is an NVIDIA RTX 3080 passed through to the Ubuntu VM or installed directly in the host.
 - The target deployment is LAN/local-lab use, not public internet exposure.
 - You have a sudo-capable administrative account.
 
@@ -37,6 +37,7 @@ sudo apt install -y \
   nano \
   openssh-server \
   pciutils \
+  python3-venv \
   software-properties-common \
   unzip \
   zip
@@ -57,7 +58,7 @@ Set a stable hostname so logs and orchestrator configuration are predictable:
 sudo hostnamectl set-hostname local-ai-images
 ```
 
-Use your router/DHCP server to reserve an IP address for the host when possible. That is usually safer than hand-editing netplan on a remote-only server. If you must configure a static IP on the host, inspect the active netplan file first:
+Use your router/DHCP server to reserve an IP address for the VM when possible. That is usually safer than hand-editing netplan on a remote-only server. If you must configure a static IP on the guest, inspect the active netplan file first:
 
 ```bash
 ls -l /etc/netplan
@@ -83,11 +84,12 @@ sudo timedatectl set-ntp true
 
 ## Firewall baseline
 
-The final expected ports are:
+The normal image-generation deployment only needs these inbound ports:
 
 - SSH: `22/tcp`
-- Ollama: `11434/tcp`
-- Local AI Images portal: `8000/tcp`
+- Local AI Images portal/API: `8000/tcp`
+
+Raw ComfyUI should remain bound to `127.0.0.1:8188` and should not be exposed to the LAN directly.
 
 For LAN-only use, allow from your LAN CIDR instead of the whole internet. Example for `192.168.1.0/24`:
 
@@ -95,7 +97,6 @@ For LAN-only use, allow from your LAN CIDR instead of the whole internet. Exampl
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
 sudo ufw allow from 192.168.1.0/24 to any port 22 proto tcp
-sudo ufw allow from 192.168.1.0/24 to any port 11434 proto tcp
 sudo ufw allow from 192.168.1.0/24 to any port 8000 proto tcp
 sudo ufw enable
 sudo ufw status verbose
@@ -109,4 +110,4 @@ Do not enable UFW remotely without confirming SSH is allowed.
 lspci | grep -Ei 'nvidia|vga|3d'
 ```
 
-You should see both NVIDIA cards at the PCI layer before installing drivers. If only one card appears here, solve hardware/BIOS/slot/power issues before proceeding.
+You should see the RTX 3080 at the PCI layer before installing drivers. If it does not appear here, solve hypervisor passthrough, BIOS, power, or IOMMU-group issues before proceeding.

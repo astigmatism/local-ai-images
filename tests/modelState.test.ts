@@ -7,9 +7,9 @@ test('isDefaultModelLoaded detects exact loaded default model', () => {
 });
 
 test('isDefaultModelLoaded treats missing latest tag as compatible', () => {
-  assert.equal(isDefaultModelLoaded('llama3.2', [{ name: 'llama3.2:latest', model: 'llama3.2:latest' }]), true);
+  assert.equal(isDefaultModelLoaded('legacy-model', [{ name: 'legacy-model:latest', model: 'legacy-model:latest' }]), true);
 });
 
 test('isDefaultModelLoaded returns false when default is not running', () => {
-  assert.equal(isDefaultModelLoaded('qwen3:14b', [{ name: 'llama3.2:latest', model: 'llama3.2:latest' }]), false);
+  assert.equal(isDefaultModelLoaded('qwen3:14b', [{ name: 'legacy-model:latest', model: 'legacy-model:latest' }]), false);
 });

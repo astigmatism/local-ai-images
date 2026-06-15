@@ -2,31 +2,68 @@ import { createServer } from 'node:http';
 import { createRequestHandler } from './app.ts';
 import { loadRuntimeConfig } from './config/env.ts';
 import { ConfigStore } from './config/store.ts';
+import { AppError } from './errors.ts';
 import { createLogger } from './logger.ts';
 import { NvidiaSmiGpuService } from './services/gpuService.ts';
 import { OllamaClient } from './services/ollamaClient.ts';
+import type { OllamaClientLike } from './types.ts';
 
 const runtimeConfig = loadRuntimeConfig();
 const logger = createLogger(runtimeConfig.logLevel);
 const configStore = new ConfigStore(runtimeConfig.configPath, runtimeConfig.defaultModel);
-const ollamaClient = new OllamaClient(runtimeConfig.ollamaBaseUrl, runtimeConfig.ollamaRequestTimeoutMs);
+const ollamaClient: OllamaClientLike = runtimeConfig.legacyOllamaEnabled
+  ? new OllamaClient(runtimeConfig.ollamaBaseUrl, runtimeConfig.ollamaRequestTimeoutMs)
+  : createDisabledOllamaClient();
 const gpuService = new NvidiaSmiGpuService(runtimeConfig.gpuQueryTimeoutMs);
 const server = createServer(createRequestHandler({ runtimeConfig, configStore, ollamaClient, gpuService, logger }));
 
 async function main(): Promise<void> {
-  const config = await configStore.readConfig();
-
   await new Promise<void>((resolve) => {
     server.listen(runtimeConfig.port, runtimeConfig.host, () => resolve());
   });
 
-  logger.info({ host: runtimeConfig.host, port: runtimeConfig.port }, 'Local AI Images listening');
+  logger.info({ host: runtimeConfig.host, port: runtimeConfig.port, backend: runtimeConfig.imageBackend }, 'Local AI Images listening');
 
-  if (runtimeConfig.prewarmDefaultModelOnStart) {
-    void ollamaClient.prewarmModel(config.default_model, runtimeConfig.prewarmKeepAlive, runtimeConfig.prewarmTimeoutMs)
-      .then(() => logger.info({ model: config.default_model }, 'Default model pre-warmed on startup'))
-      .catch((error: unknown) => logger.warn({ err: error, model: config.default_model }, 'Default model startup pre-warm failed'));
+  if (runtimeConfig.legacyOllamaEnabled) {
+    logger.info({ base_url: runtimeConfig.ollamaBaseUrl }, 'Legacy Ollama compatibility mode enabled');
+    await maybePrewarmLegacyDefaultModel();
   }
+}
+
+async function maybePrewarmLegacyDefaultModel(): Promise<void> {
+  if (!runtimeConfig.prewarmDefaultModelOnStart) {
+    return;
+  }
+
+  const config = await configStore.readConfig();
+  const model = config.default_model.trim();
+  if (!model) {
+    logger.warn('Legacy Ollama startup pre-warm skipped because no DEFAULT_MODEL/default_model is configured');
+    return;
+  }
+
+  void ollamaClient.prewarmModel(model, runtimeConfig.prewarmKeepAlive, runtimeConfig.prewarmTimeoutMs)
+    .then(() => logger.info({ model }, 'Legacy Ollama default model pre-warmed on startup'))
+    .catch((error: unknown) => logger.warn({ err: error, model }, 'Legacy Ollama default model startup pre-warm failed'));
+}
+
+function createDisabledOllamaClient(): OllamaClientLike {
+  const reject = async (): Promise<never> => {
+    throw new AppError(
+      'LEGACY_OLLAMA_DISABLED',
+      'Legacy Ollama compatibility is disabled. Set LEGACY_OLLAMA_ENABLED=true to enable retained Ollama routes.',
+      410
+    );
+  };
+
+  return {
+    getVersion: reject,
+    listRunningModels: reject,
+    listInstalledModels: reject,
+    showModel: reject,
+    prewarmModel: reject,
+    generateImage: reject
+  };
 }
 
 main().catch((error: unknown) => {

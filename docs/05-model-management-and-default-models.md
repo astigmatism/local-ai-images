@@ -1,187 +1,111 @@
-# 05 - Model management and default models
+# 05 - Image model and workflow management
 
-## Config file behavior
+Local AI Images does not bundle model files. Operators provide local ComfyUI-compatible checkpoints, LoRAs, VAEs, ControlNet models, and workflow presets.
 
-The app stores local configuration in JSON:
+## Directory layout
 
-```json
-{
-  "default_model": "qwen3:14b"
-}
+A simple home-directory layout:
+
+```bash
+mkdir -p "$HOME/local-ai-images/models/checkpoints"
+mkdir -p "$HOME/local-ai-images/models/loras"
+mkdir -p "$HOME/local-ai-images/models/vae"
+mkdir -p "$HOME/local-ai-images/models/controlnet"
+mkdir -p "$HOME/local-ai-images/config/workflows"
+mkdir -p "$HOME/local-ai-images/data/artifacts"
 ```
 
-The path is controlled by `CONFIG_PATH`.
+Configure `.env`:
 
-Startup behavior:
+```dotenv
+IMAGE_MODEL_PATHS=/home/<user>/local-ai-images/models
+IMAGE_WORKFLOW_PATH=/home/<user>/local-ai-images/config/workflows
+IMAGE_ARTIFACT_PATH=/home/<user>/local-ai-images/data/artifacts
+IMAGE_DEFAULT_WORKFLOW_ID=sdxl-text-to-image
+```
 
-1. The app reads `CONFIG_PATH`.
-2. If the file does not exist, the app creates it using `DEFAULT_MODEL` from `.env`.
-3. If `DEFAULT_MODEL` is unset, the app uses its documented fallback.
-4. If startup pre-warm is enabled, the app asks Ollama to pre-warm `default_model` after the HTTP service starts.
+You can also point `IMAGE_MODEL_PATHS` at existing ComfyUI model directories or a shared model volume. Multiple paths can be separated by commas, semicolons, or colons.
 
-## Portal workflows
+## Model inventory API
 
-Open:
+Scan configured paths:
+
+```bash
+export IMAGE_API_URL=http://127.0.0.1:8000
+export IMAGE_API_KEY=replace-with-a-long-random-secret
+
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" \
+  "$IMAGE_API_URL/api/v1/models" | jq .
+
+curl -sS -X POST -H "Authorization: Bearer $IMAGE_API_KEY" \
+  "$IMAGE_API_URL/api/v1/models/refresh" | jq .
+```
+
+The scanner reports metadata only. It does not load models into VRAM and does not validate that a checkpoint is compatible with a specific workflow.
+
+## Workflow presets
+
+Workflow presets hide raw ComfyUI graph JSON behind stable application-level request fields such as `prompt`, `negative_prompt`, `width`, `height`, `steps`, `cfg_scale`, and `model`.
+
+The repository includes a sample preset:
 
 ```text
-http://<server-ip>:8000/
+config/workflows/sdxl-text-to-image.example.json
 ```
 
-The portal shows:
+Copy or adapt it into the configured workflow path and update checkpoint names/mappings to match local models.
 
-- Local AI Images service state.
-- Ollama connectivity and version when available.
-- Current default model.
-- Whether the default model appears in Ollama's running model list.
-- Running models from Ollama `/api/ps`.
-- Installed models from Ollama `/api/tags`.
-- All detected NVIDIA GPUs from `/gpus`.
-- Controls to save the default model.
-- Controls to load/pre-warm a model and optionally make it default.
-- A button to pre-warm the default model.
-
-## API: read config
+List workflows:
 
 ```bash
-curl http://127.0.0.1:8000/config | jq
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" \
+  "$IMAGE_API_URL/api/v1/workflows" | jq .
 ```
 
-Example:
-
-```json
-{
-  "ok": true,
-  "config": {
-    "default_model": "qwen3:14b"
-  },
-  "path": "/home/<user>/local-ai-images/config/local-ai-images.json"
-}
-```
-
-## API: update default model
+Inspect one workflow:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/config \
-  -H 'Content-Type: application/json' \
-  -d '{"default_model":"qwen3:14b"}' | jq
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" \
+  "$IMAGE_API_URL/api/v1/workflows/sdxl-text-to-image" | jq .
 ```
 
-This only changes the app config. It does not pull the model and does not guarantee the model is loaded.
-
-## API: load/pre-warm a model
+## First generation request
 
 ```bash
-curl -X POST http://127.0.0.1:8000/model/load \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3:14b","make_default":false}' | jq
+curl -sS -X POST "$IMAGE_API_URL/api/v1/generate" \
+  -H "Authorization: Bearer $IMAGE_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{
+    "prompt": "cinematic photo of a small cabin in snowy mountains",
+    "workflow_id": "sdxl-text-to-image",
+    "width": 1024,
+    "height": 1024,
+    "steps": 25,
+    "output": "url",
+    "sync_timeout_ms": 1000
+  }' | jq .
 ```
 
-Suggested success shape:
+If the response is `202`, poll the returned `status_url` or `result_url`.
 
-```json
-{
-  "ok": true,
-  "model": "qwen3:14b",
-  "made_default": false,
-  "loaded": true,
-  "default_model": "qwen3:14b"
-}
-```
+## Artifact storage
 
-To load and make default:
+Generated image files and JSON sidecars are written under `IMAGE_ARTIFACT_PATH`. Do not commit this directory.
+
+Retrieve bytes:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/model/load \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3:14b","make_default":true}' | jq
+curl -L -H "Authorization: Bearer $IMAGE_API_KEY" \
+  "$IMAGE_API_URL/api/v1/artifacts/ARTIFACT_ID" --output output.png
 ```
 
-## API: pre-warm default model
+Retrieve metadata:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/model/prewarm \
-  -H 'Content-Type: application/json' \
-  -d '{}' | jq
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" \
+  "$IMAGE_API_URL/api/v1/artifacts/ARTIFACT_ID?metadata=1" | jq .
 ```
 
-To pre-warm a specific model without changing the default:
+## No default LLM model
 
-```bash
-curl -X POST http://127.0.0.1:8000/model/prewarm \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"llama3.2:latest"}' | jq
-```
-
-## How pre-warming works
-
-The app calls Ollama's native API instead of shelling out to `ollama`:
-
-```text
-POST <OLLAMA_BASE_URL>/api/generate
-```
-
-Body:
-
-```json
-{
-  "model": "qwen3:14b",
-  "stream": false,
-  "keep_alive": -1
-}
-```
-
-Ollama treats this as an empty model request and loads the model without a normal prompt. The app then checks `/api/ps` and sets `loaded` based on whether the requested model appears in the running model list.
-
-## Startup pre-warm
-
-Controlled by:
-
-```text
-PREWARM_DEFAULT_MODEL_ON_START=true
-PREWARM_TIMEOUT_MS=120000
-PREWARM_KEEP_ALIVE=-1
-```
-
-On service start, the app:
-
-1. Starts listening on port `8000`.
-2. Reads the default model from config.
-3. Asynchronously asks Ollama to pre-warm it.
-4. Logs success or failure to the app journal.
-
-The HTTP service starts even if pre-warming fails. This is intentional so an operator can use the portal to inspect and repair the system.
-
-## Validation rules
-
-Model names must:
-
-- Be strings.
-- Be 1 to 128 characters.
-- Start with a letter or number.
-- Use only letters, numbers, dot, dash, underscore, slash, and colon.
-
-Invalid requests return FastAPI-style `422` responses:
-
-```json
-{
-  "detail": [
-    {
-      "loc": ["body", "model"],
-      "msg": "String should have at least 1 character",
-      "type": "string_too_short",
-      "input": "",
-      "ctx": { "min_length": 1 }
-    }
-  ]
-}
-```
-
-## Pulling models
-
-Local AI Images does not automatically pull models during `/model/load`. Pull intentionally through Ollama first:
-
-```bash
-ollama pull qwen3:14b
-```
-
-Then load/pre-warm through the portal or API. This avoids accidental huge downloads from a control API call.
+The default Local AI Images runtime does not use `DEFAULT_MODEL`, does not prewarm a language model, and does not contact Ollama. Optional legacy Ollama model state is documented separately in [03 - Optional legacy Ollama compatibility](03-ollama-installation-and-configuration.md).

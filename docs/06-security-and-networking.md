@@ -2,21 +2,21 @@
 
 ## LAN-only assumption
 
-This project assumes a trusted LAN or lab network. Ollama and the Local AI Images portal are powerful local services. Do not expose either service directly to the public internet.
+Local AI Images controls local GPU workloads and can create large image artifacts. Do not expose it directly to the public internet.
 
-Expected services:
+Expected services for normal image-generation deployment:
 
 | Service | Port | Typical bind | Notes |
 |---|---:|---|---|
 | SSH | 22 | LAN/server address | Administrative access |
-| Ollama | 11434 | `127.0.0.1` or LAN | LLM API and model management |
-| Local AI Images portal | 8000 | `0.0.0.0` on LAN | Image API, compatibility API, and web controls |
+| ComfyUI | 8188 | `127.0.0.1` | Raw backend, local-only |
+| Local AI Images portal/API | 8000 | `0.0.0.0` on trusted LAN | Control panel and `/api/v1` image API |
 
 ## Bind address choices
 
-### Local AI Images portal
+### Local AI Images portal/API
 
-The orchestrator should use the Local AI Images API on `0.0.0.0:8000`.
+The orchestrator should use the Local AI Images API on `0.0.0.0:8000` or through a reverse proxy.
 
 `.env`:
 
@@ -32,26 +32,18 @@ HOST=127.0.0.1
 PORT=8000
 ```
 
-### Ollama
+### ComfyUI
 
-For orchestrator access to Ollama directly:
+Keep raw ComfyUI local-only:
 
-```ini
-[Service]
-Environment="OLLAMA_HOST=0.0.0.0:11434"
+```bash
+python main.py --listen 127.0.0.1 --port 8188
 ```
 
-For Local AI Images-only local access:
-
-```ini
-[Service]
-Environment="OLLAMA_HOST=127.0.0.1:11434"
-```
-
-Local AI Images can still talk to Ollama locally with:
+`.env`:
 
 ```text
-OLLAMA_BASE_URL=http://127.0.0.1:11434
+COMFYUI_BASE_URL=http://127.0.0.1:8188
 ```
 
 ## Firewall guidance
@@ -62,7 +54,6 @@ Allow only known LAN ranges. Example for `192.168.1.0/24`:
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
 sudo ufw allow from 192.168.1.0/24 to any port 22 proto tcp
-sudo ufw allow from 192.168.1.0/24 to any port 11434 proto tcp
 sudo ufw allow from 192.168.1.0/24 to any port 8000 proto tcp
 sudo ufw enable
 sudo ufw status verbose
@@ -71,32 +62,40 @@ sudo ufw status verbose
 If the orchestrator has a fixed IP, restrict to that IP instead of the whole LAN:
 
 ```bash
-sudo ufw allow from <orchestrator-ip> to any port 11434 proto tcp
 sudo ufw allow from <orchestrator-ip> to any port 8000 proto tcp
 ```
+
+Do not open `8188/tcp` unless you intentionally want direct ComfyUI access from another trusted host.
+
+## API authentication
+
+Use API keys for every LAN deployment:
+
+```dotenv
+IMAGE_API_KEYS=replace-with-a-long-random-secret
+REQUIRE_IMAGE_API_AUTH=true
+```
+
+Clients may send either:
+
+```text
+Authorization: Bearer <key>
+X-API-Key: <key>
+```
+
+The static dashboard can load without a key, but its `/api/v1` calls require the key when auth is enabled. The key is stored only in browser local storage.
 
 ## Risks of broad exposure
 
 Broad exposure can allow unknown users to:
 
 - Use local GPUs and CPU heavily.
-- Trigger large model loads and memory pressure.
-- Query installed/running model information.
-- Access model APIs that may process sensitive prompts.
-- Exhaust disk, VRAM, or bandwidth if future model pull endpoints are added.
+- Trigger long-running image jobs and VRAM pressure.
+- Exhaust disk with generated artifacts.
+- Query local model inventory and workflow metadata.
+- Submit prompts and retrieve generated outputs.
 
-This version intentionally does not expose arbitrary shell command execution or destructive system-control endpoints.
-
-## Authentication strategy
-
-Authentication is not enabled by default because the legacy orchestrator compatibility contract expects unauthenticated access to `/health`, `/gpu`, and `/model/load`.
-
-Recommended future-safe deployment patterns:
-
-1. Keep the service LAN-only and firewall-restricted.
-2. Put a reverse proxy such as Nginx, Caddy, or Traefik in front of the portal if users need browser access from less trusted networks.
-3. Add basic auth, mTLS, VPN, or SSO at the proxy layer.
-4. Keep orchestrator compatibility by allowing only the orchestrator IP to reach unauthenticated API paths.
+This version intentionally does not expose arbitrary shell command execution, model download endpoints, or destructive system-control endpoints.
 
 ## SSH hardening notes
 
@@ -132,5 +131,6 @@ View logs:
 
 ```bash
 journalctl -u local-ai-images.service -f
-journalctl -u ollama -f
 ```
+
+Optional legacy Ollama logs are relevant only when `LEGACY_OLLAMA_ENABLED=true` and an Ollama service is installed separately.

@@ -209,8 +209,9 @@ sudo systemctl start local-ai-images.service
 | --- | --- |
 | `PORT` / `HOST` | App bind address. |
 | `CONFIG_PATH` | Local AI Images runtime config JSON. Defaults to `./config/local-ai-images.json`. |
-| `OLLAMA_BASE_URL` | Retained legacy Ollama compatibility endpoint base URL. |
-| `IMAGE_GENERATION_ENABLED` | Enables the legacy Ollama image endpoint and `/api/v1` image runtime. |
+| `IMAGE_GENERATION_ENABLED` | Enables the `/api/v1` image-generation runtime. Keep true for normal deployments. |
+| `LEGACY_OLLAMA_ENABLED` | Optional compatibility switch for retained reference-app Ollama routes. Defaults to false and should remain false for image-only deployments. |
+| `OLLAMA_BASE_URL` | Optional legacy Ollama endpoint base URL, used only when `LEGACY_OLLAMA_ENABLED=true`. |
 | `IMAGE_BACKEND` | `comfyui` or `mock`. |
 | `COMFYUI_BASE_URL` | Local ComfyUI API URL. |
 | `COMFYUI_REQUEST_TIMEOUT_MS` | Provider request and generation wait timeout. |

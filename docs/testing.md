@@ -28,7 +28,8 @@ The added image-generation tests cover:
 - Artifact data and sidecar metadata mapping.
 - `/api/v1` authentication success and failure.
 - API routes for health, stats, models, workflows, generate, jobs, cancel, result, and artifacts.
-- Legacy reference-app routes so existing LLM/Ollama monitor functionality is preserved.
+- Default startup and health behavior proving Ollama is not contacted unless `LEGACY_OLLAMA_ENABLED=true`.
+- Optional legacy Ollama compatibility routes, gated behind explicit legacy mode and tested with mocks only.
 
 ## Optional GPU smoke test
 

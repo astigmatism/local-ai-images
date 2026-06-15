@@ -2,12 +2,7 @@
 
 ## Goal
 
-Install a supported NVIDIA driver on Ubuntu 24 Server and verify that both installed GPUs are visible:
-
-- NVIDIA RTX 3090
-- NVIDIA RTX 4080
-
-The two cards have different VRAM sizes and capabilities. Do not assume identical memory, power limits, or scheduling behavior.
+Install a supported NVIDIA driver on Ubuntu and verify that the RTX 3080 passed through to the VM is visible to the guest.
 
 ## Install recommended driver packages
 
@@ -33,13 +28,7 @@ sudo ubuntu-drivers install --gpgpu nvidia:550-server
 sudo reboot
 ```
 
-Install the matching `nvidia-utils` package if the selected path does not install `nvidia-smi` automatically. For example, if you intentionally selected branch `550-server`:
-
-```bash
-sudo apt install -y nvidia-utils-550-server
-```
-
-Use the exact branch that matches the installed driver.
+Install the matching `nvidia-utils` package if the selected path does not install `nvidia-smi` automatically. Use the exact branch that matches the installed driver.
 
 ## Secure Boot note
 
@@ -49,7 +38,7 @@ If Secure Boot is enabled, Ubuntu may require module signing or may only load si
 mokutil --sb-state
 ```
 
-## Verify both GPUs
+## Verify the GPU
 
 ```bash
 nvidia-smi -L
@@ -58,11 +47,10 @@ nvidia-smi -L
 Expected shape:
 
 ```text
-GPU 0: NVIDIA GeForce RTX 3090 (UUID: GPU-...)
-GPU 1: NVIDIA GeForce RTX 4080 (UUID: GPU-...)
+GPU 0: NVIDIA GeForce RTX 3080 (UUID: GPU-...)
 ```
 
-The order may not match the physical slot order. Record the UUIDs because GPU numeric IDs can change after hardware or driver changes.
+Record the UUID because numeric IDs can change after hardware, driver, or passthrough changes.
 
 ## Inspect driver version
 
@@ -103,15 +91,14 @@ sudo nvidia-smi -pm 1
 
 This is optional. It may reset after driver changes or reboot depending on system configuration.
 
-## Mixed RTX 3090 and RTX 4080 notes
+## RTX 3080 image-generation notes
 
-- RTX 3090 cards commonly have 24 GiB VRAM; RTX 4080 cards commonly have 16 GiB VRAM.
-- Large models may fit on the 3090 but not fully on the 4080.
-- Multi-GPU layer splitting behavior depends on Ollama, model size, quantization, context length, and available VRAM.
-- Numeric GPU indices are convenient for short tests, but UUIDs are more reliable for persistent `CUDA_VISIBLE_DEVICES` settings.
-- Check power supply capacity, individual PCIe power cables, slot spacing, and cooling. Mixed high-power cards can throttle or disappear under load if power or thermals are marginal.
+- RTX 3080 cards commonly have 10 GiB or 12 GiB VRAM; tune workflow size, batch size, and model selection accordingly.
+- Start with `IMAGE_QUEUE_CONCURRENCY=1` to avoid out-of-VRAM failures.
+- Prefer SDXL/SD 1.5 checkpoints and workflows known to fit your exact VRAM size before adding ControlNet, high-resolution upscales, or large refiners.
+- Check power supply capacity, passthrough reset behavior, and cooling. Xid errors under load often point to driver, passthrough, power, or thermal issues.
 
-## Troubleshooting: only one GPU appears
+## Troubleshooting: GPU does not appear
 
 Start at the PCI layer:
 
@@ -119,7 +106,7 @@ Start at the PCI layer:
 lspci | grep -Ei 'nvidia|vga|3d'
 ```
 
-If both cards appear in `lspci` but only one appears in `nvidia-smi`:
+If the card appears in `lspci` but not in `nvidia-smi`:
 
 ```bash
 dmesg -T | grep -Ei 'nvidia|nvrm|pcie|xid' | tail -n 100
@@ -130,8 +117,9 @@ Common causes:
 
 - Driver module did not load.
 - Secure Boot blocked the kernel module.
-- The installed driver branch is too old for one card.
-- BIOS settings or PCIe lane allocation disabled a slot.
+- The installed driver branch is too old.
+- The hypervisor did not pass through every GPU function.
+- The GPU is in a problematic IOMMU group.
 - Power cabling is inadequate.
 - A riser, slot, or card is faulty.
 

@@ -2,9 +2,27 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mockGpuService, mockOllama, tempConfigStore, testRuntimeConfig, withTestServer } from './helpers.ts';
 
-test('POST /model/load returns FastAPI-style validation errors', async () => {
+test('legacy Ollama model endpoints are disabled by default', async () => {
   await withTestServer({
     runtimeConfig: testRuntimeConfig(),
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: mockGpuService()
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/model/load`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'qwen3:14b', make_default: true })
+    });
+    assert.equal(response.status, 410);
+    const body = await response.json();
+    assert.equal(body.error.code, 'LEGACY_OLLAMA_DISABLED');
+  });
+});
+
+test('LEGACY_OLLAMA_ENABLED=true: POST /model/load returns FastAPI-style validation errors', async () => {
+  await withTestServer({
+    runtimeConfig: testRuntimeConfig({ legacyOllamaEnabled: true }),
     configStore: await tempConfigStore(),
     ollamaClient: mockOllama(),
     gpuService: mockGpuService()
@@ -21,10 +39,10 @@ test('POST /model/load returns FastAPI-style validation errors', async () => {
   });
 });
 
-test('POST /model/load pre-warms and persists default model', async () => {
-  const configStore = await tempConfigStore('llama3.2:latest');
+test('LEGACY_OLLAMA_ENABLED=true: POST /model/load pre-warms and persists default model', async () => {
+  const configStore = await tempConfigStore('');
   await withTestServer({
-    runtimeConfig: testRuntimeConfig(),
+    runtimeConfig: testRuntimeConfig({ legacyOllamaEnabled: true }),
     configStore,
     ollamaClient: mockOllama([{ name: 'qwen3:14b', model: 'qwen3:14b' }]),
     gpuService: mockGpuService()

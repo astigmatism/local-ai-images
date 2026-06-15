@@ -1,11 +1,13 @@
 # Local AI Images
 
-A dependency-light Node control panel for a GPU-enabled Ubuntu host. The original Ollama/LLM monitor endpoints are retained, and the project now adds a stable `/api/v1` machine-to-machine image-generation API backed by ComfyUI for a local RTX 3080 passthrough VM.
+Local AI Images is a dependency-light Node control panel and machine-to-machine image-generation API for a GPU-enabled Ubuntu host. The default runtime is image-focused: it talks to ComfyUI, scans local image model directories, manages an async generation queue, stores artifacts, and reports NVIDIA GPU/status telemetry.
+
+Legacy Ollama endpoints from the reference application are still present only as optional compatibility routes. They are disabled by default and do not run, prewarm, or affect health checks unless `LEGACY_OLLAMA_ENABLED=true` is set explicitly.
 
 ## What this provides
 
 - Node HTTP service on `0.0.0.0:8000`, using native TypeScript type stripping and no application npm dependencies.
-- Static hosted control panel with service, GPU, engine, queue, model inventory, workflow preset, and recent-job state.
+- Static hosted control panel with service, GPU, ComfyUI/mock engine, queue, model inventory, workflow preset, and recent-job state.
 - Stable image API over `/api/v1`:
   - `GET /api/v1/health`
   - `GET /api/v1/capabilities`
@@ -27,7 +29,7 @@ A dependency-light Node control panel for a GPU-enabled Ubuntu host. The origina
 - Artifact storage with sidecar metadata and URL/base64/binary/metadata-only result delivery.
 - API-key or bearer-token authentication for `/api/v1` when configured.
 - NVIDIA GPU telemetry via `nvidia-smi`.
-- Existing legacy endpoints retained for compatibility: `/health`, `/gpu`, `/gpus`, `/models/running`, `/models/installed`, `/config`, `/model/load`, `/model/prewarm`, `/api/capabilities`, and `/api/images/generate`.
+- Compatibility GPU endpoints: `/health`, `/api/capabilities`, `/gpu`, and `/gpus`. In the default image-only mode, `/health` and `/api/capabilities` report image API state and do not contact Ollama.
 
 ## Quick start in mock mode
 
@@ -83,7 +85,6 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now comfyui.service local-ai-images.service
 ```
 
-
 The service examples run under the logged-in Ubuntu user and assume the app checkout is `$HOME/local-ai-images`. Replace `<user>` placeholders before installing, as shown above. For nvm-based Node, use the commented nvm `ExecStart` in `deploy/local-ai-images.service.example`.
 
 Keep ComfyUI bound to `127.0.0.1:8188`; expose only this app to trusted LAN hosts or a reverse proxy.
@@ -94,6 +95,7 @@ Keep ComfyUI bound to `127.0.0.1:8188`; expose only this app to trusted LAN host
 IMAGE_GENERATION_ENABLED=true
 IMAGE_BACKEND=comfyui
 COMFYUI_BASE_URL=http://127.0.0.1:8188
+CONFIG_PATH=./config/local-ai-images.json
 IMAGE_MODEL_PATHS=./models
 IMAGE_WORKFLOW_PATH=./config/workflows
 IMAGE_ARTIFACT_PATH=./data/artifacts
@@ -101,6 +103,7 @@ IMAGE_DEFAULT_WORKFLOW_ID=sdxl-text-to-image
 IMAGE_QUEUE_CONCURRENCY=1
 IMAGE_API_KEYS=replace-with-a-long-random-secret
 REQUIRE_IMAGE_API_AUTH=true
+LEGACY_OLLAMA_ENABLED=false
 ```
 
 The repository does not include model files, generated images, secrets, or machine-specific paths. Operators supply local models and workflow presets.
@@ -139,17 +142,17 @@ npm run validate
 RUN_GPU_TESTS=1 npm test   # optional real nvidia-smi smoke test
 ```
 
-The test suite runs without real GPUs, ComfyUI, or Ollama by using mocks and temporary directories.
+The test suite runs without real GPUs or ComfyUI by using mocks and temporary directories. Optional legacy Ollama compatibility tests use mocked Ollama clients and do not require an Ollama service.
 
 ## Local-control policy
 
 The app is local-first and operator-controlled. It does not hardcode prompt filters, vendor moderation calls, remote safety gates, or model allowlists. Use API keys, firewall rules, filesystem permissions, and internal legal-use policies appropriate for your deployment.
 
-## Legacy API compatibility
+## Optional legacy Ollama compatibility
 
-`GET /gpu` intentionally returns only one primary GPU in the older single-GPU response shape. New integrations should use `GET /gpus` and `/api/v1/stats`.
+Retained legacy routes are disabled by default: `/models/running`, `/models/installed`, `/config`, `/model/load`, `/model/prewarm`, and `/api/images/generate`. They return `LEGACY_OLLAMA_DISABLED` until `LEGACY_OLLAMA_ENABLED=true` is set.
 
-The original experimental Ollama image endpoint, `POST /api/images/generate`, remains available and capability-gated for compatibility. New image-generation integrations should use `POST /api/v1/generate`.
+When legacy mode is disabled, `npm start`, `/health`, `/api/capabilities`, and the dashboard do not contact Ollama and no default LLM model is assumed. New image-generation integrations should use `/api/v1/generate`.
 
 ## Scripts
 

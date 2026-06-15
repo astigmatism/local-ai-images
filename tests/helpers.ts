@@ -25,10 +25,11 @@ export function testRuntimeConfig(overrides: Partial<RuntimeConfig> = {}): Runti
   return {
     host: '127.0.0.1',
     port: 0,
-    ollamaBaseUrl: 'http://127.0.0.1:11434',
+    legacyOllamaEnabled: false,
+    ollamaBaseUrl: '',
     ollamaRequestTimeoutMs: 1000,
     configPath: '/tmp/local-ai-images-test.json',
-    defaultModel: 'qwen3:14b',
+    defaultModel: '',
     prewarmDefaultModelOnStart: false,
     prewarmTimeoutMs: 1000,
     prewarmKeepAlive: -1,
@@ -57,7 +58,7 @@ export function testRuntimeConfig(overrides: Partial<RuntimeConfig> = {}): Runti
   };
 }
 
-export async function tempConfigStore(defaultModel = 'qwen3:14b'): Promise<ConfigStore> {
+export async function tempConfigStore(defaultModel = ''): Promise<ConfigStore> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'local-ai-images-'));
   return new ConfigStore(path.join(directory, 'config.json'), defaultModel);
 }
@@ -93,6 +94,21 @@ export function mockOllama(
         metadata: { done: true, done_reason: 'stop' }
       };
     }
+  };
+}
+
+
+export function throwingOllama(message = 'Ollama should not be called in image-only mode'): OllamaClientLike {
+  const fail = async () => {
+    throw new Error(message);
+  };
+  return {
+    getVersion: fail,
+    listRunningModels: fail,
+    listInstalledModels: fail,
+    showModel: fail,
+    prewarmModel: fail,
+    generateImage: fail
   };
 }
 

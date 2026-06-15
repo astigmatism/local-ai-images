@@ -1,6 +1,6 @@
 # Ubuntu RTX 3080 image-generation VM build guide
 
-This guide describes the target host for the ComfyUI-backed Local AI Images API. The app is a small Node service with a static control panel, retained Ollama/LLM compatibility endpoints, and a stable `/api/v1` machine-to-machine image-generation API. Raw ComfyUI should stay bound to localhost.
+This guide describes the target host for the ComfyUI-backed Local AI Images API. The app is a small Node service with a static control panel and a stable `/api/v1` machine-to-machine image-generation API. Raw ComfyUI should stay bound to localhost. Optional legacy Ollama routes are disabled by default and are not part of the normal VM build.
 
 ## Recommended VM shape for RTX 3080 passthrough
 
@@ -209,7 +209,7 @@ After the app service is deployed, open:
 http://IMAGE_VM_IP:8000/
 ```
 
-The dashboard should show service state, ComfyUI/mock engine state, queue state, GPU telemetry, model inventory, workflow presets, and recent jobs. If `IMAGE_API_KEYS` is set, the browser dashboard can still load static assets, but direct `/api/v1` calls require an API key. The legacy LLM monitor cards remain visible for compatibility with the original app.
+The dashboard should show service state, ComfyUI/mock engine state, queue state, GPU telemetry, model inventory, workflow presets, and recent jobs. If `IMAGE_API_KEYS` is set, the browser dashboard can still load static assets, but direct `/api/v1` calls require an API key.
 
 ## First API test
 

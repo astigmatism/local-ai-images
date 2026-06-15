@@ -3,27 +3,27 @@
 ## Check service status
 
 ```bash
+systemctl status comfyui.service --no-pager
 systemctl status local-ai-images.service --no-pager
-systemctl status ollama --no-pager
 ```
 
 ## View logs
 
 ```bash
+journalctl -u comfyui.service -e --no-pager
+journalctl -u comfyui.service -f
 journalctl -u local-ai-images.service -e --no-pager
 journalctl -u local-ai-images.service -f
-journalctl -u ollama -e --no-pager
-journalctl -u ollama -f
 ```
 
 ## Restart services
 
 ```bash
+sudo systemctl restart comfyui.service
 sudo systemctl restart local-ai-images.service
-sudo systemctl restart ollama
 ```
 
-If Ollama is restarted, any loaded models will be unloaded and should be pre-warmed again by the app or manually.
+If ComfyUI restarts while a job is running, the in-memory Local AI Images job may fail and should be resubmitted by the caller.
 
 ## Run the update routine
 
@@ -72,88 +72,100 @@ It excludes:
 - logs and temporary files
 - local `.env` files
 - generated local config JSON
+- generated image artifacts
 
 It includes `.env.example`, docs, source, tests, package files, scripts, README files, and deployment examples.
 
-## Compatibility validation
+## Image API validation
 
 ```bash
-curl http://127.0.0.1:8000/health | jq
-curl http://127.0.0.1:8000/gpu | jq
-curl http://127.0.0.1:8000/gpus | jq
-curl -X POST http://127.0.0.1:8000/model/load \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3:14b","make_default":false}' | jq
-curl http://127.0.0.1:8000/openapi.json | jq '.openapi, .info'
+export IMAGE_API_URL=http://127.0.0.1:8000
+export IMAGE_API_KEY=replace-with-a-long-random-secret
+
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" "$IMAGE_API_URL/api/v1/health" | jq
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" "$IMAGE_API_URL/api/v1/stats" | jq
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" "$IMAGE_API_URL/api/v1/models" | jq
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" "$IMAGE_API_URL/api/v1/workflows" | jq
+curl -sS "$IMAGE_API_URL/openapi.json" | jq '.openapi, .info'
 ```
 
-`/gpu` should return one primary GPU in the legacy shape. `/gpus` should return the detected GPU inventory when drivers are healthy.
+Compatibility GPU endpoints remain available:
 
-## Common Ollama failures
+```bash
+curl http://127.0.0.1:8000/gpu | jq
+curl http://127.0.0.1:8000/gpus | jq
+```
 
-### Ollama unavailable from Local AI Images
+## Common ComfyUI failures
+
+### ComfyUI unavailable
 
 Symptoms:
 
-- `/health` returns `ok: false`.
-- Error code `OLLAMA_UNAVAILABLE`.
+- `/api/v1/health` reports `engine.ok: false`.
+- Generation jobs fail before ComfyUI prompt submission.
 
 Checks:
 
 ```bash
-systemctl status ollama --no-pager
-curl http://127.0.0.1:11434/api/version
-journalctl -u ollama -e --no-pager
+systemctl status comfyui.service --no-pager
+curl http://127.0.0.1:8188/system_stats | jq
+journalctl -u comfyui.service -e --no-pager
 ```
 
 Fixes:
 
 ```bash
-sudo systemctl restart ollama
-sudo systemctl daemon-reload
-```
-
-Confirm `OLLAMA_BASE_URL` in `.env` matches the actual Ollama bind address.
-
-### Model not found
-
-Symptoms:
-
-- `/model/load` returns `OLLAMA_MODEL_NOT_FOUND`.
-
-Fix:
-
-```bash
-ollama pull <model-name>
-ollama list
-```
-
-Then retry `/model/load`.
-
-### Pre-warm timeout
-
-Symptoms:
-
-- `/model/load` or `/model/prewarm` returns `OLLAMA_TIMEOUT`.
-
-Causes:
-
-- First load of a large model is slow.
-- Disk is slow.
-- Model is too large for available VRAM/RAM.
-- Ollama is busy with another request.
-
-Adjust:
-
-```text
-PREWARM_TIMEOUT_MS=300000
-```
-
-Restart Local AI Images after editing `.env`:
-
-```bash
+sudo systemctl restart comfyui.service
 sudo systemctl restart local-ai-images.service
 ```
+
+Confirm `.env`:
+
+```dotenv
+IMAGE_BACKEND=comfyui
+COMFYUI_BASE_URL=http://127.0.0.1:8188
+```
+
+### Workflow not found or incompatible
+
+Symptoms:
+
+- `/api/v1/generate` returns a workflow validation error.
+- Jobs fail with ComfyUI prompt errors.
+
+Checks:
+
+```bash
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" "$IMAGE_API_URL/api/v1/workflows" | jq
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" "$IMAGE_API_URL/api/v1/workflows/sdxl-text-to-image" | jq
+```
+
+Fixes:
+
+- Verify `IMAGE_DEFAULT_WORKFLOW_ID` exists.
+- Verify custom workflow JSON is valid.
+- Verify ComfyUI node IDs in `comfyui.mappings` match the prompt graph.
+- Verify the referenced checkpoint exists in ComfyUI's model paths.
+
+### Model inventory is empty
+
+Symptoms:
+
+- `/api/v1/models` returns zero models.
+
+Checks:
+
+```bash
+ls -lah /home/<user>/local-ai-images/models
+find /home/<user>/local-ai-images/models -maxdepth 3 -type f | head
+```
+
+Fixes:
+
+- Confirm `IMAGE_MODEL_PATHS` points to the intended directories.
+- Confirm service user can read those directories.
+- Refresh inventory: `POST /api/v1/models/refresh`.
 
 ## Common NVIDIA failures
 
@@ -161,6 +173,7 @@ sudo systemctl restart local-ai-images.service
 
 Symptoms:
 
+- `/api/v1/stats` reports `gpu.ok: false`.
 - `/gpu` or `/gpus` returns `NVIDIA_SMI_UNAVAILABLE`.
 
 Check:
@@ -177,7 +190,7 @@ Install matching utilities for your driver branch.
 Symptoms:
 
 - `nvidia-smi` fails with NVML or driver messages.
-- `/gpus` returns `NVIDIA_DRIVER_UNAVAILABLE`.
+- `/api/v1/stats` reports `NVIDIA_DRIVER_UNAVAILABLE`.
 
 Check:
 
@@ -197,7 +210,7 @@ sudo reboot
 
 Symptoms:
 
-- `/gpus` returns `NO_GPUS_DETECTED`.
+- `/api/v1/stats` or `/gpus` returns no GPU entries.
 
 Check PCI detection:
 
@@ -205,62 +218,36 @@ Check PCI detection:
 lspci | grep -Ei 'nvidia|vga|3d'
 ```
 
-If a card is absent at PCI level, check power, risers, BIOS slot settings, motherboard lane sharing, and physical seating.
+If the card is absent at PCI level, check hypervisor passthrough, IOMMU grouping, power, risers, BIOS slot settings, and physical seating.
 
-## Common multi-GPU issues
+## Out-of-VRAM failures
 
-### Only one GPU used by Ollama
+Symptoms:
 
-This can be normal if the model fits on one GPU or Ollama chooses one device for the workload. Check visibility:
-
-```bash
-nvidia-smi -L
-systemctl show ollama --property=Environment
-journalctl -u ollama -e --no-pager
-```
-
-If you set `CUDA_VISIBLE_DEVICES`, ensure it includes both GPU UUIDs or both indices.
-
-### Model does not fit
+- ComfyUI logs CUDA out-of-memory errors.
+- Jobs fail after prompt submission.
+- GPU memory is near full in `/api/v1/stats`.
 
 Try:
 
-- A smaller model.
-- A more aggressively quantized tag.
-- Lower context length.
-- Allowing both GPUs through `CUDA_VISIBLE_DEVICES`.
-- Avoiding other processes that consume VRAM.
+- Set `IMAGE_QUEUE_CONCURRENCY=1`.
+- Reduce width, height, batch size, or high-resolution upscale settings.
+- Use a smaller checkpoint or lower-memory workflow.
+- Stop other GPU workloads.
+- Restart ComfyUI after repeated CUDA errors.
 
-### GPU order changed
+## Legacy Ollama disabled response
 
-Use UUIDs in `CUDA_VISIBLE_DEVICES`, not numeric IDs.
-
-## API error shape examples
-
-Structured operational error:
+If a caller uses retained legacy routes while default image-only mode is active, it receives:
 
 ```json
 {
   "ok": false,
   "error": {
-    "code": "OLLAMA_UNAVAILABLE",
-    "message": "Unable to connect to Ollama"
+    "code": "LEGACY_OLLAMA_DISABLED",
+    "message": "Legacy Ollama compatibility endpoint /model/load is disabled. Set LEGACY_OLLAMA_ENABLED=true to enable retained Ollama routes. New image integrations should use /api/v1/generate and related /api/v1 endpoints."
   }
 }
 ```
 
-Validation error:
-
-```json
-{
-  "detail": [
-    {
-      "loc": ["body", "model"],
-      "msg": "Field required",
-      "type": "missing",
-      "input": {},
-      "ctx": {}
-    }
-  ]
-}
-```
+That is expected. Use `/api/v1/generate` for image generation, or see [03 - Optional legacy Ollama compatibility](03-ollama-installation-and-configuration.md) if you intentionally need old Ollama routes.

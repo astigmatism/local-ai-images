@@ -4,6 +4,7 @@ import path from 'node:path';
 import { loadRuntimeConfig } from '../src/config/env.ts';
 
 const managedEnvKeys = [
+  'CONFIG_PATH',
   'IMAGE_BACKEND',
   'IMAGE_API_KEYS',
   'REQUIRE_IMAGE_API_AUTH',
@@ -13,12 +14,28 @@ const managedEnvKeys = [
   'IMAGE_ARTIFACT_PATH',
   'IMAGE_DEFAULT_WORKFLOW_ID',
   'IMAGE_QUEUE_CONCURRENCY',
-  'IMAGE_MAX_QUEUED_JOBS'
+  'IMAGE_MAX_QUEUED_JOBS',
+  'LEGACY_OLLAMA_ENABLED',
+  'OLLAMA_BASE_URL',
+  'DEFAULT_MODEL',
+  'PREWARM_DEFAULT_MODEL_ON_START'
 ];
 
-test('loadRuntimeConfig parses image-generation backend, paths, auth, and queue settings', () => {
+function withCleanEnv(fn: () => void): void {
   const original = new Map(managedEnvKeys.map((key) => [key, process.env[key]]));
   try {
+    for (const key of managedEnvKeys) delete process.env[key];
+    fn();
+  } finally {
+    for (const [key, value] of original) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+test('loadRuntimeConfig parses image-generation backend, paths, auth, and queue settings', () => {
+  withCleanEnv(() => {
     process.env.IMAGE_BACKEND = 'mock';
     process.env.IMAGE_API_KEYS = 'alpha,beta';
     process.env.REQUIRE_IMAGE_API_AUTH = 'true';
@@ -42,23 +59,32 @@ test('loadRuntimeConfig parses image-generation backend, paths, auth, and queue 
     assert.equal(config.imageDefaultWorkflowId, 'custom');
     assert.equal(config.imageQueueConcurrency, 2);
     assert.equal(config.imageMaxQueuedJobs, 9);
-  } finally {
-    for (const [key, value] of original) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
+  });
 });
 
-
-test('loadRuntimeConfig uses local-ai-images default config path', () => {
-  const original = process.env.CONFIG_PATH;
-  try {
-    delete process.env.CONFIG_PATH;
+test('loadRuntimeConfig uses image-focused defaults with legacy Ollama disabled', () => {
+  withCleanEnv(() => {
     const config = loadRuntimeConfig();
     assert.equal(config.configPath, path.resolve(process.cwd(), './config/local-ai-images.json'));
-  } finally {
-    if (original === undefined) delete process.env.CONFIG_PATH;
-    else process.env.CONFIG_PATH = original;
-  }
+    assert.equal(config.imageBackend, 'comfyui');
+    assert.equal(config.comfyUiBaseUrl, 'http://127.0.0.1:8188');
+    assert.equal(config.legacyOllamaEnabled, false);
+    assert.equal(config.ollamaBaseUrl, '');
+    assert.equal(config.defaultModel, '');
+    assert.equal(config.prewarmDefaultModelOnStart, false);
+  });
+});
+
+test('loadRuntimeConfig only enables legacy Ollama startup settings when explicitly requested', () => {
+  withCleanEnv(() => {
+    process.env.LEGACY_OLLAMA_ENABLED = 'true';
+    process.env.PREWARM_DEFAULT_MODEL_ON_START = 'true';
+    process.env.DEFAULT_MODEL = 'qwen3:14b';
+
+    const config = loadRuntimeConfig();
+    assert.equal(config.legacyOllamaEnabled, true);
+    assert.equal(config.ollamaBaseUrl, 'http://127.0.0.1:11434');
+    assert.equal(config.defaultModel, 'qwen3:14b');
+    assert.equal(config.prewarmDefaultModelOnStart, true);
+  });
 });

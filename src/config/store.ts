@@ -20,7 +20,7 @@ export class ConfigStore {
     try {
       const raw = await fs.readFile(this.filePath, 'utf8');
       const parsed = JSON.parse(raw) as Partial<AppConfig>;
-      const defaultModel = typeof parsed.default_model === 'string' && parsed.default_model.trim() !== ''
+      const defaultModel = typeof parsed.default_model === 'string'
         ? parsed.default_model.trim()
         : this.fallbackDefaultModel;
       return { default_model: defaultModel };
@@ -43,8 +43,8 @@ export class ConfigStore {
   }
 
   async writeConfig(config: AppConfig): Promise<void> {
-    if (typeof config.default_model !== 'string' || config.default_model.trim() === '') {
-      throw new AppError('CONFIG_WRITE_FAILED', 'default_model must be a non-empty string', 500);
+    if (typeof config.default_model !== 'string') {
+      throw new AppError('CONFIG_WRITE_FAILED', 'default_model must be a string', 500);
     }
 
     const normalized: AppConfig = { default_model: config.default_model.trim() };

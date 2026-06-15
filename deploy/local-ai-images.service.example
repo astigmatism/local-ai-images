@@ -4,7 +4,7 @@
 
 [Unit]
 Description=Local AI Images control panel and ComfyUI image API
-After=network-online.target comfyui.service ollama.service
+After=network-online.target comfyui.service
 Wants=network-online.target
 
 [Service]

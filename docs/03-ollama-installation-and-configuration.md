@@ -1,196 +1,108 @@
-# 03 - Ollama installation and configuration
+# 03 - Optional legacy Ollama compatibility
 
-## Install Ollama
+Local AI Images does **not** require Ollama for normal image-generation operation. The default deployment is ComfyUI-backed and `LEGACY_OLLAMA_ENABLED=false`.
 
-Install with the official Linux installer:
+This appendix exists only for operators who still need the reference application's retained compatibility endpoints:
+
+- `GET /models/running`
+- `GET /models/installed`
+- `GET /config`
+- `POST /config`
+- `POST /model/load`
+- `POST /model/prewarm`
+- `POST /api/images/generate`
+
+When legacy mode is disabled, those routes return `LEGACY_OLLAMA_DISABLED`, `/health` is image-focused, `/api/capabilities` is image-focused, and startup does not contact Ollama.
+
+## Enable legacy mode deliberately
+
+Add these settings only if you have installed Ollama separately and need legacy routes:
+
+```dotenv
+LEGACY_OLLAMA_ENABLED=true
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+DEFAULT_MODEL=
+PREWARM_DEFAULT_MODEL_ON_START=false
+PREWARM_TIMEOUT_MS=120000
+PREWARM_KEEP_ALIVE=-1
+```
+
+No default LLM model is assumed. Set `DEFAULT_MODEL` only if you want legacy `/model/prewarm` calls without an explicit model body or if you intentionally enable startup prewarm.
+
+## Install Ollama, optional
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-```
-
-Verify the binary and service:
-
-```bash
 ollama --version
 systemctl status ollama --no-pager
-curl http://127.0.0.1:11434/api/version
 ```
 
-## Configure Ollama service bind address
-
-The orchestrator expects Ollama on port `11434`. For a LAN-only appliance, Ollama may bind to all interfaces, but do not expose it to the public internet.
-
-Create a systemd override:
+For a Local AI Images deployment, keep Ollama local-only unless another trusted system explicitly requires direct Ollama access:
 
 ```bash
 sudo systemctl edit ollama
 ```
 
-Example override:
-
-```ini
-[Service]
-Environment="OLLAMA_HOST=0.0.0.0:11434"
-```
-
-Apply it:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart ollama
-sudo systemctl status ollama --no-pager
-ss -tulpn | grep 11434
-```
-
-If only local processes need Ollama, prefer:
+Example local-only override:
 
 ```ini
 [Service]
 Environment="OLLAMA_HOST=127.0.0.1:11434"
 ```
 
-## Optional: restrict GPU visibility
-
-Ollama can see all supported NVIDIA GPUs by default. To restrict it to a subset, set `CUDA_VISIBLE_DEVICES` in the Ollama service override. UUIDs are safer than numeric IDs.
-
-First list UUIDs:
-
-```bash
-nvidia-smi -L
-```
-
-Then use an override like:
-
-```ini
-[Service]
-Environment="CUDA_VISIBLE_DEVICES=GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,GPU-ffffffff-1111-2222-3333-444444444444"
-```
-
-For a quick numeric test only:
-
-```ini
-[Service]
-Environment="CUDA_VISIBLE_DEVICES=0,1"
-```
-
-Restart Ollama after changing service environment:
+Restart after changes:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl restart ollama
+sudo systemctl status ollama --no-pager
 ```
 
-## Pull a model
-
-Choose a model that fits the available VRAM and your latency needs. Example:
+## Pull a legacy model, optional
 
 ```bash
 ollama pull qwen3:14b
-```
-
-Other examples:
-
-```bash
-ollama pull llama3.2:latest
-ollama pull gemma3:4b
-```
-
-List local models:
-
-```bash
 ollama list
-curl http://127.0.0.1:11434/api/tags | jq
 ```
 
-## Test generation
+Set the model as the legacy default only if required:
 
 ```bash
-ollama run qwen3:14b "Say hello in one sentence."
+curl -X POST http://127.0.0.1:8000/config \
+  -H 'content-type: application/json' \
+  -d '{"default_model":"qwen3:14b"}' | jq .
 ```
 
-Or through the API:
+Prewarm explicitly:
 
 ```bash
-curl http://127.0.0.1:11434/api/generate \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3:14b","prompt":"Say hello in one sentence.","stream":false}' | jq
+curl -X POST http://127.0.0.1:8000/model/prewarm \
+  -H 'content-type: application/json' \
+  -d '{"model":"qwen3:14b"}' | jq .
 ```
 
-## Load or pre-warm without a long generation
+## Legacy startup prewarm, optional and off by default
 
-Ollama supports preloading a model by sending an empty API request. This project uses:
+Startup prewarm only runs when both settings are true/non-empty:
 
-```json
-{
-  "model": "qwen3:14b",
-  "stream": false,
-  "keep_alive": -1
-}
+```dotenv
+LEGACY_OLLAMA_ENABLED=true
+PREWARM_DEFAULT_MODEL_ON_START=true
+DEFAULT_MODEL=qwen3:14b
 ```
 
-against:
+Do not enable this on a normal ComfyUI image VM. It consumes VRAM and can interfere with image generation.
 
-```text
-POST /api/generate
-```
-
-This causes Ollama to load the model but avoids a real prompt that would generate a long response. `keep_alive` controls how long Ollama keeps the model resident after the request. In this repository the value comes from `PREWARM_KEEP_ALIVE`; `.env.example` uses `-1`, meaning keep loaded until Ollama unloads/stops according to its lifecycle behavior.
-
-Manual pre-warm test:
+## Troubleshooting legacy mode
 
 ```bash
-curl http://127.0.0.1:11434/api/generate \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3:14b","stream":false,"keep_alive":-1}' | jq
-```
-
-Then check loaded models:
-
-```bash
-curl http://127.0.0.1:11434/api/ps | jq
-ollama ps
-```
-
-## Verify GPU acceleration
-
-Open two SSH sessions.
-
-Session 1:
-
-```bash
-watch -n 1 nvidia-smi
-```
-
-Session 2:
-
-```bash
-ollama run qwen3:14b "Write a short paragraph about local AI."
-```
-
-GPU memory usage should increase while the model is loaded. If it does not, inspect Ollama logs:
-
-```bash
+systemctl status ollama --no-pager
 journalctl -u ollama -e --no-pager
+curl -sS http://127.0.0.1:11434/api/version | jq .
 ```
 
-## Multi-GPU considerations
+If Local AI Images reports `LEGACY_OLLAMA_DISABLED`, confirm `LEGACY_OLLAMA_ENABLED=true` is present in the same `.env` used by `local-ai-images.service`, then restart:
 
-- Ollama discovers supported GPUs at service startup.
-- Use `CUDA_VISIBLE_DEVICES` to limit which NVIDIA GPUs Ollama can use.
-- UUIDs are preferred for persistent selection because numeric indices can change.
-- Some models fit entirely on one GPU; some may be split/offloaded depending on memory and Ollama behavior.
-- A mixed RTX 3090 + RTX 4080 setup has asymmetric VRAM; model placement and performance can differ per model.
-- Increasing context length increases memory pressure.
-- Quantized models usually fit better than full-precision models.
-
-## Default model strategy
-
-Ollama itself does not need to know this project's default model. Local AI Images stores the default model in its own JSON config file and uses Ollama's API to pre-warm that model on startup when enabled.
-
-The app default model is controlled by:
-
-1. The persisted JSON config at `CONFIG_PATH`.
-2. `DEFAULT_MODEL` from `.env` when the config file does not exist yet.
-3. A fallback used by the application if neither is provided.
-
-The example default in `.env.example` is `qwen3:14b`; change it to a model that is pulled and suitable for the host.
+```bash
+sudo systemctl restart local-ai-images.service
+```

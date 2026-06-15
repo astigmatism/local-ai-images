@@ -5,6 +5,7 @@ export type OutputDelivery = 'metadata' | 'url' | 'base64' | 'binary';
 export interface RuntimeConfig {
   host: string;
   port: number;
+  legacyOllamaEnabled: boolean;
   ollamaBaseUrl: string;
   ollamaRequestTimeoutMs: number;
   configPath: string;

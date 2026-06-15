@@ -1,7 +1,7 @@
 {
   "name": "local-ai-images",
   "version": "0.1.0",
-  "description": "Local AI control panel with LLM compatibility endpoints and a ComfyUI image-generation API for GPU Ubuntu hosts.",
+  "description": "Local AI Images control panel and ComfyUI-backed machine-to-machine image-generation API for GPU Ubuntu hosts.",
   "type": "module",
   "main": "src/index.ts",
   "engines": {
@@ -17,15 +17,14 @@
     "validate": "npm test && npm run build"
   },
   "keywords": [
-    "ollama",
-    "llm",
     "comfyui",
     "stable-diffusion",
     "image-generation",
     "nvidia",
     "gpu",
     "local-ai",
-    "node"
+    "node",
+    "rtx-3080"
   ],
   "license": "MIT"
 }
