@@ -1731,7 +1731,7 @@ function renderPortalHtml(): string {
       </article>
     </section>
 
-    <section class="card">
+    <section class="card model-management-card">
       <div class="section-heading">
         <div>
           <h2>Model management</h2>
@@ -1858,16 +1858,19 @@ function renderPortalHtml(): string {
       </div>
     </section>
 
-    <section class="grid two">
-      <article class="card">
-        <h2>Workflow presets</h2>
-        <div id="image-workflows" class="placeholder">Loading workflow presets...</div>
-      </article>
-      <article class="card">
-        <h2>Recent image jobs</h2>
-        <p class="hint">Shows the prompt text, thumbnail, model/workflow settings, duration, step speed, artifacts, and any reported provider metadata. Token counts are shown as N/A unless a provider reports them.</p>
-        <div id="image-jobs" class="placeholder">Loading recent image jobs...</div>
-      </article>
+    <section class="card workflow-presets-card">
+      <h2>Workflow presets</h2>
+      <div id="image-workflows" class="placeholder">Loading workflow presets...</div>
+    </section>
+
+    <section class="card recent-jobs-card">
+      <div class="section-heading">
+        <div>
+          <h2>Recent image jobs</h2>
+          <p class="hint">Gallery of recent results with compact model/workflow settings, timing, step speed, artifacts, and provider metadata. Token counts are shown as N/A unless a provider reports them.</p>
+        </div>
+      </div>
+      <div id="image-jobs" class="placeholder">Loading recent image jobs...</div>
     </section>
   </main>
 

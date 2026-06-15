@@ -76,6 +76,13 @@ function renderKeyValues(values) {
   return `<dl class="kv">${values.map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${value}</dd>`).join('')}</dl>`;
 }
 
+function renderCompactMetaLine(values) {
+  const parts = values
+    .filter(([, value]) => value !== null && value !== undefined && value !== '')
+    .map(([key, value]) => `<span><strong>${escapeHtml(key)}:</strong> ${value}</span>`);
+  return parts.length ? `<p class="compact-meta-line">${parts.join('')}</p>` : '';
+}
+
 function statusPill(ok, labels = ['OK', 'Problem']) {
   return `<span class="status-pill ${ok ? 'ok' : 'bad'}">${escapeHtml(ok ? labels[0] : labels[1])}</span>`;
 }
@@ -227,12 +234,12 @@ function renderDefaultModelStatus() {
   const defaultMissing = hasDefault && defaultExists === false;
   const preloadResult = status.lastPreloadResult || 'not_attempted';
   const canLoadDefault = hasDefault && !defaultMissing && !status.active;
-  target.className = 'default-model-panel';
+  target.className = 'default-model-panel compact-default-model-panel';
   target.innerHTML = `
-    <div class="section-heading">
+    <div class="section-heading compact-section-heading">
       <div>
         <h3>Default model status</h3>
-        <p class="hint">Loaded status is reported only after a successful preload or generation. ComfyUI does not expose a reliable exact current-checkpoint API.</p>
+        <p class="hint">Reported after preload or generation; exact current-checkpoint status is not exposed by ComfyUI.</p>
       </div>
       <div class="badge-row">
         ${hasDefault ? badge('default configured', 'ok') : badge('no default selected', 'warn')}
@@ -240,17 +247,23 @@ function renderDefaultModelStatus() {
         ${status.active ? badge('preload running', 'warn') : ''}
       </div>
     </div>
-    ${renderKeyValues([
-      ['Current default checkpoint', hasDefault ? `<code>${escapeHtml(status.currentDefaultCheckpoint || status.defaultModel)}</code>` : '<span class="muted">none selected yet</span>'],
-      ['Default file exists', defaultExists === null ? '<span class="muted">n/a</span>' : escapeHtml(defaultExists ? 'yes' : 'no')],
-      ['Preload after restart', escapeHtml(status.preloadOnStartup ? 'yes' : 'no')],
-      ['Last preload attempt time', escapeHtml(formatDate(status.lastPreloadAttemptTime))],
-      ['Last preload result', `<code>${escapeHtml(preloadResult)}</code>`],
-      ['Last preload error/message', friendlyPreloadError(status)],
-      ['Last confirmed loaded/prewarmed model', status.lastConfirmedLoadedModel ? `<code>${escapeHtml(status.lastConfirmedLoadedModel)}</code>` : '<span class="muted">not confirmed in this process</span>']
-    ])}
-    ${!hasDefault ? '<p class="notice warn">No default checkpoint is configured. Use Set as default or Set default + preload after restart from an installed checkpoint below.</p>' : ''}
-    ${status.defaultWarning ? `<p class="notice warn">${escapeHtml(status.defaultWarning)}</p>` : ''}
+    <div class="compact-meta default-model-meta">
+      ${renderCompactMetaLine([
+        ['Current default checkpoint', hasDefault ? `<code>${escapeHtml(status.currentDefaultCheckpoint || status.defaultModel)}</code>` : '<span class="muted">none selected yet</span>'],
+        ['Default file exists', defaultExists === null ? '<span class="muted">n/a</span>' : escapeHtml(defaultExists ? 'yes' : 'no')],
+        ['Preload after restart', escapeHtml(status.preloadOnStartup ? 'yes' : 'no')]
+      ])}
+      ${renderCompactMetaLine([
+        ['Last preload attempt', escapeHtml(formatDate(status.lastPreloadAttemptTime))],
+        ['Last preload result', `<code>${escapeHtml(preloadResult)}</code>`],
+        ['Last confirmed loaded/prewarmed', status.lastConfirmedLoadedModel ? `<code>${escapeHtml(status.lastConfirmedLoadedModel)}</code>` : '<span class="muted">not confirmed in this process</span>']
+      ])}
+      ${renderCompactMetaLine([
+        ['Last preload error/message', friendlyPreloadError(status)]
+      ])}
+    </div>
+    ${!hasDefault ? '<p class="notice warn compact-notice">No default checkpoint is configured. Use Set as default or Set default + preload after restart from an installed checkpoint below.</p>' : ''}
+    ${status.defaultWarning ? `<p class="notice warn compact-notice">${escapeHtml(status.defaultWarning)}</p>` : ''}
     <div class="button-row lifecycle-actions">
       <button type="button" data-default-action="load" ${canLoadDefault ? '' : 'disabled'} title="${canLoadDefault ? '' : 'Select a valid default checkpoint first.'}">Load default now</button>
       <button type="button" class="secondary" data-default-action="enable-preload" ${hasDefault && !defaultMissing ? '' : 'disabled'}>Enable preload after restart</button>
@@ -271,7 +284,7 @@ function renderImageModels() {
     return;
   }
   const selected = selectedPlaygroundModel();
-  target.innerHTML = `<div class="model-list lifecycle-list">${models.map((model) => {
+  target.innerHTML = `<div class="model-list lifecycle-list compact-model-list">${models.map((model) => {
     const isCheckpoint = model.type === 'checkpoint';
     const isSelected = selected && modelMatches(model, selected);
     const badges = [badge('installed on disk', 'ok')];
@@ -282,25 +295,29 @@ function renderImageModels() {
     if (model.defaultWarning) badges.push(badge('missing default file', 'bad'));
     if (!isCheckpoint) badges.push(badge('not a checkpoint', 'warn'));
     const disabledReason = isCheckpoint ? '' : 'Only checkpoint files can be loaded or set as the default image model.';
-    return `<article class="model-item lifecycle-model" data-model-id="${escapeHtml(model.id)}">
+    return `<article class="model-item lifecycle-model compact-model" data-model-id="${escapeHtml(model.id)}">
       <div class="model-title-row">
         <div>
           <h3><code>${escapeHtml(model.relativePath)}</code></h3>
-          <p class="hint">ComfyUI checkpoint name: <code>${escapeHtml(modelIdentifier(model))}</code></p>
+          <p class="hint">ComfyUI checkpoint: <code>${escapeHtml(modelIdentifier(model))}</code></p>
         </div>
         <div class="badge-row">${badges.join('')}</div>
       </div>
-      ${renderKeyValues([
-        ['Type', escapeHtml(model.type)],
-        ['Size', escapeHtml(formatBytes(model.sizeBytes))],
-        ['Modified', escapeHtml(model.modifiedAt || 'n/a')],
-        ['Loaded status', `<code>${escapeHtml(model.loadedStatus || 'not_confirmed_loaded')}</code>`],
-        ['Can set default', escapeHtml(model.canSetDefault ? 'yes' : 'no')],
-        ['Can load/prewarm', escapeHtml(model.canPreload ? 'yes' : 'no')],
-        ['Can delete', escapeHtml(model.canDelete ? 'yes' : 'no')]
-      ])}
-      ${model.preloadWarning ? `<p class="notice warn">${escapeHtml(model.preloadWarning)}</p>` : ''}
-      ${model.defaultWarning ? `<p class="notice warn">${escapeHtml(model.defaultWarning)}</p>` : ''}
+      <div class="compact-meta model-meta">
+        ${renderCompactMetaLine([
+          ['Type', escapeHtml(model.type)],
+          ['Size', escapeHtml(formatBytes(model.sizeBytes))],
+          ['Modified', escapeHtml(model.modifiedAt || 'n/a')]
+        ])}
+        ${renderCompactMetaLine([
+          ['Loaded', `<code>${escapeHtml(model.loadedStatus || 'not_confirmed_loaded')}</code>`],
+          ['Can set default', escapeHtml(model.canSetDefault ? 'yes' : 'no')],
+          ['Can load/prewarm', escapeHtml(model.canPreload ? 'yes' : 'no')],
+          ['Can delete', escapeHtml(model.canDelete ? 'yes' : 'no')]
+        ])}
+      </div>
+      ${model.preloadWarning ? `<p class="notice warn compact-notice">${escapeHtml(model.preloadWarning)}</p>` : ''}
+      ${model.defaultWarning ? `<p class="notice warn compact-notice">${escapeHtml(model.defaultWarning)}</p>` : ''}
       <div class="button-row model-actions">
         <button type="button" data-model-action="load" ${model.canPreload ? '' : 'disabled'} title="${escapeHtml(disabledReason)}">Load / Prewarm now</button>
         <button type="button" class="secondary" data-model-action="set-default" ${model.canSetDefault ? '' : 'disabled'} title="${escapeHtml(disabledReason)}">Set as default</button>
@@ -322,7 +339,7 @@ function renderWorkflows() {
     renderPlaygroundOptions();
     return;
   }
-  target.innerHTML = `<div class="model-list compact">${workflows.map((workflow) => `<article class="model-item">
+  target.innerHTML = `<div class="workflow-preset-grid">${workflows.map((workflow) => `<article class="model-item workflow-preset-card">
     <h3><code>${escapeHtml(workflow.id)}</code></h3>
     <p class="muted">${escapeHtml(workflow.description || workflow.name)}</p>
     ${renderKeyValues([
@@ -398,70 +415,102 @@ function hydrateJobThumbnails() {
   }
 }
 
+function renderPromptBlock(label, text, emptyText) {
+  return `<div class="prompt-block">
+    <p class="prompt-label">${escapeHtml(label)}</p>
+    <div class="prompt-text bounded-prompt">${text ? escapeHtml(text) : `<span class="muted">${escapeHtml(emptyText)}</span>`}</div>
+  </div>`;
+}
+
+function recentImageJobs() {
+  return state.imageJobs?.jobs || state.imageStats?.recent_jobs || [];
+}
+
 function renderJobMetrics(job) {
   const timings = jobTimings(job);
   const artifacts = jobArtifacts(job);
   const prompt = jobPrompt(job);
   const providerMetadata = job.metadata?.provider || job.providerMetadata || job.metadata || {};
   const tokenValue = providerMetadata?.tokens ?? providerMetadata?.token_count ?? providerMetadata?.prompt_tokens ?? null;
-  return `<div class="metrics job-metrics">
-    <div class="metric"><span>Total time</span><strong>${formatDurationMs(timings.totalMs)}</strong></div>
-    <div class="metric"><span>Execution</span><strong>${formatDurationMs(timings.executionMs)}</strong></div>
-    <div class="metric"><span>Queue wait</span><strong>${formatDurationMs(timings.queueWaitMs)}</strong></div>
-    <div class="metric"><span>Step speed</span><strong>${timings.stepsPerSecond ? `${formatNumber(timings.stepsPerSecond, ' steps/s')}` : 'n/a'}</strong></div>
-    <div class="metric"><span>Steps</span><strong>${escapeHtml(job.steps ?? job.request?.steps ?? 'n/a')}</strong></div>
-    <div class="metric"><span>Prompt chars</span><strong>${escapeHtml(prompt.length)}</strong></div>
-    <div class="metric"><span>Token metrics</span><strong>${tokenValue === null || tokenValue === undefined ? 'n/a' : escapeHtml(tokenValue)}</strong></div>
-    <div class="metric"><span>Artifacts</span><strong>${escapeHtml(artifacts.length || job.artifactCount || 0)}</strong></div>
+  const tokenText = tokenValue === null || tokenValue === undefined
+    ? 'n/a'
+    : typeof tokenValue === 'object'
+      ? JSON.stringify(tokenValue)
+      : String(tokenValue);
+  const artifactCount = artifacts.length || job.artifactCount || 0;
+  const artifactSizes = artifacts.length ? artifacts.map((artifact) => formatBytes(artifact.sizeBytes)).join(', ') : 'n/a';
+  return `<div class="compact-meta job-meta">
+    ${renderCompactMetaLine([
+      ['Model', job.model ? `<code>${escapeHtml(job.model)}</code>` : '<span class="muted">n/a</span>'],
+      ['Workflow', escapeHtml(job.workflowId || job.request?.workflow_id || 'n/a')],
+      ['Provider', escapeHtml(job.provider || 'n/a')]
+    ])}
+    ${renderCompactMetaLine([
+      ['Total', escapeHtml(formatDurationMs(timings.totalMs))],
+      ['Execution', escapeHtml(formatDurationMs(timings.executionMs))],
+      ['Queue wait', escapeHtml(formatDurationMs(timings.queueWaitMs))],
+      ['Step speed', timings.stepsPerSecond ? escapeHtml(formatNumber(timings.stepsPerSecond, ' steps/s')) : '<span class="muted">n/a</span>']
+    ])}
+    ${renderCompactMetaLine([
+      ['Size', escapeHtml(`${job.width ?? job.request?.width ?? 'n/a'} x ${job.height ?? job.request?.height ?? 'n/a'}`)],
+      ['Steps', escapeHtml(job.steps ?? job.request?.steps ?? 'n/a')],
+      ['Seed', escapeHtml(job.seed ?? job.request?.seed ?? 'n/a')],
+      ['CFG / sampler', escapeHtml(`${job.cfgScale ?? job.request?.cfgScale ?? job.request?.cfg_scale ?? 'n/a'} / ${job.samplerName ?? job.request?.samplerName ?? job.request?.sampler_name ?? 'n/a'}`)],
+      ['Scheduler', escapeHtml(job.scheduler ?? job.request?.scheduler ?? 'n/a')]
+    ])}
+    ${renderCompactMetaLine([
+      ['Prompt chars', escapeHtml(prompt.length.toLocaleString())],
+      ['Token metrics', tokenText === 'n/a' ? '<span class="muted">n/a</span>' : escapeHtml(tokenText)],
+      ['Artifacts', escapeHtml(artifactCount)],
+      ['Artifact sizes', escapeHtml(artifactSizes)]
+    ])}
+    ${renderCompactMetaLine([
+      ['Created', escapeHtml(formatDate(job.createdAt))],
+      ['Completed', escapeHtml(formatDate(job.completedAt))]
+    ])}
   </div>`;
 }
 
 function renderJobs() {
   const target = $('#image-jobs');
-  const jobs = state.imageJobs?.jobs || state.imageStats?.recent_jobs || [];
+  const jobs = recentImageJobs();
   if (jobs.length === 0) {
     target.innerHTML = imageApiAuthRequiredWithoutKey()
       ? '<p class="muted">Enter the dashboard API key above to load recent image jobs.</p>'
       : '<p class="muted">No image jobs submitted since this process started.</p>';
     return;
   }
-  target.innerHTML = `<div class="job-list image-job-list">${jobs.map((job) => {
+  target.innerHTML = `<div class="image-job-gallery">${jobs.map((job, index) => {
     const prompt = jobPrompt(job);
     const negative = jobNegativePrompt(job);
     const imageUrl = firstArtifactUrl(job);
     const artifacts = jobArtifacts(job);
     const statusClass = job.status === 'succeeded' ? 'ok' : job.status === 'failed' ? 'bad' : 'warn';
-    return `<article class="job-item image-job-card">
-      <div class="job-thumb">
-        ${imageUrl ? `<a href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img data-artifact-url="${escapeHtml(imageUrl)}" alt="Generated image thumbnail for job ${escapeHtml(job.id)}" loading="lazy" hidden><div class="thumb-placeholder">Loading thumbnail...</div></a>` : '<div class="thumb-placeholder">No image yet</div>'}
-      </div>
-      <div class="job-main">
-        <div class="model-title-row">
-          <div>
-            <h3><code>${escapeHtml(job.id)}</code></h3>
-            <p class="muted">${escapeHtml(job.provider || 'provider n/a')} | ${escapeHtml(job.workflowId || 'workflow n/a')} | ${job.model ? `<code>${escapeHtml(job.model)}</code>` : 'model n/a'}</p>
-          </div>
-          <span class="status-pill ${statusClass}">${escapeHtml(job.status)}</span>
+    const jobId = job.id || `job-${index + 1}`;
+    return `<article class="image-job-card" data-job-index="${escapeHtml(index)}" data-job-id="${escapeHtml(jobId)}">
+      <div class="job-card-header">
+        <div>
+          <h3><code>${escapeHtml(jobId)}</code></h3>
+          <p class="muted job-subtitle">${escapeHtml(job.provider || 'provider n/a')} · ${escapeHtml(job.workflowId || job.request?.workflow_id || 'workflow n/a')}</p>
         </div>
-        <p class="prompt-label">Prompt</p>
-        <p class="prompt-text">${prompt ? escapeHtml(prompt) : '<span class="muted">No prompt recorded</span>'}</p>
-        ${negative ? `<p class="prompt-label">Negative prompt</p><p class="prompt-text muted">${escapeHtml(negative)}</p>` : ''}
-        ${renderJobMetrics(job)}
-        ${renderKeyValues([
-          ['Size', escapeHtml(`${job.width ?? job.request?.width ?? 'n/a'} x ${job.height ?? job.request?.height ?? 'n/a'}`)],
-          ['Seed', escapeHtml(job.seed ?? job.request?.seed ?? 'n/a')],
-          ['CFG / sampler', escapeHtml(`${job.cfgScale ?? job.request?.cfgScale ?? job.request?.cfg_scale ?? 'n/a'} / ${job.samplerName ?? job.request?.samplerName ?? job.request?.sampler_name ?? 'n/a'}`)],
-          ['Scheduler', escapeHtml(job.scheduler ?? job.request?.scheduler ?? 'n/a')],
-          ['Created', escapeHtml(formatDate(job.createdAt))],
-          ['Completed', escapeHtml(formatDate(job.completedAt))]
-        ])}
-        ${artifacts.length ? `<p class="hint">Artifact sizes: ${escapeHtml(artifacts.map((artifact) => formatBytes(artifact.sizeBytes)).join(', '))}</p>` : ''}
-        ${job.error ? `<p class="danger-text">${escapeHtml(job.error.code)}: ${escapeHtml(job.error.message)}</p>` : ''}
-        <details>
-          <summary>Raw request and provider metadata</summary>
-          <pre><code>${escapeHtml(JSON.stringify({ request: job.request || {}, metadata: job.metadata || {}, artifacts }, null, 2))}</code></pre>
-        </details>
+        <span class="status-pill ${statusClass}">${escapeHtml(job.status || 'unknown')}</span>
       </div>
+      <div class="gallery-image-frame">
+        ${imageUrl ? `<a class="gallery-image-link" href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="gallery-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Generated image for job ${escapeHtml(jobId)}" loading="lazy" hidden><div class="thumb-placeholder">Loading image...</div></a>` : '<div class="thumb-placeholder">No image yet</div>'}
+      </div>
+      <div class="job-card-actions">
+        <button type="button" class="secondary" data-job-action="reuse-prompt" data-job-index="${escapeHtml(index)}" data-job-id="${escapeHtml(jobId)}">Reuse Prompt</button>
+      </div>
+      <div class="job-prompt-grid">
+        ${renderPromptBlock('Prompt', prompt, 'No prompt recorded')}
+        ${renderPromptBlock('Negative Prompt', negative, 'No negative prompt recorded')}
+      </div>
+      ${renderJobMetrics(job)}
+      ${job.error ? `<p class="danger-text">${escapeHtml(job.error.code)}: ${escapeHtml(job.error.message)}</p>` : ''}
+      <details class="job-details">
+        <summary>Raw request and provider metadata</summary>
+        <pre><code>${escapeHtml(JSON.stringify({ request: job.request || {}, metadata: job.metadata || {}, artifacts }, null, 2))}</code></pre>
+      </details>
     </article>`;
   }).join('')}</div>`;
   hydrateJobThumbnails();
@@ -870,6 +919,31 @@ async function handleDefaultAction(event) {
   }
 }
 
+function findJobFromReuseButton(button) {
+  const jobs = recentImageJobs();
+  const index = Number(button.dataset.jobIndex);
+  if (Number.isInteger(index) && jobs[index]) return jobs[index];
+  const id = button.dataset.jobId;
+  return jobs.find((job) => String(job.id || '') === id) || null;
+}
+
+function handleJobAction(event) {
+  const button = event.target.closest('[data-job-action]');
+  if (!button || button.disabled) return;
+  if (button.dataset.jobAction !== 'reuse-prompt') return;
+  const job = findJobFromReuseButton(button);
+  const promptInput = $('#playground-prompt');
+  const negativeInput = $('#playground-negative');
+  if (!job || !promptInput || !negativeInput) {
+    setImageFeedback('Unable to reuse that prompt from the current job list.', false);
+    return;
+  }
+  promptInput.value = jobPrompt(job);
+  negativeInput.value = jobNegativePrompt(job);
+  updatePlaygroundPreview();
+  setImageFeedback(`Copied prompt${jobNegativePrompt(job) ? ' and negative prompt' : ''} from job ${job.id || 'n/a'} into Generate image.`);
+}
+
 async function handlePlaygroundSubmit(event) {
   event.preventDefault();
   const payload = buildPlaygroundPayload();
@@ -971,6 +1045,7 @@ function wireEvents() {
 
   $('#image-models').addEventListener('click', handleModelAction);
   $('#default-model-status').addEventListener('click', handleDefaultAction);
+  $('#image-jobs').addEventListener('click', handleJobAction);
   $('#playground-form').addEventListener('submit', handlePlaygroundSubmit);
   $('#apply-workflow-defaults').addEventListener('click', () => {
     applyWorkflowDefaults(true);
