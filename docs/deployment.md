@@ -221,6 +221,13 @@ sudo systemctl start local-ai-images.service
 | `IMAGE_ARTIFACT_PATH` | Generated image and metadata storage. |
 | `IMAGE_ARTIFACT_PUBLIC_BASE_URL` | URL prefix used in artifact metadata. |
 | `IMAGE_DEFAULT_WORKFLOW_ID` | Default workflow preset ID. |
+| `IMAGE_DEFAULT_MODEL` | Initial/fallback default checkpoint when config has no `image_default_model`. |
+| `IMAGE_PRELOAD_DEFAULT_ON_STARTUP` | Initial/fallback setting for prewarming the default checkpoint after app restart. |
+| `IMAGE_PRELOAD_TIMEOUT_MS` | Bound for manual and startup preload attempts. |
+| `IMAGE_PRELOAD_WORKFLOW_ID` | Workflow preset used for preload requests. Defaults to `IMAGE_DEFAULT_WORKFLOW_ID`. |
+| `IMAGE_PRELOAD_WIDTH` / `IMAGE_PRELOAD_HEIGHT` | Dimensions for the tiny preload request. |
+| `IMAGE_PRELOAD_STEPS` | Step count for the tiny preload request. |
+| `IMAGE_PRELOAD_KEEP_ARTIFACT` | Keep or discard the tiny preload artifact. |
 | `IMAGE_QUEUE_CONCURRENCY` | Number of jobs to run concurrently. Use `1` for RTX 3080 unless you have a reason to raise it. |
 | `IMAGE_MAX_QUEUED_JOBS` | Back-pressure limit. |
 | `IMAGE_DEFAULT_SYNC_TIMEOUT_MS` | Default synchronous wait. `0` means async by default. |
@@ -254,7 +261,7 @@ grep '^COMFYUI_BASE_URL=' "$HOME/local-ai-images/.env"
 
 ### Models are not listed
 
-Check `IMAGE_MODEL_PATHS`, file permissions, and supported extensions. The scanner ignores dotfiles and unknown extensions. The app never downloads models.
+Check `IMAGE_MODEL_PATHS`, file permissions, and supported extensions. The scanner ignores dotfiles and unknown extensions. Portal/API downloads are available only when model installs are enabled and always write inside approved ComfyUI model directories.
 
 ### Workflow not found
 

@@ -7,13 +7,19 @@ Legacy Ollama endpoints from the reference application are still present only as
 ## What this provides
 
 - Node HTTP service on `0.0.0.0:8000`, using native TypeScript type stripping and no application npm dependencies.
-- Static hosted control panel with service, GPU, ComfyUI/mock engine, queue, model inventory, workflow preset, and recent-job state.
+- Static hosted control panel with service, GPU, ComfyUI/mock engine, queue, model inventory, model lifecycle actions, workflow preset, and recent-job state.
 - Stable image API over `/api/v1`:
   - `GET /api/v1/health`
   - `GET /api/v1/capabilities`
   - `GET /api/v1/stats`
   - `GET /api/v1/models`
   - `POST /api/v1/models/refresh`
+  - `POST /api/v1/models/default`
+  - `DELETE /api/v1/models/default`
+  - `GET /api/v1/models/preload`
+  - `POST /api/v1/models/preload`
+  - `POST /api/v1/models/preload/startup`
+  - `DELETE /api/v1/models/{modelId}`
   - `GET /api/v1/workflows`
   - `GET /api/v1/workflows/{workflowId}`
   - `POST /api/v1/generate`
@@ -24,7 +30,7 @@ Legacy Ollama endpoints from the reference application are still present only as
   - `GET /api/v1/artifacts/{artifactId}`
 - Provider abstraction with ComfyUI as the primary backend and a mock backend for local testing.
 - App-level request validation and workflow preset mapping so callers do not need to submit raw ComfyUI JSON.
-- Local model inventory scanner and operator-supplied workflow directory.
+- Local model inventory scanner, persisted default checkpoint, explicit checkpoint preload, startup preload, safe model delete, and operator-supplied workflow directory.
 - In-memory async job queue with configurable concurrency/back-pressure.
 - Artifact storage with sidecar metadata and URL/base64/binary/metadata-only result delivery.
 - API-key or bearer-token authentication for `/api/v1` when configured.
@@ -100,6 +106,14 @@ IMAGE_MODEL_PATHS=./models
 IMAGE_WORKFLOW_PATH=./config/workflows
 IMAGE_ARTIFACT_PATH=./data/artifacts
 IMAGE_DEFAULT_WORKFLOW_ID=sdxl-text-to-image
+IMAGE_DEFAULT_MODEL=
+IMAGE_PRELOAD_DEFAULT_ON_STARTUP=false
+IMAGE_PRELOAD_TIMEOUT_MS=120000
+IMAGE_PRELOAD_WORKFLOW_ID=sdxl-text-to-image
+IMAGE_PRELOAD_WIDTH=512
+IMAGE_PRELOAD_HEIGHT=512
+IMAGE_PRELOAD_STEPS=1
+IMAGE_PRELOAD_KEEP_ARTIFACT=false
 IMAGE_QUEUE_CONCURRENCY=1
 IMAGE_API_KEYS=replace-with-a-long-random-secret
 REQUIRE_IMAGE_API_AUTH=true
@@ -107,6 +121,13 @@ LEGACY_OLLAMA_ENABLED=false
 ```
 
 The repository does not include model files, generated images, secrets, or machine-specific paths. Operators supply local models and workflow presets.
+
+
+## Model lifecycle controls
+
+The portal distinguishes installed-on-disk, selected-in-playground, persisted default, last confirmed loaded/prewarmed, and preload-on-startup states. Each installed checkpoint row/card exposes **Use in playground**, **Load / Prewarm now**, **Set as default**, **Set default + preload on startup**, **Delete model**, and **Refresh scan** controls. The default status panel shows the current default checkpoint, missing-file warnings, startup preload state, last preload result/error, and last confirmed loaded/prewarmed model.
+
+ComfyUI does not expose an exact loaded-checkpoint-in-VRAM API through this app, so the portal uses the honest label **Last confirmed loaded/prewarmed model** after a successful preload or generation.
 
 ## API examples
 

@@ -44,7 +44,7 @@ Key fields:
 - `generation.output_delivery`: `metadata`, `url`, `base64`, and `binary`.
 - `workflows`: stable workflow preset summaries.
 
-## Model inventory
+## Model inventory and lifecycle
 
 ```bash
 curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" \
@@ -54,7 +54,95 @@ curl -sS -X POST -H "Authorization: Bearer $IMAGE_API_KEY" \
   "$IMAGE_API_URL/api/v1/models/refresh" | jq .
 ```
 
-The scanner reads `IMAGE_MODEL_PATHS` and reports known local model file extensions such as `.safetensors`, `.ckpt`, `.pt`, `.pth`, `.bin`, `.gguf`, and `.onnx`. It does not download, validate, or mutate models.
+The scanner reads `IMAGE_MODEL_PATHS` and reports known local model file extensions such as `.safetensors`, `.ckpt`, `.pt`, `.pth`, `.bin`, `.gguf`, and `.onnx`. Scanning reports disk inventory only; it does not load a checkpoint into VRAM.
+
+`GET /api/v1/models` returns UI-ready state for each model, including:
+
+| Field | Notes |
+| --- | --- |
+| `isDefault` | True when the model matches the persisted `image_default_model`. |
+| `isLastConfirmedLoaded` | True when the model matches the last successful generation/preload checkpoint. |
+| `canSetDefault` | True for installed checkpoint files. |
+| `canPreload` | True when the model is a checkpoint and the default workflow can receive a checkpoint override. |
+| `canDelete` | True when the file is inside an approved ComfyUI model directory. |
+| `defaultWarning` | Warning text for a configured default that is missing on disk. |
+| `loadedStatus` | `last_confirmed_loaded`, `default_not_confirmed_loaded`, `not_confirmed_loaded`, or `not_applicable`. |
+| `deletePreview` | Exact file name, type, size, and confirmation metadata for safe deletes. |
+
+The response also includes a `preload`/`defaultStatus` object with current default checkpoint, default-file existence, preload-on-startup setting, last preload attempt/result/error, and last confirmed loaded/prewarmed checkpoint.
+
+### Default checkpoint
+
+Set the default checkpoint:
+
+```bash
+curl -sS -X POST "$IMAGE_API_URL/api/v1/models/default" \
+  -H "Authorization: Bearer $IMAGE_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"model":"sd_xl_base_1.0.safetensors"}' | jq .
+```
+
+Set the default and enable preload after future app restarts:
+
+```bash
+curl -sS -X POST "$IMAGE_API_URL/api/v1/models/default" \
+  -H "Authorization: Bearer $IMAGE_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"model":"sd_xl_base_1.0.safetensors","preload_on_startup":true}' | jq .
+```
+
+Clear the default:
+
+```bash
+curl -sS -X DELETE -H "Authorization: Bearer $IMAGE_API_KEY" \
+  "$IMAGE_API_URL/api/v1/models/default" | jq .
+```
+
+Setting a default persists `image_default_model`; it does not imply the model is loaded. Generation requests that omit `model` use the default only when the workflow has a checkpoint-loader mapping.
+
+### Load / prewarm checkpoint
+
+Read preload/default status:
+
+```bash
+curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" \
+  "$IMAGE_API_URL/api/v1/models/preload" | jq .
+```
+
+Prewarm a checkpoint now:
+
+```bash
+curl -sS -X POST "$IMAGE_API_URL/api/v1/models/preload" \
+  -H "Authorization: Bearer $IMAGE_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"model":"sd_xl_base_1.0.safetensors"}' | jq .
+```
+
+Omit `model` to preload the current default. A successful preload updates `lastConfirmedLoadedModel`. A failure updates `lastPreloadResult` and `lastPreloadError`.
+
+Enable or disable startup preload:
+
+```bash
+curl -sS -X POST "$IMAGE_API_URL/api/v1/models/preload/startup" \
+  -H "Authorization: Bearer $IMAGE_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"enabled":true}' | jq .
+```
+
+When startup preload is enabled and the default exists, the app starts the web service, waits for ComfyUI/mock to be reachable within `IMAGE_PRELOAD_TIMEOUT_MS`, and launches a bounded background preload job. The app does not block indefinitely when ComfyUI is unavailable.
+
+### Safe model delete
+
+Delete requests require exact file-name confirmation and are limited to approved ComfyUI model directories:
+
+```bash
+curl -sS -X DELETE "$IMAGE_API_URL/api/v1/models/sd_xl_base_1.0.safetensors" \
+  -H "Authorization: Bearer $IMAGE_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"confirm_file_name":"sd_xl_base_1.0.safetensors"}' | jq .
+```
+
+Deleting the current default is blocked unless the default is cleared first or the explicit request includes `delete_and_clear_default=true`. Inventory refreshes after delete.
 
 ## Workflow presets
 
@@ -113,7 +201,7 @@ If the job completes within `sync_timeout_ms`, the API returns `200`. If not, it
 | --- | --- | --- |
 | `prompt` | string | Required. Trimmed. Limited by `IMAGE_GENERATION_MAX_PROMPT_CHARS`. |
 | `negative_prompt` | string | Optional. |
-| `model` | string | Optional ComfyUI checkpoint name/path. Defaults to the workflow checkpoint. |
+| `model` | string | Optional ComfyUI checkpoint name/path. If omitted, a compatible persisted image default is used before the workflow checkpoint fallback. |
 | `workflow_id` | string | Defaults to `IMAGE_DEFAULT_WORKFLOW_ID`. |
 | `width`, `height` | integer | 64 to 4096. Defaults come from the workflow. |
 | `steps` | integer | 1 to 150. |
@@ -177,6 +265,22 @@ curl -sS -H "Authorization: Bearer $IMAGE_API_KEY" \
 ```
 
 Artifact metadata includes job ID, model, workflow ID, prompt, negative prompt, seed, request options, provider metadata, and artifact URL. Internal filesystem paths are removed from API responses.
+
+
+## Model lifecycle environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `IMAGE_DEFAULT_MODEL` | empty | Initial/fallback checkpoint default when the config file does not contain `image_default_model`. |
+| `IMAGE_PRELOAD_DEFAULT_ON_STARTUP` | `false` | Initial/fallback startup preload setting. |
+| `IMAGE_PRELOAD_TIMEOUT_MS` | `120000` | Bound for manual and startup preload attempts. |
+| `IMAGE_PRELOAD_WORKFLOW_ID` | `IMAGE_DEFAULT_WORKFLOW_ID` | Workflow preset used for preload requests. |
+| `IMAGE_PRELOAD_WIDTH` | `512` | Preload request width. |
+| `IMAGE_PRELOAD_HEIGHT` | `512` | Preload request height. |
+| `IMAGE_PRELOAD_STEPS` | `1` | Preload request step count. |
+| `IMAGE_PRELOAD_KEEP_ARTIFACT` | `false` | Save or discard the tiny preload artifact. |
+
+ComfyUI does not expose a reliable exact loaded-checkpoint state through this app. `lastConfirmedLoadedModel` means Local AI Images last succeeded in submitting a generation/preload request with that checkpoint.
 
 ## Compatibility endpoints
 

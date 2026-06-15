@@ -5,17 +5,24 @@ import { ConfigStore } from './config/store.ts';
 import { AppError } from './errors.ts';
 import { createLogger } from './logger.ts';
 import { NvidiaSmiGpuService } from './services/gpuService.ts';
+import { createImageRuntime } from './services/image/runtime.ts';
 import { OllamaClient } from './services/ollamaClient.ts';
 import type { OllamaClientLike } from './types.ts';
 
 const runtimeConfig = loadRuntimeConfig();
 const logger = createLogger(runtimeConfig.logLevel);
-const configStore = new ConfigStore(runtimeConfig.configPath, runtimeConfig.defaultModel);
+const configStore = new ConfigStore(
+  runtimeConfig.configPath,
+  runtimeConfig.defaultModel,
+  runtimeConfig.imageDefaultModel,
+  runtimeConfig.imagePreloadDefaultOnStartup
+);
 const ollamaClient: OllamaClientLike = runtimeConfig.legacyOllamaEnabled
   ? new OllamaClient(runtimeConfig.ollamaBaseUrl, runtimeConfig.ollamaRequestTimeoutMs)
   : createDisabledOllamaClient();
 const gpuService = new NvidiaSmiGpuService(runtimeConfig.gpuQueryTimeoutMs);
-const server = createServer(createRequestHandler({ runtimeConfig, configStore, ollamaClient, gpuService, logger }));
+const imageRuntime = createImageRuntime(runtimeConfig, logger, configStore);
+const server = createServer(createRequestHandler({ runtimeConfig, configStore, ollamaClient, gpuService, logger, imageRuntime }));
 
 async function main(): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -28,6 +35,8 @@ async function main(): Promise<void> {
     logger.info({ base_url: runtimeConfig.ollamaBaseUrl }, 'Legacy Ollama compatibility mode enabled');
     await maybePrewarmLegacyDefaultModel();
   }
+
+  void imageRuntime.modelLifecycle.startStartupPreload();
 }
 
 async function maybePrewarmLegacyDefaultModel(): Promise<void> {

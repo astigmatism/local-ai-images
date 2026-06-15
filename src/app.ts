@@ -7,6 +7,7 @@ import type { Logger } from './logger.ts';
 import { buildOpenApiDocument } from './openapi.ts';
 import { toLegacyGpu } from './services/gpuService.ts';
 import { createImageRuntime, type ImageRuntime } from './services/image/runtime.ts';
+import { findInventoryModel, modelMatchesDefault } from './services/image/modelIdentity.ts';
 import type { AppConfig, ArtifactMetadata, GpuServiceLike, ImageJob, ModelInventory, ModelInventoryItem, OllamaClientLike, OllamaImageGenerateOptions, OutputDelivery, RuntimeConfig, WorkflowPreset } from './types.ts';
 import { validateModelLoadRequest, validateModelName } from './utils/validation.ts';
 import { authenticateImageApiRequest } from './utils/auth.ts';
@@ -349,6 +350,27 @@ async function routeImageApiV1(
     return;
   }
 
+  if (method === 'GET' && pathName === '/api/v1/models/preload') {
+    await handleImageApiPreloadStatus(response, dependencies);
+    return;
+  }
+
+  if (method === 'POST' && pathName === '/api/v1/models/preload') {
+    await handleImageApiPreloadModel(request, response, dependencies);
+    return;
+  }
+
+  if (method === 'POST' && pathName === '/api/v1/models/preload/startup') {
+    await handleImageApiPreloadStartup(request, response, dependencies);
+    return;
+  }
+
+  const modelDeleteMatch = /^\/api\/v1\/models\/([^/]+)$/u.exec(pathName);
+  if (method === 'DELETE' && modelDeleteMatch?.[1]) {
+    await handleImageApiDeleteModel(request, response, dependencies, decodeURIComponent(modelDeleteMatch[1]));
+    return;
+  }
+
   if (method === 'GET' && pathName === '/api/v1/model-catalog') {
     await handleImageApiModelCatalog(response, dependencies);
     return;
@@ -432,11 +454,12 @@ async function routeImageApiV1(
 
 async function handleImageApiHealth(response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
   const { imageRuntime, runtimeConfig, gpuService } = dependencies;
-  const [engine, workflows, gpus, appConfig] = await Promise.all([
+  const [engine, workflows, gpus, appConfig, preload] = await Promise.all([
     imageRuntime.provider.health(),
     imageRuntime.workflowStore.list().catch(() => []),
     queryGpuSummary(gpuService),
-    dependencies.configStore.readConfig().catch(() => ({ default_model: '' }))
+    dependencies.configStore.readConfig().catch(() => ({ default_model: '' })),
+    imageRuntime.modelLifecycle.getStatus().catch(() => null)
   ]);
 
   sendJson(response, 200, {
@@ -453,6 +476,8 @@ async function handleImageApiHealth(response: ServerResponse, dependencies: Reso
       paths: runtimeConfig.imageModelPaths,
       cached_count: imageRuntime.modelScanner.getCachedInventory()?.models.length ?? null,
       default_model: appConfig.image_default_model || null,
+      preload_on_startup: appConfig.image_preload_default_on_startup === true,
+      preload,
       installs_enabled: runtimeConfig.modelInstallsEnabled,
       install_destinations: runtimeConfig.modelInstallDirectories
     },
@@ -485,7 +510,10 @@ async function handleImageApiCapabilities(response: ServerResponse, dependencies
       artifacts: '/api/v1/artifacts/{artifactId}',
       model_catalog: '/api/v1/model-catalog',
       model_downloads: '/api/v1/model-downloads',
-      model_default: '/api/v1/models/default'
+      model_default: '/api/v1/models/default',
+      model_preload: '/api/v1/models/preload',
+      model_preload_startup: '/api/v1/models/preload/startup',
+      model_delete: '/api/v1/models/{modelId}'
     },
     generation: {
       async_jobs: true,
@@ -500,6 +528,13 @@ async function handleImageApiCapabilities(response: ServerResponse, dependencies
       max_bytes: runtimeConfig.modelInstallMaxBytes,
       allow_ckpt: runtimeConfig.modelInstallAllowCkpt,
       destinations: runtimeConfig.modelInstallDirectories
+    },
+    model_lifecycle: {
+      default_endpoint: '/api/v1/models/default',
+      preload_endpoint: '/api/v1/models/preload',
+      preload_startup_endpoint: '/api/v1/models/preload/startup',
+      safe_delete_endpoint: 'DELETE /api/v1/models/{modelId}',
+      loaded_state_label: 'last confirmed loaded/prewarmed model'
     },
     workflows: workflows.map(publicWorkflowSummary)
   });
@@ -552,17 +587,87 @@ async function handleImageApiSetDefaultModel(request: IncomingMessage, response:
     }
 
     const config = await dependencies.configStore.updateImageDefaultModel(model.comfyName || model.fileName);
+    const preloadOnStartup = readBodyBoolean(body, 'preload_on_startup') || readBodyBoolean(body, 'preloadOnStartup');
+    const updatedConfig = preloadOnStartup
+      ? await dependencies.imageRuntime.modelLifecycle.setPreloadOnStartup(true)
+      : config;
     const refreshed = await decorateModelInventory(await dependencies.imageRuntime.modelScanner.list(), dependencies);
     sendJson(response, 200, {
       ok: true,
-      config,
+      config: updatedConfig,
       path: dependencies.configStore.path,
-      default_model: config.image_default_model ?? '',
-      model: decorateSingleModel(model, config.image_default_model ?? '', await defaultWorkflowFor(dependencies)),
+      default_model: updatedConfig.image_default_model ?? '',
+      preload_on_startup: updatedConfig.image_preload_default_on_startup === true,
+      model: decorateSingleModel(model, updatedConfig.image_default_model ?? '', await defaultWorkflowFor(dependencies), await dependencies.imageRuntime.modelLifecycle.getStatus().catch(() => null), dependencies),
       inventory: refreshed
     });
   } catch (error: unknown) {
     sendJson(response, statusCodeForError(error), toErrorPayload(error, 'MODEL_DEFAULT_UPDATE_FAILED'));
+  }
+}
+
+async function handleImageApiPreloadStatus(response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    sendJson(response, 200, await dependencies.imageRuntime.modelLifecycle.getStatus());
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'MODEL_PRELOAD_STATUS_FAILED'));
+  }
+}
+
+async function handleImageApiPreloadModel(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    const body = await readJsonBody(request);
+    const model = isRecord(body)
+      ? readBodyString(body, 'model') || readBodyString(body, 'file_name') || readBodyString(body, 'fileName')
+      : '';
+    const setDefault = isRecord(body) && (readBodyBoolean(body, 'set_default') || readBodyBoolean(body, 'setDefault') || readBodyBoolean(body, 'make_default') || readBodyBoolean(body, 'makeDefault'));
+    const preload = await dependencies.imageRuntime.modelLifecycle.preloadCheckpoint({
+      model: model || null,
+      source: 'api',
+      setDefault
+    });
+    const inventory = await decorateModelInventory(await dependencies.imageRuntime.modelScanner.list(), dependencies);
+    sendJson(response, 200, { ok: true, preload, inventory });
+  } catch (error: unknown) {
+    const preload = await dependencies.imageRuntime.modelLifecycle.getStatus().catch(() => null);
+    sendJson(response, statusCodeForError(error, 502), {
+      ...toErrorPayload(error, 'MODEL_PRELOAD_FAILED'),
+      ...(preload ? { preload } : {})
+    });
+  }
+}
+
+async function handleImageApiPreloadStartup(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    const body = await readJsonBody(request);
+    if (!isRecord(body) || !hasBooleanish(body, 'enabled')) {
+      sendJson(response, 422, validationDetail(['body', 'enabled'], 'enabled must be true or false', 'bool_type'));
+      return;
+    }
+    const enabled = readBodyBoolean(body, 'enabled');
+    const config = await dependencies.imageRuntime.modelLifecycle.setPreloadOnStartup(enabled);
+    const preload = await dependencies.imageRuntime.modelLifecycle.getStatus(undefined, config);
+    const inventory = await decorateModelInventory(await dependencies.imageRuntime.modelScanner.list(), dependencies);
+    sendJson(response, 200, {
+      ok: true,
+      config,
+      path: dependencies.configStore.path,
+      preload,
+      inventory
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'MODEL_PRELOAD_STARTUP_UPDATE_FAILED'));
+  }
+}
+
+async function handleImageApiDeleteModel(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies, modelIdentifier: string): Promise<void> {
+  try {
+    const body = await readJsonBody(request);
+    const result = await dependencies.imageRuntime.modelLifecycle.deleteInstalledModel(modelIdentifier, body);
+    const inventory = await decorateModelInventory(result.inventory, dependencies);
+    sendJson(response, 200, { ...result, inventory });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'MODEL_DELETE_FAILED'));
   }
 }
 
@@ -575,6 +680,7 @@ async function handleImageApiClearDefaultModel(response: ServerResponse, depende
       config,
       path: dependencies.configStore.path,
       default_model: config.image_default_model ?? '',
+      preload: await dependencies.imageRuntime.modelLifecycle.getStatus(undefined, config).catch(() => null),
       inventory
     });
   } catch (error: unknown) {
@@ -938,19 +1044,52 @@ async function decorateModelInventory(inventory: ModelInventory, dependencies: R
     defaultWorkflowFor(dependencies)
   ]);
   const defaultModel = config.image_default_model || '';
+  const preload = await dependencies.imageRuntime.modelLifecycle.getStatus(inventory, config).catch(() => null);
   return {
     ...inventory,
     defaultModel: defaultModel || null,
+    default_model: defaultModel || null,
     defaultWorkflowId: workflow?.id ?? dependencies.runtimeConfig.imageDefaultWorkflowId,
-    models: inventory.models.map((model) => decorateSingleModel(model, defaultModel, workflow))
+    defaultStatus: preload,
+    preload,
+    models: inventory.models.map((model) => decorateSingleModel(model, defaultModel, workflow, preload, dependencies))
   };
 }
 
-function decorateSingleModel(model: ModelInventoryItem, defaultModel: string, workflow: WorkflowPreset | null): ModelInventoryItem & Record<string, unknown> {
+function decorateSingleModel(
+  model: ModelInventoryItem,
+  defaultModel: string,
+  workflow: WorkflowPreset | null,
+  preload: Record<string, any> | null,
+  dependencies: ResolvedAppDependencies
+): ModelInventoryItem & Record<string, unknown> {
+  const isDefault = modelMatchesDefault(model, defaultModel);
+  const usableByDefaultWorkflow = workflow ? modelUsableByWorkflow(model, workflow) : model.type === 'checkpoint';
+  const isLastConfirmedLoaded = preload?.lastConfirmedLoadedModel
+    ? modelMatchesDefault(model, preload.lastConfirmedLoadedModel)
+    : false;
+  const canSetDefault = model.type === 'checkpoint';
+  const canPreload = canSetDefault && usableByDefaultWorkflow;
+  const canDelete = dependencies.imageRuntime.modelLifecycle.canDeleteModel(model);
+  const loadedStatus = model.type !== 'checkpoint'
+    ? 'not_applicable'
+    : isLastConfirmedLoaded
+      ? 'last_confirmed_loaded'
+      : isDefault
+        ? 'default_not_confirmed_loaded'
+        : 'not_confirmed_loaded';
   return {
     ...model,
-    isDefault: modelMatchesDefault(model, defaultModel),
-    usableByDefaultWorkflow: workflow ? modelUsableByWorkflow(model, workflow) : model.type === 'checkpoint'
+    isDefault,
+    isLastConfirmedLoaded,
+    canSetDefault,
+    canPreload,
+    canDelete,
+    deleteRequiresDefaultClear: isDefault,
+    defaultWarning: isDefault ? preload?.defaultWarning ?? null : null,
+    loadedStatus,
+    usableByDefaultWorkflow,
+    deletePreview: dependencies.imageRuntime.modelLifecycle.deletePreview(model, isDefault)
   };
 }
 
@@ -966,25 +1105,6 @@ async function defaultWorkflowFor(dependencies: ResolvedAppDependencies): Promis
 function modelUsableByWorkflow(model: ModelInventoryItem, workflow: WorkflowPreset): boolean {
   if (model.type !== 'checkpoint') return false;
   return Boolean(workflow.comfyui.mappings.checkpointNode);
-}
-
-function modelMatchesDefault(model: ModelInventoryItem, defaultModel: string): boolean {
-  if (!defaultModel) return false;
-  const normalizedDefault = normalizeModelLookup(defaultModel);
-  return [model.comfyName, model.fileName, model.relativePath, model.path, model.name, model.displayName]
-    .filter(Boolean)
-    .some((candidate) => normalizeModelLookup(candidate) === normalizedDefault);
-}
-
-function findInventoryModel(models: ModelInventoryItem[], requestedModel: string): ModelInventoryItem | null {
-  const normalized = normalizeModelLookup(requestedModel);
-  return models.find((model) => [model.id, model.comfyName, model.fileName, model.relativePath, model.path, model.name, model.displayName]
-    .filter(Boolean)
-    .some((candidate) => normalizeModelLookup(candidate) === normalized)) ?? null;
-}
-
-function normalizeModelLookup(value: string): string {
-  return value.trim().replace(/\\/gu, '/').toLowerCase();
 }
 
 function ensureModelInstaller(dependencies: ResolvedAppDependencies) {
@@ -1402,6 +1522,21 @@ function readBodyString(body: unknown, key: string): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
+function readBodyBoolean(body: unknown, key: string): boolean {
+  if (!isRecord(body)) return false;
+  const value = body[key];
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+  return false;
+}
+
+function hasBooleanish(body: unknown, key: string): boolean {
+  if (!isRecord(body)) return false;
+  const value = body[key];
+  if (typeof value === 'boolean') return true;
+  return typeof value === 'string' && ['1', '0', 'true', 'false', 'yes', 'no', 'on', 'off'].includes(value.trim().toLowerCase());
+}
+
 function modelListIncludes(models: Array<{ name?: string; model?: string }>, model: string): boolean {
   const normalizedModel = model.toLowerCase();
   return models.some((item) => item.name?.toLowerCase() === normalizedModel || item.model?.toLowerCase() === normalizedModel);
@@ -1600,6 +1735,8 @@ function renderPortalHtml(): string {
         </div>
         <button id="refresh-models-button" class="secondary" type="button">Refresh scan</button>
       </div>
+      <div id="default-model-status" class="default-model-panel placeholder">Loading default model lifecycle status...</div>
+      <h3>Installed model list</h3>
       <div id="image-models" class="placeholder">Loading model inventory...</div>
     </section>
 
@@ -1693,6 +1830,9 @@ function renderPortalHtml(): string {
           </div>
           <div class="button-row">
             <button type="submit">Submit generation</button>
+            <button id="playground-load-selected" class="secondary" type="button">Load selected model now</button>
+            <button id="playground-set-selected-default" class="secondary" type="button">Set selected as default</button>
+            <button id="playground-preload-selected-startup" class="secondary" type="button">Preload selected default on startup</button>
             <button id="playground-cancel" class="secondary" type="button" disabled>Cancel job</button>
             <button id="apply-workflow-defaults" class="secondary" type="button">Apply workflow defaults</button>
           </div>

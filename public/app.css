@@ -368,3 +368,151 @@ input[type="password"] {
     grid-template-columns: 1fr;
   }
 }
+
+button.danger,
+button.secondary.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+input[type="url"],
+input[type="number"],
+select,
+textarea {
+  width: 100%;
+  background: #111827;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 6px;
+}
+
+textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+pre {
+  overflow: auto;
+  background: #111827;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.form-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.playground-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.preview-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.default-model-panel {
+  border: 1px solid var(--accent);
+  background: linear-gradient(180deg, rgba(96, 165, 250, 0.08), rgba(17, 24, 39, 0.55));
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 18px;
+}
+
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.badge.ok {
+  color: var(--ok);
+  border-color: rgba(134, 239, 172, 0.45);
+}
+
+.badge.warn {
+  color: var(--warn);
+  border-color: rgba(253, 230, 138, 0.45);
+}
+
+.badge.bad {
+  color: var(--danger);
+  border-color: rgba(252, 165, 165, 0.45);
+}
+
+.lifecycle-list {
+  max-height: 720px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.lifecycle-model {
+  display: grid;
+  gap: 12px;
+}
+
+.model-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.model-actions,
+.lifecycle-actions {
+  padding-top: 4px;
+}
+
+.notice.warn {
+  border-color: rgba(253, 230, 138, 0.45);
+  color: var(--warn);
+}
+
+.danger-text {
+  color: var(--danger);
+}
+
+@media (max-width: 980px) {
+  .playground-layout,
+  .form-grid,
+  .form-grid.three {
+    grid-template-columns: 1fr;
+  }
+
+  .model-title-row,
+  .badge-row {
+    display: grid;
+    justify-content: stretch;
+  }
+}

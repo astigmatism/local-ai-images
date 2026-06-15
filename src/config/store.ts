@@ -6,10 +6,14 @@ import { AppError } from '../errors.ts';
 export class ConfigStore {
   private readonly filePath: string;
   private readonly fallbackDefaultModel: string;
+  private readonly fallbackImageDefaultModel: string;
+  private readonly fallbackImagePreloadDefaultOnStartup: boolean;
 
-  constructor(filePath: string, fallbackDefaultModel: string) {
+  constructor(filePath: string, fallbackDefaultModel: string, fallbackImageDefaultModel = '', fallbackImagePreloadDefaultOnStartup = false) {
     this.filePath = filePath;
     this.fallbackDefaultModel = fallbackDefaultModel;
+    this.fallbackImageDefaultModel = fallbackImageDefaultModel;
+    this.fallbackImagePreloadDefaultOnStartup = fallbackImagePreloadDefaultOnStartup;
   }
 
   get path(): string {
@@ -26,11 +30,24 @@ export class ConfigStore {
       const config: AppConfig = { default_model: defaultModel };
       if (typeof parsed.image_default_model === 'string') {
         config.image_default_model = parsed.image_default_model.trim();
+      } else if (this.fallbackImageDefaultModel.trim()) {
+        config.image_default_model = this.fallbackImageDefaultModel.trim();
+      }
+      if (typeof parsed.image_preload_default_on_startup === 'boolean') {
+        config.image_preload_default_on_startup = parsed.image_preload_default_on_startup;
+      } else if (this.fallbackImagePreloadDefaultOnStartup) {
+        config.image_preload_default_on_startup = true;
       }
       return config;
     } catch (error: unknown) {
       if (isNodeError(error) && error.code === 'ENOENT') {
-        const config = { default_model: this.fallbackDefaultModel };
+        const config: AppConfig = { default_model: this.fallbackDefaultModel };
+        if (this.fallbackImageDefaultModel.trim()) {
+          config.image_default_model = this.fallbackImageDefaultModel.trim();
+        }
+        if (this.fallbackImagePreloadDefaultOnStartup) {
+          config.image_preload_default_on_startup = true;
+        }
         await this.writeConfig(config);
         return config;
       }
@@ -53,10 +70,16 @@ export class ConfigStore {
     if (config.image_default_model !== undefined && typeof config.image_default_model !== 'string') {
       throw new AppError('CONFIG_WRITE_FAILED', 'image_default_model must be a string when provided', 500);
     }
+    if (config.image_preload_default_on_startup !== undefined && typeof config.image_preload_default_on_startup !== 'boolean') {
+      throw new AppError('CONFIG_WRITE_FAILED', 'image_preload_default_on_startup must be a boolean when provided', 500);
+    }
 
     const normalized: AppConfig = { default_model: config.default_model.trim() };
     if (config.image_default_model !== undefined) {
       normalized.image_default_model = config.image_default_model.trim();
+    }
+    if (config.image_preload_default_on_startup !== undefined) {
+      normalized.image_preload_default_on_startup = config.image_preload_default_on_startup;
     }
 
     const directory = path.dirname(this.filePath);
@@ -96,6 +119,13 @@ export class ConfigStore {
   async clearImageDefaultModel(): Promise<AppConfig> {
     const existing = await this.readConfig();
     const config: AppConfig = { ...existing, image_default_model: '' };
+    await this.writeConfig(config);
+    return config;
+  }
+
+  async updateImagePreloadDefaultOnStartup(enabled: boolean): Promise<AppConfig> {
+    const existing = await this.readConfig();
+    const config: AppConfig = { ...existing, image_preload_default_on_startup: enabled };
     await this.writeConfig(config);
     return config;
   }

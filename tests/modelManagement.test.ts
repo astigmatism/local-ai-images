@@ -238,3 +238,238 @@ test('model install/default endpoints honor image API auth', async () => {
     assert.equal(authorized.status, 200);
   });
 });
+
+test('ConfigStore persists image default preload-on-startup setting', async () => {
+  const store = await tempConfigStore('legacy:model');
+  await store.updateImageDefaultModel('demo.safetensors');
+  await store.updateImagePreloadDefaultOnStartup(true);
+
+  const config = await store.readConfig();
+  assert.equal(config.default_model, 'legacy:model');
+  assert.equal(config.image_default_model, 'demo.safetensors');
+  assert.equal(config.image_preload_default_on_startup, true);
+
+  const reopened = new ConfigStore(store.path, 'fallback:model');
+  assert.equal((await reopened.readConfig()).image_preload_default_on_startup, true);
+
+  await reopened.updateImagePreloadDefaultOnStartup(false);
+  assert.equal((await reopened.readConfig()).image_preload_default_on_startup, false);
+});
+
+test('GET /api/v1/models exposes default, preload, delete, missing, and loaded state', async () => {
+  const env = await tempModelRuntime();
+  const store = new ConfigStore(env.configPath, '');
+  await store.updateImageDefaultModel('missing.safetensors');
+  await store.updateImagePreloadDefaultOnStartup(true);
+
+  await withTestServer({ runtimeConfig: env.runtimeConfig, configStore: store, ollamaClient: mockOllama() }, async (baseUrl) => {
+    const missing = await (await fetch(`${baseUrl}/api/v1/models`)).json();
+    assert.equal(missing.defaultModel, 'missing.safetensors');
+    assert.equal(missing.defaultStatus.defaultFileExists, false);
+    assert.equal(missing.defaultStatus.preloadOnStartup, true);
+    assert.match(missing.defaultStatus.defaultWarning, /missing\.safetensors/);
+
+    const initialDemo = missing.models.find((model: any) => model.fileName === 'demo.safetensors');
+    assert.equal(initialDemo.isDefault, false);
+    assert.equal(initialDemo.canSetDefault, true);
+    assert.equal(initialDemo.canPreload, true);
+    assert.equal(initialDemo.canDelete, true);
+    assert.equal(initialDemo.loadedStatus, 'not_confirmed_loaded');
+    assert.equal(initialDemo.deletePreview.confirmationValue, 'demo.safetensors');
+
+    const lora = missing.models.find((model: any) => model.fileName === 'style.safetensors');
+    assert.equal(lora.canSetDefault, false);
+    assert.equal(lora.canPreload, false);
+    assert.equal(lora.loadedStatus, 'not_applicable');
+
+    const setDefault = await (await fetch(`${baseUrl}/api/v1/models/default`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'demo.safetensors', preload_on_startup: true })
+    })).json();
+    assert.equal(setDefault.ok, true);
+    assert.equal(setDefault.default_model, 'demo.safetensors');
+    assert.equal(setDefault.preload_on_startup, true);
+
+    const configured = await (await fetch(`${baseUrl}/api/v1/models`)).json();
+    const configuredDemo = configured.models.find((model: any) => model.fileName === 'demo.safetensors');
+    assert.equal(configured.defaultModel, 'demo.safetensors');
+    assert.equal(configured.preload.preloadOnStartup, true);
+    assert.equal(configuredDemo.isDefault, true);
+    assert.equal(configuredDemo.isLastConfirmedLoaded, false);
+    assert.equal(configuredDemo.loadedStatus, 'default_not_confirmed_loaded');
+
+    const generated = await (await fetch(`${baseUrl}/api/v1/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: 'generation confirms loaded checkpoint', sync_timeout_ms: 1000 })
+    })).json();
+    assert.equal(generated.ok, true);
+    assert.equal(generated.job.model, 'demo.safetensors');
+
+    const loaded = await (await fetch(`${baseUrl}/api/v1/models`)).json();
+    const loadedDemo = loaded.models.find((model: any) => model.fileName === 'demo.safetensors');
+    assert.equal(loadedDemo.isLastConfirmedLoaded, true);
+    assert.equal(loadedDemo.loadedStatus, 'last_confirmed_loaded');
+    assert.equal(loaded.preload.lastConfirmedLoadedModel, 'demo.safetensors');
+    assert.equal(loaded.preload.lastConfirmedLoadedSource, 'generation');
+  });
+});
+
+test('model preload endpoints validate input and record success and failure status', async () => {
+  const env = await tempModelRuntime();
+  const store = new ConfigStore(env.configPath, '');
+
+  await withTestServer({ runtimeConfig: env.runtimeConfig, configStore: store, ollamaClient: mockOllama() }, async (baseUrl) => {
+    const missingDefault = await fetch(`${baseUrl}/api/v1/models/preload`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    assert.equal(missingDefault.status, 422);
+    const missingDefaultBody = await missingDefault.json();
+    assert.equal(missingDefaultBody.preload.lastPreloadResult, 'failed');
+    assert.equal(missingDefaultBody.preload.lastPreloadError.code, 'MODEL_PRELOAD_MODEL_REQUIRED');
+
+    const rejectLora = await fetch(`${baseUrl}/api/v1/models/preload`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'style.safetensors' })
+    });
+    assert.equal(rejectLora.status, 422);
+
+    const invalidStartup = await fetch(`${baseUrl}/api/v1/models/preload/startup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    assert.equal(invalidStartup.status, 422);
+
+    const startup = await (await fetch(`${baseUrl}/api/v1/models/preload/startup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true })
+    })).json();
+    assert.equal(startup.ok, true);
+    assert.equal(startup.preload.preloadOnStartup, true);
+    assert.equal((await store.readConfig()).image_preload_default_on_startup, true);
+
+    const success = await (await fetch(`${baseUrl}/api/v1/models/preload`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'demo.safetensors', set_default: true })
+    })).json();
+    assert.equal(success.ok, true);
+    assert.equal(success.preload.lastPreloadResult, 'succeeded');
+    assert.equal(success.preload.lastPreloadModel, 'demo.safetensors');
+    assert.equal(success.preload.lastConfirmedLoadedModel, 'demo.safetensors');
+    assert.equal(success.preload.lastConfirmedLoadedSource, 'manual_preload');
+    assert.equal((await store.readConfig()).image_default_model, 'demo.safetensors');
+  });
+
+  const failureEnv = await tempModelRuntime({
+    imageBackend: 'comfyui',
+    imagePreloadTimeoutMs: 100,
+    comfyUiPollIntervalMs: 10
+  });
+  const unavailableServer = createServer((_request, response) => {
+    response.writeHead(503, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ error: 'not ready' }));
+  });
+  await new Promise<void>((resolve) => unavailableServer.listen(0, '127.0.0.1', resolve));
+  const address = unavailableServer.address() as AddressInfo;
+  const failureConfig = {
+    ...failureEnv.runtimeConfig,
+    comfyUiBaseUrl: `http://127.0.0.1:${address.port}`
+  };
+  const failureStore = new ConfigStore(failureEnv.configPath, '');
+  await failureStore.updateImageDefaultModel('demo.safetensors');
+
+  try {
+    await withTestServer({ runtimeConfig: failureConfig, configStore: failureStore, ollamaClient: mockOllama() }, async (baseUrl) => {
+      const failed = await fetch(`${baseUrl}/api/v1/models/preload`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      assert.notEqual(failed.status, 200);
+      const status = await (await fetch(`${baseUrl}/api/v1/models/preload`)).json();
+      assert.equal(status.lastPreloadResult, 'failed');
+      assert.ok(status.lastPreloadError.code);
+      assert.equal(status.lastPreloadModel, 'demo.safetensors');
+    });
+  } finally {
+    await new Promise<void>((resolve, reject) => unavailableServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test('safe delete endpoint validates approved paths, confirmations, default handling, and inventory refresh', async () => {
+  const env = await tempModelRuntime();
+  const unapprovedRoot = path.join(env.root, 'unapproved-models');
+  const unapprovedCheckpointDir = path.join(unapprovedRoot, 'checkpoints');
+  await fs.mkdir(unapprovedCheckpointDir, { recursive: true });
+  await fs.writeFile(path.join(unapprovedCheckpointDir, 'unsafe.safetensors'), 'unsafe');
+
+  const runtimeConfig = testRuntimeConfig({
+    ...env.runtimeConfig,
+    imageModelPaths: [...env.runtimeConfig.imageModelPaths, unapprovedRoot]
+  });
+  const store = new ConfigStore(env.configPath, '');
+
+  await withTestServer({ runtimeConfig, configStore: store, ollamaClient: mockOllama() }, async (baseUrl) => {
+    const inventory = await (await fetch(`${baseUrl}/api/v1/models`)).json();
+    const unsafe = inventory.models.find((model: any) => model.fileName === 'unsafe.safetensors');
+    assert.equal(unsafe.canDelete, false);
+
+    const missingConfirmation = await fetch(`${baseUrl}/api/v1/models/${encodeURIComponent('demo.safetensors')}`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    assert.equal(missingConfirmation.status, 422);
+
+    const wrongConfirmation = await fetch(`${baseUrl}/api/v1/models/${encodeURIComponent('demo.safetensors')}`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm_file_name: 'wrong.safetensors' })
+    });
+    assert.equal(wrongConfirmation.status, 422);
+
+    const unsafeDelete = await fetch(`${baseUrl}/api/v1/models/${encodeURIComponent('unsafe.safetensors')}`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm_file_name: 'unsafe.safetensors' })
+    });
+    assert.equal(unsafeDelete.status, 403);
+    assert.equal(await fs.readFile(path.join(unapprovedCheckpointDir, 'unsafe.safetensors'), 'utf8'), 'unsafe');
+
+    const defaultResponse = await fetch(`${baseUrl}/api/v1/models/default`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'demo.safetensors' })
+    });
+    assert.equal(defaultResponse.status, 200);
+
+    const blockedDefaultDelete = await fetch(`${baseUrl}/api/v1/models/${encodeURIComponent('demo.safetensors')}`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm_file_name: 'demo.safetensors' })
+    });
+    assert.equal(blockedDefaultDelete.status, 409);
+    assert.equal(await fs.readFile(path.join(env.checkpointDir, 'demo.safetensors'), 'utf8'), 'demo');
+
+    const deleted = await (await fetch(`${baseUrl}/api/v1/models/${encodeURIComponent('demo.safetensors')}`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm_file_name: 'demo.safetensors', delete_and_clear_default: true })
+    })).json();
+    assert.equal(deleted.ok, true);
+    assert.equal(deleted.clearedDefault, true);
+    await assert.rejects(fs.stat(path.join(env.checkpointDir, 'demo.safetensors')), /ENOENT/);
+    assert.equal((await store.readConfig()).image_default_model, '');
+    assert.equal(deleted.inventory.models.some((model: any) => model.fileName === 'demo.safetensors'), false);
+
+    const refreshed = await (await fetch(`${baseUrl}/api/v1/models`)).json();
+    assert.equal(refreshed.models.some((model: any) => model.fileName === 'demo.safetensors'), false);
+  });
+});

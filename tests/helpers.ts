@@ -47,7 +47,15 @@ export function testRuntimeConfig(overrides: Partial<RuntimeConfig> = {}): Runti
     imageWorkflowPath: '/tmp/local-ai-images-workflows',
     imageArtifactPath: '/tmp/local-ai-images-artifacts',
     imageArtifactPublicBaseUrl: '/api/v1/artifacts',
+    imageDefaultModel: '',
     imageDefaultWorkflowId: 'sdxl-text-to-image',
+    imagePreloadDefaultOnStartup: false,
+    imagePreloadTimeoutMs: 1000,
+    imagePreloadWorkflowId: 'sdxl-text-to-image',
+    imagePreloadWidth: 512,
+    imagePreloadHeight: 512,
+    imagePreloadSteps: 1,
+    imagePreloadKeepArtifact: false,
     imageQueueConcurrency: 1,
     imageMaxQueuedJobs: 8,
     imageDefaultSyncTimeoutMs: 0,
@@ -141,7 +149,12 @@ export async function withTestServer(dependencies: {
   imageRuntime?: ImageRuntime;
 }, fn: (baseUrl: string) => Promise<void>): Promise<void> {
   const runtimeConfig = dependencies.runtimeConfig ?? testRuntimeConfig();
-  const configStore = await (dependencies.configStore ?? tempConfigStore(runtimeConfig.defaultModel));
+  const configStore = await (dependencies.configStore ?? new ConfigStore(
+    path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'local-ai-images-')), 'config.json'),
+    runtimeConfig.defaultModel,
+    runtimeConfig.imageDefaultModel,
+    runtimeConfig.imagePreloadDefaultOnStartup
+  ));
   const ollamaClient = dependencies.ollamaClient ?? mockOllama();
   const gpuService = dependencies.gpuService ?? mockGpuService();
   const logger = createLogger('silent');

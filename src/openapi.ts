@@ -57,6 +57,22 @@ const generationRequestSchema = {
   }
 } as const;
 
+const deletePreviewSchema = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    fileName: { type: 'string' },
+    type: { type: 'string' },
+    sizeBytes: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    path: { type: 'string' },
+    requiresConfirmation: { type: 'boolean' },
+    confirmationField: { type: 'string' },
+    confirmationValue: { type: 'string' },
+    isDefault: { type: 'boolean' },
+    deleteRequiresDefaultClear: { type: 'boolean' }
+  }
+} as const;
+
 const modelSchema = {
   type: 'object',
   additionalProperties: true,
@@ -75,7 +91,51 @@ const modelSchema = {
     modifiedAt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     extension: { type: 'string' },
     isDefault: { type: 'boolean' },
-    usableByDefaultWorkflow: { type: 'boolean' }
+    isLastConfirmedLoaded: { type: 'boolean' },
+    canSetDefault: { type: 'boolean' },
+    canPreload: { type: 'boolean' },
+    canDelete: { type: 'boolean' },
+    deleteRequiresDefaultClear: { type: 'boolean' },
+    defaultWarning: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    loadedStatus: { enum: ['last_confirmed_loaded', 'default_not_confirmed_loaded', 'not_confirmed_loaded', 'not_applicable'] },
+    usableByDefaultWorkflow: { type: 'boolean' },
+    deletePreview: deletePreviewSchema
+  }
+} as const;
+
+const modelPreloadStatusSchema = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    ok: { const: true },
+    currentDefaultCheckpoint: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    defaultModel: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    defaultFileExists: { oneOf: [{ type: 'boolean' }, { type: 'null' }] },
+    preloadOnStartup: { type: 'boolean' },
+    lastPreloadAttemptTime: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    lastPreloadCompletedTime: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    lastPreloadResult: { enum: ['not_attempted', 'running', 'succeeded', 'failed', 'skipped'] },
+    lastPreloadError: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
+    lastPreloadModel: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    lastConfirmedLoadedModel: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    lastConfirmedLoadedAt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    lastConfirmedLoadedSource: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    active: { type: 'boolean' },
+    defaultWarning: { oneOf: [{ type: 'string' }, { type: 'null' }] }
+  }
+} as const;
+
+const modelInventoryResponseSchema = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    ok: { const: true },
+    defaultModel: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    default_model: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    defaultWorkflowId: { type: 'string' },
+    defaultStatus: modelPreloadStatusSchema,
+    preload: modelPreloadStatusSchema,
+    models: { type: 'array', items: modelSchema }
   }
 } as const;
 
@@ -193,6 +253,44 @@ const modelDownloadJobSchema = {
   }
 } as const;
 
+const modelDefaultRequestSchema = {
+  type: 'object',
+  required: ['model'],
+  additionalProperties: false,
+  properties: {
+    model: { type: 'string' },
+    preload_on_startup: { type: 'boolean', description: 'When true, also enables default checkpoint preload during future app startup.' }
+  }
+} as const;
+
+const modelPreloadRequestSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    model: { type: 'string', description: 'Checkpoint identifier or filename. If omitted, the current default checkpoint is preloaded.' },
+    set_default: { type: 'boolean', description: 'When true, persist the checkpoint as image_default_model before preloading.' }
+  }
+} as const;
+
+const modelPreloadStartupRequestSchema = {
+  type: 'object',
+  required: ['enabled'],
+  additionalProperties: false,
+  properties: {
+    enabled: { type: 'boolean' }
+  }
+} as const;
+
+const deleteModelRequestSchema = {
+  type: 'object',
+  required: ['confirm_file_name'],
+  additionalProperties: false,
+  properties: {
+    confirm_file_name: { type: 'string', description: 'Exact file name from the model row/card delete preview.' },
+    delete_and_clear_default: { type: 'boolean', description: 'Required when deleting the current default checkpoint without clearing it first.' }
+  }
+} as const;
+
 const bearerSecurity = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 const authErrorResponses = {
   '401': { description: 'Image API authentication failed', content: { 'application/json': { schema: errorSchema } } },
@@ -220,6 +318,9 @@ export function buildOpenApiDocument() {
         Gpu: gpuSchema,
         GenerationRequest: generationRequestSchema,
         Model: modelSchema,
+        ModelInventoryResponse: modelInventoryResponseSchema,
+        ModelPreloadStatus: modelPreloadStatusSchema,
+        DeleteModelRequest: deleteModelRequestSchema,
         Job: jobSchema,
         JobTimings: timingSchema,
         Artifact: artifactSchema,
@@ -240,14 +341,14 @@ export function buildOpenApiDocument() {
         get: {
           summary: 'Image API health',
           security: bearerSecurity,
-          responses: { '200': { description: 'Image service, ComfyUI/mock provider, queue, workflow, model-path, default-model, install, auth, and GPU state' }, ...authErrorResponses }
+          responses: { '200': { description: 'Image service, ComfyUI/mock provider, queue, workflow, model-path, default-model, install, preload, auth, and GPU state' }, ...authErrorResponses }
         }
       },
       '/api/v1/capabilities': {
         get: {
           summary: 'Image API capabilities',
           security: bearerSecurity,
-          responses: { '200': { description: 'Supported image-generation, default-model, model-install, and workflow features' }, ...authErrorResponses }
+          responses: { '200': { description: 'Supported image-generation, default-model, model-lifecycle, model-install, and workflow features' }, ...authErrorResponses }
         }
       },
       '/api/v1/stats': {
@@ -260,9 +361,10 @@ export function buildOpenApiDocument() {
       '/api/v1/models': {
         get: {
           summary: 'Scanned local image model inventory',
+          description: 'Returns disk inventory plus UI-ready lifecycle state such as default, canPreload, canDelete, and last confirmed loaded/prewarmed flags. Scanning does not load a model into VRAM.',
           security: bearerSecurity,
           responses: {
-            '200': { description: 'Model files discovered under IMAGE_MODEL_PATHS, annotated with default and workflow compatibility flags', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, defaultModel: { oneOf: [{ type: 'string' }, { type: 'null' }] }, models: { type: 'array', items: modelSchema } } } } } },
+            '200': { description: 'Model files discovered under IMAGE_MODEL_PATHS with default/preload/delete state', content: { 'application/json': { schema: modelInventoryResponseSchema } } },
             ...authErrorResponses
           }
         }
@@ -271,20 +373,53 @@ export function buildOpenApiDocument() {
         post: {
           summary: 'Refresh local image model inventory',
           security: bearerSecurity,
-          responses: { '200': { description: 'Refreshed model inventory' }, ...authErrorResponses }
+          responses: { '200': { description: 'Refreshed model inventory', content: { 'application/json': { schema: modelInventoryResponseSchema } } }, ...authErrorResponses }
         }
       },
       '/api/v1/models/default': {
         post: {
           summary: 'Set the default image checkpoint model',
+          description: 'Persists image_default_model. This does not mark the model loaded; use /api/v1/models/preload or generate an image to confirm load/prewarm.',
           security: bearerSecurity,
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['model'], properties: { model: { type: 'string' } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: modelDefaultRequestSchema } } },
           responses: { '200': { description: 'Persisted image_default_model and refreshed inventory' }, '404': { description: 'Model not found', content: { 'application/json': { schema: errorSchema } } }, '422': { description: 'Model is not an installed checkpoint' }, ...authErrorResponses }
         },
         delete: {
           summary: 'Clear the default image checkpoint model',
           security: bearerSecurity,
           responses: { '200': { description: 'Cleared persisted image_default_model and returned refreshed inventory' }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/models/preload': {
+        get: {
+          summary: 'Read default checkpoint preload status',
+          security: bearerSecurity,
+          responses: { '200': { description: 'Default, startup preload, and last confirmed loaded/prewarmed state', content: { 'application/json': { schema: modelPreloadStatusSchema } } }, ...authErrorResponses }
+        },
+        post: {
+          summary: 'Load/prewarm a checkpoint in ComfyUI now',
+          description: 'Submits a bounded tiny generation request using the preload workflow. On success the checkpoint is recorded as the last confirmed loaded/prewarmed model.',
+          security: bearerSecurity,
+          requestBody: { required: false, content: { 'application/json': { schema: modelPreloadRequestSchema } } },
+          responses: { '200': { description: 'Preload succeeded and inventory was refreshed' }, '404': { description: 'Model not found', content: { 'application/json': { schema: errorSchema } } }, '422': { description: 'Missing model/default, non-checkpoint model, or invalid workflow mapping' }, '503': { description: 'ComfyUI unavailable' }, '504': { description: 'Preload timed out' }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/models/preload/startup': {
+        post: {
+          summary: 'Enable or disable default checkpoint preload on app startup',
+          security: bearerSecurity,
+          requestBody: { required: true, content: { 'application/json': { schema: modelPreloadStartupRequestSchema } } },
+          responses: { '200': { description: 'Persisted startup preload setting and returned refreshed status/inventory' }, '422': { description: 'enabled must be true or false' }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/models/{modelId}': {
+        delete: {
+          summary: 'Safely delete one installed model file',
+          description: 'Deletes only files inside approved ComfyUI model directories. Requires exact file-name confirmation and blocks deleting the current default unless delete_and_clear_default=true is sent.',
+          security: bearerSecurity,
+          parameters: [{ name: 'modelId', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: deleteModelRequestSchema } } },
+          responses: { '200': { description: 'Deleted model file and refreshed inventory' }, '403': { description: 'Path is outside approved model install directories', content: { 'application/json': { schema: errorSchema } } }, '404': { description: 'Model not found', content: { 'application/json': { schema: errorSchema } } }, '409': { description: 'Model is the current default and was not explicitly cleared' }, '422': { description: 'Missing or mismatched delete confirmation' }, ...authErrorResponses }
         }
       },
       '/api/v1/model-catalog': {
@@ -303,7 +438,7 @@ export function buildOpenApiDocument() {
         },
         post: {
           summary: 'Start a streamed model download/install job',
-          description: 'Downloads are streamed by Node/fetch to a .part file under an approved model directory, then atomically renamed on success.',
+          description: 'Downloads are streamed by Node/fetch to a .part file under an approved model directory, then atomically renamed on success. Checkpoint downloads can set the persisted default model.',
           security: bearerSecurity,
           requestBody: { required: true, content: { 'application/json': { schema: modelDownloadRequestSchema } } },
           responses: { '202': { description: 'Download job queued', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, job: modelDownloadJobSchema } } } } }, '409': { description: 'Destination file exists and overwrite was not requested' }, '422': { description: 'Invalid URL, filename, extension, or destination' }, ...authErrorResponses }
@@ -343,6 +478,7 @@ export function buildOpenApiDocument() {
       '/api/v1/generate': {
         post: {
           summary: 'Submit an image-generation job',
+          description: 'If model is omitted and a compatible image_default_model exists, that default checkpoint is sent to ComfyUI. Successful generations update last confirmed loaded/prewarmed model state.',
           security: bearerSecurity,
           requestBody: { required: true, content: { 'application/json': { schema: generationRequestSchema } } },
           responses: { '200': { description: 'Job completed within sync timeout and result is included' }, '202': { description: 'Job queued or running; poll the job/result URLs' }, '422': { description: 'Invalid generation request' }, '503': { description: 'Image generation is disabled' }, ...authErrorResponses }

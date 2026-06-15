@@ -21,6 +21,7 @@ interface QueueItem {
 }
 
 type Waiter = (job: ImageJob) => void;
+type JobCompletionObserver = (job: ImageJob) => void;
 
 export class ImageJobQueue {
   private readonly provider: ImageGenerationProvider;
@@ -28,6 +29,7 @@ export class ImageJobQueue {
   private readonly concurrency: number;
   private readonly maxQueuedJobs: number;
   private readonly logger: Logger;
+  private readonly onJobCompleted?: JobCompletionObserver;
   private readonly jobs = new Map<string, ImageJob>();
   private readonly queue: QueueItem[] = [];
   private readonly controllers = new Map<string, AbortController>();
@@ -40,12 +42,14 @@ export class ImageJobQueue {
     concurrency: number;
     maxQueuedJobs: number;
     logger: Logger;
+    onJobCompleted?: JobCompletionObserver;
   }) {
     this.provider = options.provider;
     this.artifactStore = options.artifactStore;
     this.concurrency = options.concurrency;
     this.maxQueuedJobs = options.maxQueuedJobs;
     this.logger = options.logger;
+    this.onJobCompleted = options.onJobCompleted;
   }
 
   submit(request: NormalizedGenerationRequest, workflow: WorkflowPreset): ImageJob {
@@ -246,6 +250,7 @@ export class ImageJobQueue {
     job.metadata = metadata;
     job.completedAt = now;
     job.updatedAt = now;
+    this.onJobCompleted?.(cloneJob(job));
     this.notify(job);
   }
 

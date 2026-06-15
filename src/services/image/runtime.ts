@@ -7,6 +7,7 @@ import { ImageJobQueue } from './jobQueue.ts';
 import { MockImageProvider } from './mockProvider.ts';
 import { ModelCatalog } from './modelCatalog.ts';
 import { ModelInstaller } from './modelInstaller.ts';
+import { ModelLifecycleManager } from './modelLifecycle.ts';
 import { ModelScanner } from './modelScanner.ts';
 import { WorkflowStore } from './workflowStore.ts';
 
@@ -17,10 +18,11 @@ export interface ImageRuntime {
   artifactStore: ArtifactStore;
   jobQueue: ImageJobQueue;
   modelCatalog: ModelCatalog;
+  modelLifecycle: ModelLifecycleManager;
   modelInstaller?: ModelInstaller;
 }
 
-export function createImageRuntime(runtimeConfig: RuntimeConfig, logger: Logger, configStore?: ConfigStore): ImageRuntime {
+export function createImageRuntime(runtimeConfig: RuntimeConfig, logger: Logger, configStore: ConfigStore): ImageRuntime {
   const provider = runtimeConfig.imageBackend === 'mock'
     ? new MockImageProvider(runtimeConfig.imageMockDelayMs)
     : new ComfyUiProvider(runtimeConfig.comfyUiBaseUrl, runtimeConfig.comfyUiRequestTimeoutMs, runtimeConfig.comfyUiPollIntervalMs);
@@ -28,6 +30,15 @@ export function createImageRuntime(runtimeConfig: RuntimeConfig, logger: Logger,
   const artifactStore = new ArtifactStore(runtimeConfig.imageArtifactPath, runtimeConfig.imageArtifactPublicBaseUrl);
   const modelScanner = new ModelScanner(runtimeConfig.imageModelPaths);
   const workflowStore = new WorkflowStore(runtimeConfig.imageWorkflowPath, runtimeConfig.imageDefaultWorkflowId);
+  const modelLifecycle = new ModelLifecycleManager({
+    runtimeConfig,
+    configStore,
+    provider,
+    modelScanner,
+    workflowStore,
+    artifactStore,
+    logger
+  });
   const runtime: ImageRuntime = {
     provider,
     modelScanner,
@@ -38,14 +49,18 @@ export function createImageRuntime(runtimeConfig: RuntimeConfig, logger: Logger,
       artifactStore,
       concurrency: runtimeConfig.imageQueueConcurrency,
       maxQueuedJobs: runtimeConfig.imageMaxQueuedJobs,
-      logger
+      logger,
+      onJobCompleted: (job) => {
+        if (job.status === 'succeeded') {
+          modelLifecycle.recordConfirmedLoaded(job.model, 'generation');
+        }
+      }
     }),
-    modelCatalog: new ModelCatalog(runtimeConfig.modelCatalogPath)
+    modelCatalog: new ModelCatalog(runtimeConfig.modelCatalogPath),
+    modelLifecycle
   };
 
-  if (configStore) {
-    runtime.modelInstaller = new ModelInstaller({ runtimeConfig, modelScanner, configStore, logger });
-  }
+  runtime.modelInstaller = new ModelInstaller({ runtimeConfig, modelScanner, configStore, logger });
 
   return runtime;
 }

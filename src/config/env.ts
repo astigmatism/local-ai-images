@@ -140,6 +140,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
   const artifactPublicBaseUrl = readOptionalString('IMAGE_ARTIFACT_PUBLIC_BASE_URL') || '/api/v1/artifacts';
   const legacyOllamaEnabled = readBoolean('LEGACY_OLLAMA_ENABLED', false);
   const imageModelPaths = readPathList('IMAGE_MODEL_PATHS', ['./models']);
+  const imageDefaultWorkflowId = readString('IMAGE_DEFAULT_WORKFLOW_ID', 'sdxl-text-to-image');
   const modelRoot = imageModelPaths[0] ?? path.resolve(process.cwd(), './models');
   const modelInstallDirectories: Record<ModelInstallType, string> = {
     checkpoint: readPath('COMFYUI_CHECKPOINT_PATH', path.join(modelRoot, 'checkpoints')),
@@ -177,7 +178,15 @@ export function loadRuntimeConfig(): RuntimeConfig {
     imageWorkflowPath: readPath('IMAGE_WORKFLOW_PATH', './config/workflows'),
     imageArtifactPath: artifactPath,
     imageArtifactPublicBaseUrl: normalizeBaseUrl(artifactPublicBaseUrl),
-    imageDefaultWorkflowId: readString('IMAGE_DEFAULT_WORKFLOW_ID', 'sdxl-text-to-image'),
+    imageDefaultModel: readOptionalString('IMAGE_DEFAULT_MODEL'),
+    imageDefaultWorkflowId,
+    imagePreloadDefaultOnStartup: readBoolean('IMAGE_PRELOAD_DEFAULT_ON_STARTUP', false),
+    imagePreloadTimeoutMs: readNumber('IMAGE_PRELOAD_TIMEOUT_MS', 120000),
+    imagePreloadWorkflowId: readString('IMAGE_PRELOAD_WORKFLOW_ID', imageDefaultWorkflowId),
+    imagePreloadWidth: readPositiveInteger('IMAGE_PRELOAD_WIDTH', 512),
+    imagePreloadHeight: readPositiveInteger('IMAGE_PRELOAD_HEIGHT', 512),
+    imagePreloadSteps: readPositiveInteger('IMAGE_PRELOAD_STEPS', 1),
+    imagePreloadKeepArtifact: readBoolean('IMAGE_PRELOAD_KEEP_ARTIFACT', false),
     imageQueueConcurrency: readPositiveInteger('IMAGE_QUEUE_CONCURRENCY', 1),
     imageMaxQueuedJobs: readPositiveInteger('IMAGE_MAX_QUEUED_JOBS', 32),
     imageDefaultSyncTimeoutMs: readNumber('IMAGE_DEFAULT_SYNC_TIMEOUT_MS', 0),

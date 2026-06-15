@@ -31,7 +31,15 @@ export interface RuntimeConfig {
   imageWorkflowPath: string;
   imageArtifactPath: string;
   imageArtifactPublicBaseUrl: string;
+  imageDefaultModel: string;
   imageDefaultWorkflowId: string;
+  imagePreloadDefaultOnStartup: boolean;
+  imagePreloadTimeoutMs: number;
+  imagePreloadWorkflowId: string;
+  imagePreloadWidth: number;
+  imagePreloadHeight: number;
+  imagePreloadSteps: number;
+  imagePreloadKeepArtifact: boolean;
   imageQueueConcurrency: number;
   imageMaxQueuedJobs: number;
   imageDefaultSyncTimeoutMs: number;
@@ -50,6 +58,7 @@ export interface RuntimeConfig {
 export interface AppConfig {
   default_model: string;
   image_default_model?: string;
+  image_preload_default_on_startup?: boolean;
 }
 
 
