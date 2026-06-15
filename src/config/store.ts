@@ -23,7 +23,11 @@ export class ConfigStore {
       const defaultModel = typeof parsed.default_model === 'string'
         ? parsed.default_model.trim()
         : this.fallbackDefaultModel;
-      return { default_model: defaultModel };
+      const config: AppConfig = { default_model: defaultModel };
+      if (typeof parsed.image_default_model === 'string') {
+        config.image_default_model = parsed.image_default_model.trim();
+      }
+      return config;
     } catch (error: unknown) {
       if (isNodeError(error) && error.code === 'ENOENT') {
         const config = { default_model: this.fallbackDefaultModel };
@@ -46,8 +50,15 @@ export class ConfigStore {
     if (typeof config.default_model !== 'string') {
       throw new AppError('CONFIG_WRITE_FAILED', 'default_model must be a string', 500);
     }
+    if (config.image_default_model !== undefined && typeof config.image_default_model !== 'string') {
+      throw new AppError('CONFIG_WRITE_FAILED', 'image_default_model must be a string when provided', 500);
+    }
 
     const normalized: AppConfig = { default_model: config.default_model.trim() };
+    if (config.image_default_model !== undefined) {
+      normalized.image_default_model = config.image_default_model.trim();
+    }
+
     const directory = path.dirname(this.filePath);
     const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
 
@@ -69,7 +80,22 @@ export class ConfigStore {
   }
 
   async updateDefaultModel(model: string): Promise<AppConfig> {
-    const config = { default_model: model.trim() };
+    const existing = await this.readConfig().catch(() => ({ default_model: this.fallbackDefaultModel }));
+    const config: AppConfig = { ...existing, default_model: model.trim() };
+    await this.writeConfig(config);
+    return config;
+  }
+
+  async updateImageDefaultModel(model: string): Promise<AppConfig> {
+    const existing = await this.readConfig();
+    const config: AppConfig = { ...existing, image_default_model: model.trim() };
+    await this.writeConfig(config);
+    return config;
+  }
+
+  async clearImageDefaultModel(): Promise<AppConfig> {
+    const existing = await this.readConfig();
+    const config: AppConfig = { ...existing, image_default_model: '' };
     await this.writeConfig(config);
     return config;
   }

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ImageBackendName, RuntimeConfig } from '../types.ts';
+import type { ImageBackendName, ModelInstallType, RuntimeConfig } from '../types.ts';
 
 loadDotEnvFile(path.resolve(process.cwd(), '.env'));
 
@@ -139,10 +139,20 @@ export function loadRuntimeConfig(): RuntimeConfig {
   const artifactPath = readPath('IMAGE_ARTIFACT_PATH', './data/artifacts');
   const artifactPublicBaseUrl = readOptionalString('IMAGE_ARTIFACT_PUBLIC_BASE_URL') || '/api/v1/artifacts';
   const legacyOllamaEnabled = readBoolean('LEGACY_OLLAMA_ENABLED', false);
+  const imageModelPaths = readPathList('IMAGE_MODEL_PATHS', ['./models']);
+  const modelRoot = imageModelPaths[0] ?? path.resolve(process.cwd(), './models');
+  const modelInstallDirectories: Record<ModelInstallType, string> = {
+    checkpoint: readPath('COMFYUI_CHECKPOINT_PATH', path.join(modelRoot, 'checkpoints')),
+    lora: readPath('COMFYUI_LORA_PATH', path.join(modelRoot, 'loras')),
+    vae: readPath('COMFYUI_VAE_PATH', path.join(modelRoot, 'vae')),
+    controlnet: readPath('COMFYUI_CONTROLNET_PATH', path.join(modelRoot, 'controlnet')),
+    upscaler: readPath('COMFYUI_UPSCALER_PATH', path.join(modelRoot, 'upscale_models')),
+    other: readPath('COMFYUI_OTHER_MODEL_PATH', modelRoot)
+  };
 
   return {
     host: readString('HOST', '0.0.0.0'),
-    port: readNumber('PORT', 8000),
+    port: readNumber('PORT', 3000),
     legacyOllamaEnabled,
     ollamaBaseUrl: normalizeBaseUrl(legacyOllamaEnabled ? readString('OLLAMA_BASE_URL', 'http://127.0.0.1:11434') : readOptionalString('OLLAMA_BASE_URL')),
     ollamaRequestTimeoutMs: readNumber('OLLAMA_REQUEST_TIMEOUT_MS', 30000),
@@ -163,7 +173,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
     comfyUiBaseUrl: normalizeBaseUrl(readString('COMFYUI_BASE_URL', 'http://127.0.0.1:8188')),
     comfyUiRequestTimeoutMs: readNumber('COMFYUI_REQUEST_TIMEOUT_MS', 600000),
     comfyUiPollIntervalMs: readNumber('COMFYUI_POLL_INTERVAL_MS', 1000),
-    imageModelPaths: readPathList('IMAGE_MODEL_PATHS', ['./models']),
+    imageModelPaths,
     imageWorkflowPath: readPath('IMAGE_WORKFLOW_PATH', './config/workflows'),
     imageArtifactPath: artifactPath,
     imageArtifactPublicBaseUrl: normalizeBaseUrl(artifactPublicBaseUrl),
@@ -172,6 +182,13 @@ export function loadRuntimeConfig(): RuntimeConfig {
     imageMaxQueuedJobs: readPositiveInteger('IMAGE_MAX_QUEUED_JOBS', 32),
     imageDefaultSyncTimeoutMs: readNumber('IMAGE_DEFAULT_SYNC_TIMEOUT_MS', 0),
     imageMaxSyncTimeoutMs: readNumber('IMAGE_MAX_SYNC_TIMEOUT_MS', 120000),
-    imageMockDelayMs: readNumber('IMAGE_MOCK_DELAY_MS', 25)
+    imageMockDelayMs: readNumber('IMAGE_MOCK_DELAY_MS', 25),
+
+    modelInstallsEnabled: readBoolean('MODEL_INSTALLS_ENABLED', false),
+    modelInstallMaxBytes: readNumber('MODEL_INSTALL_MAX_BYTES', 20 * 1024 * 1024 * 1024),
+    modelInstallAllowCkpt: readBoolean('MODEL_INSTALL_ALLOW_CKPT', false),
+    modelCatalogPath: readPath('MODEL_CATALOG_PATH', './config/model-catalog.json'),
+    modelDownloadMetadataPath: readPath('MODEL_DOWNLOAD_METADATA_PATH', path.join(path.dirname(configPath), 'model-downloads.json')),
+    modelInstallDirectories
   };
 }

@@ -1,0 +1,73 @@
+import type { ImageJob, JobTimingMetrics, NormalizedGenerationRequest } from '../types.ts';
+
+export interface JobMetricInput {
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  request: Pick<NormalizedGenerationRequest, 'steps'>;
+}
+
+export function calculateJobTimings(job: JobMetricInput): JobTimingMetrics {
+  const created = Date.parse(job.createdAt);
+  const started = job.startedAt ? Date.parse(job.startedAt) : Number.NaN;
+  const completed = job.completedAt ? Date.parse(job.completedAt) : Number.NaN;
+
+  const queueWaitMs = Number.isFinite(created) && Number.isFinite(started)
+    ? Math.max(0, started - created)
+    : null;
+  const executionMs = Number.isFinite(started) && Number.isFinite(completed)
+    ? Math.max(0, completed - started)
+    : null;
+  const totalMs = Number.isFinite(created) && Number.isFinite(completed)
+    ? Math.max(0, completed - created)
+    : null;
+
+  const steps = job.request.steps;
+  const executionSeconds = executionMs !== null ? executionMs / 1000 : null;
+  const secondsPerStep = executionSeconds !== null && steps > 0
+    ? executionSeconds / steps
+    : null;
+  const stepsPerSecond = executionSeconds !== null && executionSeconds > 0
+    ? steps / executionSeconds
+    : null;
+
+  return {
+    queueWaitMs,
+    executionMs,
+    totalMs,
+    secondsPerStep,
+    stepsPerSecond
+  };
+}
+
+export function summarizeImageJob(job: ImageJob) {
+  return {
+    id: job.id,
+    status: job.status,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    queuedAt: job.queuedAt,
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+    provider: job.provider,
+    providerJobId: job.providerJobId,
+    workflowId: job.workflowId,
+    model: job.model,
+    prompt: job.request.prompt,
+    negativePrompt: job.request.negativePrompt,
+    seed: job.request.seed,
+    width: job.request.width,
+    height: job.request.height,
+    steps: job.request.steps,
+    cfgScale: job.request.cfgScale,
+    samplerName: job.request.samplerName,
+    scheduler: job.request.scheduler,
+    output: job.request.output,
+    artifactCount: job.artifacts.length,
+    artifactSizes: job.artifacts.map((artifact) => artifact.sizeBytes),
+    request: job.request,
+    metadata: job.metadata,
+    timings: calculateJobTimings(job),
+    error: job.error ? { ...job.error } : null
+  };
+}

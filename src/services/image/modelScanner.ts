@@ -13,10 +13,18 @@ const TYPE_HINTS: Array<[string, string]> = [
   ['controlnets', 'controlnet'],
   ['embeddings', 'embedding'],
   ['textual_inversion', 'embedding'],
-  ['upscale_models', 'upscale'],
-  ['upscalers', 'upscale'],
+  ['upscale_models', 'upscaler'],
+  ['upscalers', 'upscaler'],
   ['clip', 'clip']
 ];
+
+const TYPE_ROOT_NAMES: Record<string, string[]> = {
+  checkpoint: ['checkpoints', 'checkpoint'],
+  lora: ['loras', 'lora'],
+  vae: ['vae'],
+  controlnet: ['controlnet', 'controlnets'],
+  upscaler: ['upscale_models', 'upscalers']
+};
 
 export class ModelScanner {
   private readonly modelPaths: string[];
@@ -42,7 +50,7 @@ export class ModelScanner {
       await scanDirectory(absoluteRoot, absoluteRoot, models);
     }
 
-    models.sort((left, right) => left.type.localeCompare(right.type) || left.name.localeCompare(right.name));
+    models.sort((left, right) => left.type.localeCompare(right.type) || left.displayName.localeCompare(right.displayName));
 
     this.cachedInventory = {
       ok: true,
@@ -87,12 +95,21 @@ async function scanDirectory(rootPath: string, directoryPath: string, output: Mo
     }
 
     const relativePath = path.relative(rootPath, fullPath).split(path.sep).join('/');
+    const fileName = path.basename(entry.name);
+    const type = inferModelType(relativePath);
+    const displayName = path.basename(entry.name, extension);
+    const comfyName = comfyNameForType(relativePath, fileName, type);
     output.push({
       id: stableModelId(relativePath),
-      name: path.basename(entry.name, extension),
-      type: inferModelType(relativePath),
+      name: displayName,
+      displayName,
+      fileName,
+      type,
+      category: type,
       path: fullPath,
+      rootPath,
       relativePath,
+      comfyName,
       sizeBytes: stat.size,
       modifiedAt: stat.mtime.toISOString(),
       extension
@@ -106,6 +123,15 @@ function inferModelType(relativePath: string): string {
     if (lower.split('/').includes(needle)) return type;
   }
   return 'model';
+}
+
+function comfyNameForType(relativePath: string, fileName: string, type: string): string {
+  const segments = relativePath.split('/').filter(Boolean);
+  const roots = TYPE_ROOT_NAMES[type] ?? [];
+  if (segments.length > 1 && roots.includes(segments[0]!.toLowerCase())) {
+    return segments.slice(1).join('/');
+  }
+  return segments.length > 0 ? segments.join('/') : fileName;
 }
 
 function stableModelId(relativePath: string): string {

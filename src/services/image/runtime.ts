@@ -1,9 +1,12 @@
+import type { ConfigStore } from '../../config/store.ts';
 import type { Logger } from '../../logger.ts';
 import type { ImageGenerationProvider, RuntimeConfig } from '../../types.ts';
 import { ArtifactStore } from './artifactStore.ts';
 import { ComfyUiProvider } from './comfyUiProvider.ts';
 import { ImageJobQueue } from './jobQueue.ts';
 import { MockImageProvider } from './mockProvider.ts';
+import { ModelCatalog } from './modelCatalog.ts';
+import { ModelInstaller } from './modelInstaller.ts';
 import { ModelScanner } from './modelScanner.ts';
 import { WorkflowStore } from './workflowStore.ts';
 
@@ -13,19 +16,22 @@ export interface ImageRuntime {
   workflowStore: WorkflowStore;
   artifactStore: ArtifactStore;
   jobQueue: ImageJobQueue;
+  modelCatalog: ModelCatalog;
+  modelInstaller?: ModelInstaller;
 }
 
-export function createImageRuntime(runtimeConfig: RuntimeConfig, logger: Logger): ImageRuntime {
+export function createImageRuntime(runtimeConfig: RuntimeConfig, logger: Logger, configStore?: ConfigStore): ImageRuntime {
   const provider = runtimeConfig.imageBackend === 'mock'
     ? new MockImageProvider(runtimeConfig.imageMockDelayMs)
     : new ComfyUiProvider(runtimeConfig.comfyUiBaseUrl, runtimeConfig.comfyUiRequestTimeoutMs, runtimeConfig.comfyUiPollIntervalMs);
 
   const artifactStore = new ArtifactStore(runtimeConfig.imageArtifactPath, runtimeConfig.imageArtifactPublicBaseUrl);
-
-  return {
+  const modelScanner = new ModelScanner(runtimeConfig.imageModelPaths);
+  const workflowStore = new WorkflowStore(runtimeConfig.imageWorkflowPath, runtimeConfig.imageDefaultWorkflowId);
+  const runtime: ImageRuntime = {
     provider,
-    modelScanner: new ModelScanner(runtimeConfig.imageModelPaths),
-    workflowStore: new WorkflowStore(runtimeConfig.imageWorkflowPath, runtimeConfig.imageDefaultWorkflowId),
+    modelScanner,
+    workflowStore,
     artifactStore,
     jobQueue: new ImageJobQueue({
       provider,
@@ -33,6 +39,13 @@ export function createImageRuntime(runtimeConfig: RuntimeConfig, logger: Logger)
       concurrency: runtimeConfig.imageQueueConcurrency,
       maxQueuedJobs: runtimeConfig.imageMaxQueuedJobs,
       logger
-    })
+    }),
+    modelCatalog: new ModelCatalog(runtimeConfig.modelCatalogPath)
   };
+
+  if (configStore) {
+    runtime.modelInstaller = new ModelInstaller({ runtimeConfig, modelScanner, configStore, logger });
+  }
+
+  return runtime;
 }

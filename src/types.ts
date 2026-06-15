@@ -1,6 +1,8 @@
 export type ImageBackendName = 'comfyui' | 'mock';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
 export type OutputDelivery = 'metadata' | 'url' | 'base64' | 'binary';
+export type ModelInstallType = 'checkpoint' | 'lora' | 'vae' | 'controlnet' | 'upscaler' | 'other';
+export type ModelDownloadStatus = 'queued' | 'downloading' | 'succeeded' | 'failed' | 'canceled';
 
 export interface RuntimeConfig {
   host: string;
@@ -35,11 +37,21 @@ export interface RuntimeConfig {
   imageDefaultSyncTimeoutMs: number;
   imageMaxSyncTimeoutMs: number;
   imageMockDelayMs: number;
+
+  modelInstallsEnabled: boolean;
+  modelInstallMaxBytes: number;
+  modelInstallAllowCkpt: boolean;
+  modelCatalogPath: string;
+  modelDownloadMetadataPath: string;
+  modelInstallDirectories: Record<ModelInstallType, string>;
 }
+
 
 export interface AppConfig {
   default_model: string;
+  image_default_model?: string;
 }
+
 
 export interface OllamaModelDetails {
   parent_model?: string;
@@ -158,9 +170,14 @@ export interface GpuServiceLike {
 export interface ModelInventoryItem {
   id: string;
   name: string;
+  displayName: string;
+  fileName: string;
   type: string;
+  category: string;
   path: string;
+  rootPath: string;
   relativePath: string;
+  comfyName: string;
   sizeBytes: number | null;
   modifiedAt: string | null;
   extension: string;
@@ -171,6 +188,8 @@ export interface ModelInventory {
   refreshedAt: string;
   paths: string[];
   models: ModelInventoryItem[];
+  defaultModel?: string | null;
+  defaultWorkflowId?: string;
 }
 
 export interface WorkflowPresetDefaults {
@@ -252,6 +271,15 @@ export interface ArtifactMetadata {
   seed: number;
   request: Record<string, unknown>;
   providerMetadata?: Record<string, unknown>;
+  job?: {
+    id: string;
+    status: JobStatus;
+    createdAt: string;
+    queuedAt: string;
+    startedAt: string | null;
+    completedAt: string | null;
+    timings: JobTimingMetrics;
+  };
 }
 
 export interface ImageProviderHealth {
@@ -295,6 +323,7 @@ export interface ImageJob {
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
+  queuedAt: string;
   completedAt: string | null;
   provider: string;
   providerJobId: string | null;
@@ -310,13 +339,77 @@ export interface ImageJobSummary {
   status: JobStatus;
   createdAt: string;
   updatedAt: string;
+  queuedAt: string;
   startedAt: string | null;
   completedAt: string | null;
   provider: string;
+  providerJobId: string | null;
   workflowId: string;
   model: string | null;
+  prompt: string;
+  negativePrompt: string;
+  seed: number;
+  width: number;
+  height: number;
+  steps: number;
+  cfgScale: number;
+  samplerName: string;
+  scheduler: string;
+  output: OutputDelivery;
   artifactCount: number;
+  artifactSizes: number[];
+  request: NormalizedGenerationRequest;
+  metadata: Record<string, unknown>;
+  timings: JobTimingMetrics;
   error: ImageJob['error'];
+}
+
+export interface JobTimingMetrics {
+  queueWaitMs: number | null;
+  executionMs: number | null;
+  totalMs: number | null;
+  secondsPerStep: number | null;
+  stepsPerSecond: number | null;
+}
+
+export interface ModelCatalogEntry {
+  id: string;
+  name: string;
+  description?: string;
+  type: ModelInstallType | string;
+  base?: string;
+  recommendedFor?: string[];
+  minimumVramGb?: number;
+  license?: string;
+  sourceName?: string;
+  sourceUrl?: string;
+  downloadUrl?: string;
+  fileName?: string;
+  notes?: string;
+  tags?: string[];
+}
+
+export interface ModelDownloadJob {
+  id: string;
+  status: ModelDownloadStatus;
+  type: ModelInstallType;
+  sourceUrl: string;
+  finalUrl: string | null;
+  fileName: string;
+  destinationDirectory: string;
+  destinationPath: string;
+  tempPath: string;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  totalBytes: number | null;
+  downloadedBytes: number;
+  progress: number | null;
+  overwrite: boolean;
+  setDefault: boolean;
+  defaultModelName: string | null;
+  warnings: string[];
+  error: { code: string; message: string; details?: unknown } | null;
 }
 
 export interface QueueStats {

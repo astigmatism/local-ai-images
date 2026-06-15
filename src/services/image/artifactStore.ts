@@ -19,6 +19,7 @@ export class ArtifactStore {
     workflowId: string;
     request: NormalizedGenerationRequest;
     images: ImageArtifactData[];
+    job?: ArtifactMetadata['job'];
   }): Promise<ArtifactMetadata[]> {
     await fs.mkdir(this.artifactPath, { recursive: true });
 
@@ -49,7 +50,8 @@ export class ArtifactStore {
         ...(options.request.negativePrompt ? { negativePrompt: options.request.negativePrompt } : {}),
         seed: options.request.seed,
         request: publicRequestMetadata(options.request),
-        ...(image.providerMetadata ? { providerMetadata: image.providerMetadata } : {})
+        ...(image.providerMetadata ? { providerMetadata: image.providerMetadata } : {}),
+        ...(options.job ? { job: options.job } : {})
       };
 
       await fs.writeFile(metadataPath(filePath), `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
@@ -81,6 +83,37 @@ export class ArtifactStore {
     throw new AppError('ARTIFACT_NOT_FOUND', `Artifact ${id} was not found.`, 404);
   }
 
+  async listRecentCompletedJobs(limit = 50): Promise<unknown[]> {
+    const metadataFiles = await this.findMetadataFiles();
+    const artifacts: ArtifactMetadata[] = [];
+    for (const filePath of metadataFiles) {
+      try {
+        const parsed = JSON.parse(await fs.readFile(filePath, 'utf8')) as unknown;
+        if (isArtifactMetadata(parsed)) artifacts.push(parsed);
+      } catch {
+        continue;
+      }
+    }
+
+    const byJob = new Map<string, ArtifactMetadata[]>();
+    for (const artifact of artifacts) {
+      const list = byJob.get(artifact.jobId) ?? [];
+      list.push(artifact);
+      byJob.set(artifact.jobId, list);
+    }
+
+    return [...byJob.entries()]
+      .map(([jobId, jobArtifacts]) => durableJobSummary(jobId, jobArtifacts))
+      .sort((left: any, right: any) => String(right.completedAt ?? right.createdAt).localeCompare(String(left.completedAt ?? left.createdAt)))
+      .slice(0, Math.min(Math.max(limit, 1), 250));
+  }
+
+  async getRecentCompletedJob(jobId: string): Promise<unknown | null> {
+    const jobs = await this.listRecentCompletedJobs(250);
+    return jobs.find((job: any) => job?.id === jobId) ?? null;
+  }
+
+
   private async findMetadataFiles(): Promise<string[]> {
     let entries;
     try {
@@ -108,8 +141,57 @@ function publicRequestMetadata(request: NormalizedGenerationRequest): Record<str
     seed: request.seed,
     sampler_name: request.samplerName,
     scheduler: request.scheduler,
+    output: request.output,
     metadata: request.metadata
   };
+}
+
+function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
+  const first = artifacts[0]!;
+  const job = first.job;
+  const request = first.request ?? {};
+  return {
+    id: jobId,
+    status: job?.status ?? 'succeeded',
+    createdAt: job?.createdAt ?? first.createdAt,
+    updatedAt: job?.completedAt ?? first.createdAt,
+    queuedAt: job?.queuedAt ?? job?.createdAt ?? first.createdAt,
+    startedAt: job?.startedAt ?? null,
+    completedAt: job?.completedAt ?? first.createdAt,
+    provider: first.provider,
+    providerJobId: null,
+    workflowId: first.workflowId,
+    model: first.model,
+    prompt: first.prompt,
+    negativePrompt: first.negativePrompt ?? '',
+    seed: first.seed,
+    width: typeof request.width === 'number' ? request.width : null,
+    height: typeof request.height === 'number' ? request.height : null,
+    steps: typeof request.steps === 'number' ? request.steps : null,
+    cfgScale: typeof request.cfg_scale === 'number' ? request.cfg_scale : null,
+    samplerName: typeof request.sampler_name === 'string' ? request.sampler_name : null,
+    scheduler: typeof request.scheduler === 'string' ? request.scheduler : null,
+    output: typeof request.output === 'string' ? request.output : null,
+    artifactCount: artifacts.length,
+    artifactSizes: artifacts.map((artifact) => artifact.sizeBytes),
+    artifacts: artifacts.map((artifact) => publicArtifactMetadata(artifact)),
+    request,
+    metadata: {},
+    timings: job?.timings ?? {
+      queueWaitMs: null,
+      executionMs: null,
+      totalMs: null,
+      secondsPerStep: null,
+      stepsPerSecond: null
+    },
+    error: null,
+    durable: true
+  };
+}
+
+function publicArtifactMetadata(artifact: ArtifactMetadata) {
+  const { filePath: _filePath, ...publicMetadata } = artifact;
+  return publicMetadata;
 }
 
 function extensionForMime(mimeType: string): string {

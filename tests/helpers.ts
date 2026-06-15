@@ -53,6 +53,19 @@ export function testRuntimeConfig(overrides: Partial<RuntimeConfig> = {}): Runti
     imageDefaultSyncTimeoutMs: 0,
     imageMaxSyncTimeoutMs: 1000,
     imageMockDelayMs: 1,
+    modelInstallsEnabled: false,
+    modelInstallMaxBytes: 1024 * 1024 * 1024,
+    modelInstallAllowCkpt: false,
+    modelCatalogPath: '/tmp/local-ai-images-model-catalog.json',
+    modelDownloadMetadataPath: '/tmp/local-ai-images-model-downloads.json',
+    modelInstallDirectories: {
+      checkpoint: '/tmp/local-ai-images-models/checkpoints',
+      lora: '/tmp/local-ai-images-models/loras',
+      vae: '/tmp/local-ai-images-models/vae',
+      controlnet: '/tmp/local-ai-images-models/controlnet',
+      upscaler: '/tmp/local-ai-images-models/upscale_models',
+      other: '/tmp/local-ai-images-models'
+    },
     logLevel: 'silent',
     ...overrides
   };
@@ -128,7 +141,7 @@ export async function withTestServer(dependencies: {
   imageRuntime?: ImageRuntime;
 }, fn: (baseUrl: string) => Promise<void>): Promise<void> {
   const runtimeConfig = dependencies.runtimeConfig ?? testRuntimeConfig();
-  const configStore = dependencies.configStore ?? await tempConfigStore(runtimeConfig.defaultModel);
+  const configStore = await (dependencies.configStore ?? tempConfigStore(runtimeConfig.defaultModel));
   const ollamaClient = dependencies.ollamaClient ?? mockOllama();
   const gpuService = dependencies.gpuService ?? mockGpuService();
   const logger = createLogger('silent');

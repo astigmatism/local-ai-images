@@ -7,10 +7,11 @@ import type { Logger } from './logger.ts';
 import { buildOpenApiDocument } from './openapi.ts';
 import { toLegacyGpu } from './services/gpuService.ts';
 import { createImageRuntime, type ImageRuntime } from './services/image/runtime.ts';
-import type { AppConfig, ArtifactMetadata, GpuServiceLike, ImageJob, OllamaClientLike, OllamaImageGenerateOptions, OutputDelivery, RuntimeConfig, WorkflowPreset } from './types.ts';
+import type { AppConfig, ArtifactMetadata, GpuServiceLike, ImageJob, ModelInventory, ModelInventoryItem, OllamaClientLike, OllamaImageGenerateOptions, OutputDelivery, RuntimeConfig, WorkflowPreset } from './types.ts';
 import { validateModelLoadRequest, validateModelName } from './utils/validation.ts';
 import { authenticateImageApiRequest } from './utils/auth.ts';
 import { normalizeResultDelivery, validateAndNormalizeGenerationRequest } from './utils/imageRequests.ts';
+import { summarizeImageJob } from './utils/jobMetrics.ts';
 import { isDefaultModelLoaded } from './utils/modelState.ts';
 import { APPLICATION_VERSION, RUNTIME_NAME, SERVICE_NAME } from './version.ts';
 
@@ -32,7 +33,7 @@ export type RequestHandler = (request: IncomingMessage, response: ServerResponse
 export function createRequestHandler(dependencies: AppDependencies): RequestHandler {
   const resolvedDependencies: ResolvedAppDependencies = {
     ...dependencies,
-    imageRuntime: dependencies.imageRuntime ?? createImageRuntime(dependencies.runtimeConfig, dependencies.logger)
+    imageRuntime: dependencies.imageRuntime ?? createImageRuntime(dependencies.runtimeConfig, dependencies.logger, dependencies.configStore)
   };
 
   return async (request, response) => {
@@ -338,6 +339,45 @@ async function routeImageApiV1(
     return;
   }
 
+  if (method === 'POST' && pathName === '/api/v1/models/default') {
+    await handleImageApiSetDefaultModel(request, response, dependencies);
+    return;
+  }
+
+  if (method === 'DELETE' && pathName === '/api/v1/models/default') {
+    await handleImageApiClearDefaultModel(response, dependencies);
+    return;
+  }
+
+  if (method === 'GET' && pathName === '/api/v1/model-catalog') {
+    await handleImageApiModelCatalog(response, dependencies);
+    return;
+  }
+
+  if (method === 'GET' && pathName === '/api/v1/model-downloads') {
+    await handleImageApiModelDownloads(response, dependencies, url);
+    return;
+  }
+
+  if (method === 'POST' && pathName === '/api/v1/model-downloads') {
+    await handleImageApiStartModelDownload(request, response, dependencies);
+    return;
+  }
+
+  const modelDownloadMatch = /^\/api\/v1\/model-downloads\/([^/]+)(?:\/(cancel))?$/u.exec(pathName);
+  if (modelDownloadMatch?.[1]) {
+    const downloadId = decodeURIComponent(modelDownloadMatch[1]);
+    const suffix = modelDownloadMatch[2];
+    if (method === 'GET' && suffix === undefined) {
+      handleImageApiModelDownload(response, dependencies, downloadId);
+      return;
+    }
+    if (method === 'POST' && suffix === 'cancel') {
+      await handleImageApiCancelModelDownload(response, dependencies, downloadId);
+      return;
+    }
+  }
+
   if (method === 'GET' && pathName === '/api/v1/workflows') {
     await handleImageApiWorkflows(response, dependencies);
     return;
@@ -355,16 +395,16 @@ async function routeImageApiV1(
   }
 
   if (method === 'GET' && pathName === '/api/v1/jobs') {
-    handleImageApiJobs(response, dependencies, url);
+    await handleImageApiJobs(response, dependencies, url);
     return;
   }
 
-  const jobMatch = /^\/api\/v1\/jobs\/([^/]+)(?:\/(result|cancel))?$/u.exec(pathName);
+  const jobMatch = /^\/api\/v1\/jobs\/([^/]+)(?:\/(result|cancel|replay))?$/u.exec(pathName);
   if (jobMatch?.[1]) {
     const jobId = decodeURIComponent(jobMatch[1]);
     const suffix = jobMatch[2];
     if (method === 'GET' && suffix === undefined) {
-      handleImageApiJob(response, dependencies, jobId);
+      await handleImageApiJob(response, dependencies, jobId);
       return;
     }
     if (method === 'GET' && suffix === 'result') {
@@ -373,6 +413,10 @@ async function routeImageApiV1(
     }
     if (method === 'POST' && suffix === 'cancel') {
       await handleImageApiJobCancel(response, dependencies, jobId);
+      return;
+    }
+    if (method === 'POST' && suffix === 'replay') {
+      await handleImageApiJobReplay(response, dependencies, jobId);
       return;
     }
   }
@@ -388,10 +432,11 @@ async function routeImageApiV1(
 
 async function handleImageApiHealth(response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
   const { imageRuntime, runtimeConfig, gpuService } = dependencies;
-  const [engine, workflows, gpus] = await Promise.all([
+  const [engine, workflows, gpus, appConfig] = await Promise.all([
     imageRuntime.provider.health(),
     imageRuntime.workflowStore.list().catch(() => []),
-    queryGpuSummary(gpuService)
+    queryGpuSummary(gpuService),
+    dependencies.configStore.readConfig().catch(() => ({ default_model: '' }))
   ]);
 
   sendJson(response, 200, {
@@ -406,7 +451,10 @@ async function handleImageApiHealth(response: ServerResponse, dependencies: Reso
     queue: imageRuntime.jobQueue.stats(),
     models: {
       paths: runtimeConfig.imageModelPaths,
-      cached_count: imageRuntime.modelScanner.getCachedInventory()?.models.length ?? null
+      cached_count: imageRuntime.modelScanner.getCachedInventory()?.models.length ?? null,
+      default_model: appConfig.image_default_model || null,
+      installs_enabled: runtimeConfig.modelInstallsEnabled,
+      install_destinations: runtimeConfig.modelInstallDirectories
     },
     workflows: {
       default_workflow_id: runtimeConfig.imageDefaultWorkflowId,
@@ -434,14 +482,24 @@ async function handleImageApiCapabilities(response: ServerResponse, dependencies
       workflows: '/api/v1/workflows',
       generate: '/api/v1/generate',
       jobs: '/api/v1/jobs',
-      artifacts: '/api/v1/artifacts/{artifactId}'
+      artifacts: '/api/v1/artifacts/{artifactId}',
+      model_catalog: '/api/v1/model-catalog',
+      model_downloads: '/api/v1/model-downloads',
+      model_default: '/api/v1/models/default'
     },
     generation: {
       async_jobs: true,
       sync_timeout: true,
       output_delivery: ['metadata', 'url', 'base64', 'binary'],
       max_prompt_chars: runtimeConfig.imageGenerationMaxPromptChars,
-      parameters: ['prompt', 'negative_prompt', 'model', 'workflow_id', 'width', 'height', 'steps', 'cfg_scale', 'seed', 'sampler_name', 'scheduler']
+      parameters: ['prompt', 'negative_prompt', 'model', 'workflow_id', 'width', 'height', 'steps', 'cfg_scale', 'seed', 'sampler_name', 'scheduler'],
+      default_model_source: 'config.image_default_model, when set and compatible with the selected workflow'
+    },
+    model_installs: {
+      enabled: runtimeConfig.modelInstallsEnabled,
+      max_bytes: runtimeConfig.modelInstallMaxBytes,
+      allow_ckpt: runtimeConfig.modelInstallAllowCkpt,
+      destinations: runtimeConfig.modelInstallDirectories
     },
     workflows: workflows.map(publicWorkflowSummary)
   });
@@ -467,9 +525,121 @@ async function handleImageApiModels(response: ServerResponse, dependencies: Reso
     const inventory = refresh
       ? await dependencies.imageRuntime.modelScanner.refresh()
       : await dependencies.imageRuntime.modelScanner.list();
-    sendJson(response, 200, inventory);
+    sendJson(response, 200, await decorateModelInventory(inventory, dependencies));
   } catch (error: unknown) {
     sendJson(response, statusCodeForError(error), toErrorPayload(error, 'MODEL_SCAN_FAILED'));
+  }
+}
+
+async function handleImageApiSetDefaultModel(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    const body = await readJsonBody(request);
+    const requestedModel = isRecord(body) ? readBodyString(body, 'model') || readBodyString(body, 'file_name') || readBodyString(body, 'fileName') : '';
+    if (!requestedModel) {
+      sendJson(response, 422, validationDetail(['body', 'model'], 'model must be a non-empty installed checkpoint model identifier or filename', 'string_too_short'));
+      return;
+    }
+
+    const inventory = await dependencies.imageRuntime.modelScanner.list();
+    const model = findInventoryModel(inventory.models, requestedModel);
+    if (!model) {
+      sendJson(response, 404, { ok: false, error: { code: 'MODEL_NOT_FOUND', message: `Installed model ${requestedModel} was not found in the scanned model inventory.` } });
+      return;
+    }
+    if (model.type !== 'checkpoint') {
+      sendJson(response, 422, { ok: false, error: { code: 'MODEL_DEFAULT_REQUIRES_CHECKPOINT', message: 'Only installed checkpoint models can be set as the default image model.' } });
+      return;
+    }
+
+    const config = await dependencies.configStore.updateImageDefaultModel(model.comfyName || model.fileName);
+    const refreshed = await decorateModelInventory(await dependencies.imageRuntime.modelScanner.list(), dependencies);
+    sendJson(response, 200, {
+      ok: true,
+      config,
+      path: dependencies.configStore.path,
+      default_model: config.image_default_model ?? '',
+      model: decorateSingleModel(model, config.image_default_model ?? '', await defaultWorkflowFor(dependencies)),
+      inventory: refreshed
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'MODEL_DEFAULT_UPDATE_FAILED'));
+  }
+}
+
+async function handleImageApiClearDefaultModel(response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    const config = await dependencies.configStore.clearImageDefaultModel();
+    const inventory = await decorateModelInventory(await dependencies.imageRuntime.modelScanner.list(), dependencies);
+    sendJson(response, 200, {
+      ok: true,
+      config,
+      path: dependencies.configStore.path,
+      default_model: config.image_default_model ?? '',
+      inventory
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'MODEL_DEFAULT_CLEAR_FAILED'));
+  }
+}
+
+async function handleImageApiModelCatalog(response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    const catalog = await dependencies.imageRuntime.modelCatalog.load();
+    sendJson(response, 200, catalog);
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'MODEL_CATALOG_LOAD_FAILED'));
+  }
+}
+
+async function handleImageApiModelDownloads(response: ServerResponse, dependencies: ResolvedAppDependencies, url: URL): Promise<void> {
+  try {
+    const installer = ensureModelInstaller(dependencies);
+    const limit = readQueryInteger(url, 'limit', 50, 1, 250);
+    sendJson(response, 200, {
+      ok: true,
+      enabled: dependencies.runtimeConfig.modelInstallsEnabled,
+      max_bytes: dependencies.runtimeConfig.modelInstallMaxBytes,
+      allow_ckpt: dependencies.runtimeConfig.modelInstallAllowCkpt,
+      destinations: dependencies.runtimeConfig.modelInstallDirectories,
+      jobs: await installer.list(limit)
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error));
+  }
+}
+
+function handleImageApiModelDownload(response: ServerResponse, dependencies: ResolvedAppDependencies, downloadId: string): void {
+  try {
+    const installer = ensureModelInstaller(dependencies);
+    sendJson(response, 200, { ok: true, job: installer.get(downloadId) });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error));
+  }
+}
+
+async function handleImageApiStartModelDownload(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    const installer = ensureModelInstaller(dependencies);
+    const body = await readJsonBody(request);
+    const job = await installer.start(body);
+    sendJson(response, 202, {
+      ok: true,
+      job,
+      status_url: `/api/v1/model-downloads/${encodeURIComponent(job.id)}`,
+      cancel_url: `/api/v1/model-downloads/${encodeURIComponent(job.id)}/cancel`
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'MODEL_DOWNLOAD_START_FAILED'));
+  }
+}
+
+async function handleImageApiCancelModelDownload(response: ServerResponse, dependencies: ResolvedAppDependencies, downloadId: string): Promise<void> {
+  try {
+    const installer = ensureModelInstaller(dependencies);
+    const job = await installer.cancel(downloadId);
+    sendJson(response, 200, { ok: true, job });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error));
   }
 }
 
@@ -513,7 +683,10 @@ async function handleImageApiGenerate(request: IncomingMessage, response: Server
 
   const body = await readJsonBody(request);
   const workflows = await imageRuntime.workflowStore.list();
-  const parsed = validateAndNormalizeGenerationRequest(body, runtimeConfig, workflows);
+  const config = await dependencies.configStore.readConfig();
+  const parsed = validateAndNormalizeGenerationRequest(body, runtimeConfig, workflows, {
+    defaultImageModel: config.image_default_model || null
+  });
   if (!parsed.ok) {
     sendJson(response, 422, parsed.response);
     return;
@@ -539,20 +712,35 @@ async function handleImageApiGenerate(request: IncomingMessage, response: Server
   }
 }
 
-function handleImageApiJobs(response: ServerResponse, dependencies: ResolvedAppDependencies, url: URL): void {
+async function handleImageApiJobs(response: ServerResponse, dependencies: ResolvedAppDependencies, url: URL): Promise<void> {
   const limit = readQueryInteger(url, 'limit', 50, 1, 250);
+  const memoryJobs = dependencies.imageRuntime.jobQueue.listJobs(limit);
+  const durableJobs = await dependencies.imageRuntime.artifactStore.listRecentCompletedJobs(limit).catch(() => []);
+  const seen = new Set(memoryJobs.map((job) => job.id));
+  const jobs = [
+    ...memoryJobs,
+    ...durableJobs.filter((job: any) => typeof job?.id === 'string' && !seen.has(job.id))
+  ]
+    .sort((left: any, right: any) => String(right.createdAt).localeCompare(String(left.createdAt)))
+    .slice(0, limit);
+
   sendJson(response, 200, {
     ok: true,
     queue: dependencies.imageRuntime.jobQueue.stats(),
-    jobs: dependencies.imageRuntime.jobQueue.listJobs(limit)
+    jobs
   });
 }
 
-function handleImageApiJob(response: ServerResponse, dependencies: ResolvedAppDependencies, jobId: string): void {
+async function handleImageApiJob(response: ServerResponse, dependencies: ResolvedAppDependencies, jobId: string): Promise<void> {
   try {
     const job = dependencies.imageRuntime.jobQueue.getJob(jobId);
     sendJson(response, 200, { ok: true, job: publicJob(job) });
   } catch (error: unknown) {
+    const durableJob = await dependencies.imageRuntime.artifactStore.getRecentCompletedJob(jobId).catch(() => null);
+    if (durableJob) {
+      sendJson(response, 200, { ok: true, job: durableJob });
+      return;
+    }
     sendJson(response, statusCodeForError(error), toErrorPayload(error));
   }
 }
@@ -579,6 +767,23 @@ async function handleImageApiJobCancel(response: ServerResponse, dependencies: R
     sendJson(response, statusCodeForError(error), toErrorPayload(error));
   }
 }
+async function handleImageApiJobReplay(response: ServerResponse, dependencies: ResolvedAppDependencies, jobId: string): Promise<void> {
+  try {
+    const originalJob = dependencies.imageRuntime.jobQueue.getJob(jobId);
+    const workflow = await dependencies.imageRuntime.workflowStore.get(originalJob.workflowId);
+    const replayJob = dependencies.imageRuntime.jobQueue.submit(originalJob.request, workflow);
+    sendJson(response, 202, {
+      ok: true,
+      replayed_from: jobId,
+      job: publicJob(replayJob),
+      result_url: `/api/v1/jobs/${encodeURIComponent(replayJob.id)}/result`,
+      status_url: `/api/v1/jobs/${encodeURIComponent(replayJob.id)}`
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'IMAGE_JOB_REPLAY_FAILED'));
+  }
+}
+
 
 async function handleImageApiArtifact(response: ServerResponse, dependencies: ResolvedAppDependencies, artifactId: string, url: URL): Promise<void> {
   try {
@@ -710,27 +915,83 @@ function publicWorkflowDetails(workflow: WorkflowPreset) {
 }
 
 function publicJob(job: ImageJob) {
+  const summary = summarizeImageJob(job);
   return {
-    id: job.id,
-    status: job.status,
-    createdAt: job.createdAt,
-    updatedAt: job.updatedAt,
-    startedAt: job.startedAt,
-    completedAt: job.completedAt,
-    provider: job.provider,
-    providerJobId: job.providerJobId,
-    workflowId: job.workflowId,
-    model: job.model,
-    request: job.request,
+    ...summary,
     artifacts: job.artifacts.map(publicArtifact),
-    error: job.error,
-    metadata: job.metadata
+    queueWaitMs: summary.timings.queueWaitMs,
+    executionMs: summary.timings.executionMs,
+    totalMs: summary.timings.totalMs,
+    secondsPerStep: summary.timings.secondsPerStep,
+    stepsPerSecond: summary.timings.stepsPerSecond
   };
 }
 
 function publicArtifact(artifact: ArtifactMetadata) {
   const { filePath: _filePath, ...publicMetadata } = artifact;
   return publicMetadata;
+}
+
+async function decorateModelInventory(inventory: ModelInventory, dependencies: ResolvedAppDependencies): Promise<ModelInventory> {
+  const [config, workflow] = await Promise.all([
+    dependencies.configStore.readConfig().catch(() => ({ default_model: '' })),
+    defaultWorkflowFor(dependencies)
+  ]);
+  const defaultModel = config.image_default_model || '';
+  return {
+    ...inventory,
+    defaultModel: defaultModel || null,
+    defaultWorkflowId: workflow?.id ?? dependencies.runtimeConfig.imageDefaultWorkflowId,
+    models: inventory.models.map((model) => decorateSingleModel(model, defaultModel, workflow))
+  };
+}
+
+function decorateSingleModel(model: ModelInventoryItem, defaultModel: string, workflow: WorkflowPreset | null): ModelInventoryItem & Record<string, unknown> {
+  return {
+    ...model,
+    isDefault: modelMatchesDefault(model, defaultModel),
+    usableByDefaultWorkflow: workflow ? modelUsableByWorkflow(model, workflow) : model.type === 'checkpoint'
+  };
+}
+
+async function defaultWorkflowFor(dependencies: ResolvedAppDependencies): Promise<WorkflowPreset | null> {
+  try {
+    return await dependencies.imageRuntime.workflowStore.get(dependencies.runtimeConfig.imageDefaultWorkflowId);
+  } catch {
+    const workflows = await dependencies.imageRuntime.workflowStore.list().catch(() => []);
+    return workflows[0] ?? null;
+  }
+}
+
+function modelUsableByWorkflow(model: ModelInventoryItem, workflow: WorkflowPreset): boolean {
+  if (model.type !== 'checkpoint') return false;
+  return Boolean(workflow.comfyui.mappings.checkpointNode);
+}
+
+function modelMatchesDefault(model: ModelInventoryItem, defaultModel: string): boolean {
+  if (!defaultModel) return false;
+  const normalizedDefault = normalizeModelLookup(defaultModel);
+  return [model.comfyName, model.fileName, model.relativePath, model.path, model.name, model.displayName]
+    .filter(Boolean)
+    .some((candidate) => normalizeModelLookup(candidate) === normalizedDefault);
+}
+
+function findInventoryModel(models: ModelInventoryItem[], requestedModel: string): ModelInventoryItem | null {
+  const normalized = normalizeModelLookup(requestedModel);
+  return models.find((model) => [model.id, model.comfyName, model.fileName, model.relativePath, model.path, model.name, model.displayName]
+    .filter(Boolean)
+    .some((candidate) => normalizeModelLookup(candidate) === normalized)) ?? null;
+}
+
+function normalizeModelLookup(value: string): string {
+  return value.trim().replace(/\\/gu, '/').toLowerCase();
+}
+
+function ensureModelInstaller(dependencies: ResolvedAppDependencies) {
+  if (!dependencies.imageRuntime.modelInstaller) {
+    throw new AppError('MODEL_INSTALLER_UNAVAILABLE', 'Model installer is unavailable for this runtime.', 500);
+  }
+  return dependencies.imageRuntime.modelInstaller;
 }
 
 function readQueryInteger(url: URL, name: string, fallback: number, min: number, max: number): number {
@@ -1288,7 +1549,7 @@ function renderPortalHtml(): string {
     <div>
       <p class="eyebrow">Local AI image-generation appliance</p>
       <h1>${SERVICE_NAME}</h1>
-      <p class="muted">ComfyUI image API, hosted control panel, async job queue, artifact storage, and NVIDIA GPU telemetry.</p>
+      <p class="muted">ComfyUI image API, hosted control panel, model installs/defaults, playground testing, async job metrics, artifact storage, and NVIDIA GPU telemetry.</p>
     </div>
     <button id="refresh-button" type="button">Refresh</button>
   </header>
@@ -1313,41 +1574,156 @@ function renderPortalHtml(): string {
       <div id="image-feedback" class="feedback" aria-live="polite"></div>
     </section>
 
-    <section class="grid two">
+    <section class="grid three">
       <article class="card">
-        <h2>Image service health</h2>
+        <h2>Service status</h2>
         <div id="image-health-content" class="placeholder">Loading image API health...</div>
       </article>
       <article class="card">
-        <h2>Image job queue</h2>
+        <h2>Queue status</h2>
         <div id="image-queue-content" class="placeholder">Loading queue stats...</div>
+      </article>
+      <article class="card">
+        <div class="section-heading">
+          <h2>GPU telemetry</h2>
+          <p class="hint">From <code>/api/v1/stats</code>.</p>
+        </div>
+        <div id="gpu-list" class="gpu-grid placeholder">Loading GPU telemetry...</div>
       </article>
     </section>
 
-    <section class="grid three">
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <h2>Model management</h2>
+          <p class="hint">Scan installed ComfyUI models, set the default image checkpoint, and install operator-approved model files into configured model directories.</p>
+        </div>
+        <button id="refresh-models-button" class="secondary" type="button">Refresh scan</button>
+      </div>
+      <div id="image-models" class="placeholder">Loading model inventory...</div>
+    </section>
+
+    <section class="grid two">
       <article class="card">
         <div class="section-heading">
-          <h2>Image models</h2>
-          <button id="refresh-models-button" class="secondary" type="button">Refresh scan</button>
+          <div>
+            <h2>Install/download model</h2>
+            <p class="hint">Downloads use Node streaming APIs, write a temporary <code>.part</code> file first, then rename on success.</p>
+          </div>
+          <div id="model-install-status"></div>
         </div>
-        <div id="image-models" class="placeholder">Loading model inventory...</div>
+        <form id="model-download-form" class="stack">
+          <label>
+            Direct download URL
+            <input id="download-url" type="url" placeholder="https://.../model.safetensors" autocomplete="off">
+          </label>
+          <div class="form-grid">
+            <label>
+              Model type/category
+              <select id="download-type"></select>
+            </label>
+            <label>
+              Confirm filename
+              <input id="download-file-name" type="text" placeholder="Leave blank to infer from URL">
+            </label>
+          </div>
+          <label>
+            Destination folder for selected type
+            <input id="download-destination" type="text" readonly>
+          </label>
+          <div class="button-row">
+            <label class="checkbox-label"><input id="download-set-default" type="checkbox"> Set checkpoint as default after download</label>
+            <label class="checkbox-label"><input id="download-overwrite" type="checkbox"> Overwrite existing file</label>
+          </div>
+          <button id="start-download-button" type="submit">Start download</button>
+        </form>
+        <h3>Download jobs</h3>
+        <div id="model-downloads" class="placeholder">Loading model download jobs...</div>
       </article>
+
+      <article class="card">
+        <h2>Find models / local catalog</h2>
+        <p class="hint">The catalog is a local JSON reference list. It does not scrape model sites; edit <code>config/model-catalog.json</code> to add approved entries.</p>
+        <div id="model-catalog" class="placeholder">Loading model catalog...</div>
+      </article>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <h2>Generate / playground</h2>
+          <p class="hint">This form uses the real <code>/api/v1/generate</code> API and shows the equivalent JSON and curl command.</p>
+        </div>
+        <div id="playground-status"></div>
+      </div>
+      <div id="playground-default-model" class="notice">Loading default model...</div>
+      <div class="playground-layout">
+        <form id="playground-form" class="stack">
+          <div class="form-grid">
+            <label>
+              Checkpoint model
+              <select id="playground-model"></select>
+            </label>
+            <label>
+              Workflow
+              <select id="playground-workflow"></select>
+            </label>
+          </div>
+          <label>
+            Prompt
+            <textarea id="playground-prompt" placeholder="Describe the image to generate"></textarea>
+          </label>
+          <label>
+            Negative prompt
+            <textarea id="playground-negative" placeholder="Optional negative prompt"></textarea>
+          </label>
+          <div class="form-grid three">
+            <label>Width <input id="playground-width" type="number" min="64" max="4096" step="64"></label>
+            <label>Height <input id="playground-height" type="number" min="64" max="4096" step="64"></label>
+            <label>Steps <input id="playground-steps" type="number" min="1" max="150" step="1"></label>
+            <label>CFG scale <input id="playground-cfg-scale" type="number" min="0" max="30" step="0.5"></label>
+            <label>Seed <input id="playground-seed" type="number" step="1" value="-1"></label>
+            <label>Output <select id="playground-output"><option value="url">url</option><option value="metadata">metadata</option><option value="base64">base64</option><option value="binary">binary</option></select></label>
+          </div>
+          <div class="form-grid">
+            <label>Sampler <input id="playground-sampler" type="text"></label>
+            <label>Scheduler <input id="playground-scheduler" type="text"></label>
+            <label>Sync timeout ms <input id="playground-sync-timeout" type="number" min="0" step="100" value="0"></label>
+            <label class="checkbox-label"><input id="playground-random-seed" type="checkbox" checked> Random seed</label>
+          </div>
+          <div class="button-row">
+            <button type="submit">Submit generation</button>
+            <button id="playground-cancel" class="secondary" type="button" disabled>Cancel job</button>
+            <button id="apply-workflow-defaults" class="secondary" type="button">Apply workflow defaults</button>
+          </div>
+        </form>
+        <aside class="preview-panel">
+          <div>
+            <h3>Raw API request preview</h3>
+            <pre><code id="playground-request-preview">{}</code></pre>
+          </div>
+          <div>
+            <h3>Equivalent curl</h3>
+            <pre><code id="playground-curl-preview"></code></pre>
+          </div>
+          <div>
+            <h3>Result</h3>
+            <div id="playground-result" class="placeholder">No request submitted yet.</div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="grid two">
       <article class="card">
         <h2>Workflow presets</h2>
         <div id="image-workflows" class="placeholder">Loading workflow presets...</div>
       </article>
       <article class="card">
         <h2>Recent image jobs</h2>
+        <p class="hint">Diffusion metrics include queue wait, execution time, total time, seconds per step, and steps per second. Token metrics are normally N/A for image jobs.</p>
         <div id="image-jobs" class="placeholder">Loading recent image jobs...</div>
       </article>
-    </section>
-
-    <section class="card">
-      <div class="section-heading">
-        <h2>GPU telemetry</h2>
-        <p class="hint">GPU telemetry is read from <code>/api/v1/stats</code>. Compatibility endpoints <code>/gpu</code> and <code>/gpus</code> remain available for existing integrations.</p>
-      </div>
-      <div id="gpu-list" class="gpu-grid placeholder">Loading GPU telemetry...</div>
     </section>
   </main>
 

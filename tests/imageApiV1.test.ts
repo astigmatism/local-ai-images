@@ -165,8 +165,12 @@ test('POST /api/v1/generate supports async jobs, job result polling, and cancell
     let job = await (await fetch(`${baseUrl}/api/v1/jobs/${create.job.id}`)).json();
     assert.equal(job.ok, true);
 
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    const result = await (await fetch(`${baseUrl}/api/v1/jobs/${create.job.id}/result?format=metadata`)).json();
+    let result;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      result = await (await fetch(`${baseUrl}/api/v1/jobs/${create.job.id}/result?format=metadata`)).json();
+      if (result.job.status !== 'queued' && result.job.status !== 'running') break;
+    }
     assert.equal(result.ok, true);
     assert.equal(result.job.status, 'succeeded');
 

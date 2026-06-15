@@ -42,7 +42,7 @@ const generationRequestSchema = {
   properties: {
     prompt: { type: 'string' },
     negative_prompt: { type: 'string' },
-    model: { type: 'string' },
+    model: { type: 'string', description: 'Optional checkpoint filename/name. If omitted, the persisted image_default_model is used when compatible with the workflow; otherwise the workflow default is used.' },
     workflow_id: { type: 'string' },
     width: { type: 'number' },
     height: { type: 'number' },
@@ -52,7 +52,30 @@ const generationRequestSchema = {
     sampler_name: { type: 'string' },
     scheduler: { type: 'string' },
     output: { enum: ['metadata', 'url', 'base64', 'binary'] },
-    sync_timeout_ms: { type: 'number' }
+    sync_timeout_ms: { type: 'number' },
+    metadata: { type: 'object', additionalProperties: true }
+  }
+} as const;
+
+const modelSchema = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    displayName: { type: 'string' },
+    fileName: { type: 'string' },
+    type: { type: 'string' },
+    category: { type: 'string' },
+    path: { type: 'string' },
+    rootPath: { type: 'string' },
+    relativePath: { type: 'string' },
+    comfyName: { type: 'string' },
+    sizeBytes: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    modifiedAt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    extension: { type: 'string' },
+    isDefault: { type: 'boolean' },
+    usableByDefaultWorkflow: { type: 'boolean' }
   }
 } as const;
 
@@ -69,6 +92,17 @@ const artifactSchema = {
   }
 } as const;
 
+const timingSchema = {
+  type: 'object',
+  properties: {
+    queueWaitMs: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    executionMs: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    totalMs: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    secondsPerStep: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    stepsPerSecond: { oneOf: [{ type: 'number' }, { type: 'null' }] }
+  }
+} as const;
+
 const jobSchema = {
   type: 'object',
   additionalProperties: true,
@@ -76,13 +110,94 @@ const jobSchema = {
     id: { type: 'string' },
     status: { enum: ['queued', 'running', 'succeeded', 'failed', 'canceled'] },
     provider: { type: 'string' },
+    providerJobId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     workflowId: { type: 'string' },
     model: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    prompt: { type: 'string' },
+    negativePrompt: { type: 'string' },
+    seed: { type: 'number' },
+    width: { type: 'number' },
+    height: { type: 'number' },
+    steps: { type: 'number' },
+    cfgScale: { type: 'number' },
+    samplerName: { type: 'string' },
+    scheduler: { type: 'string' },
+    output: { enum: ['metadata', 'url', 'base64', 'binary'] },
+    createdAt: { type: 'string' },
+    queuedAt: { type: 'string' },
+    startedAt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    completedAt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    artifactCount: { type: 'number' },
+    artifactSizes: { type: 'array', items: { type: 'number' } },
+    timings: timingSchema,
+    request: generationRequestSchema,
+    metadata: { type: 'object', additionalProperties: true },
     artifacts: { type: 'array', items: artifactSchema }
   }
 } as const;
 
+const modelCatalogEntrySchema = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    type: { enum: ['checkpoint', 'lora', 'vae', 'controlnet', 'upscaler', 'other'] },
+    base: { type: 'string' },
+    recommendedFor: { type: 'array', items: { type: 'string' } },
+    minimumVramGb: { type: 'number' },
+    license: { type: 'string' },
+    sourceName: { type: 'string' },
+    sourceUrl: { type: 'string' },
+    downloadUrl: { type: 'string' },
+    fileName: { type: 'string' },
+    notes: { type: 'string' },
+    tags: { type: 'array', items: { type: 'string' } }
+  }
+} as const;
+
+const modelDownloadRequestSchema = {
+  type: 'object',
+  required: ['url', 'type'],
+  additionalProperties: false,
+  properties: {
+    url: { type: 'string' },
+    type: { enum: ['checkpoint', 'lora', 'vae', 'controlnet', 'upscaler', 'other'] },
+    destination: { type: 'string', description: 'Optional explicit approved destination directory for the selected type.' },
+    file_name: { type: 'string' },
+    overwrite: { type: 'boolean' },
+    set_default: { type: 'boolean', description: 'Only applies to checkpoint downloads.' }
+  }
+} as const;
+
+const modelDownloadJobSchema = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    id: { type: 'string' },
+    status: { enum: ['queued', 'downloading', 'succeeded', 'failed', 'canceled'] },
+    type: { enum: ['checkpoint', 'lora', 'vae', 'controlnet', 'upscaler', 'other'] },
+    sourceUrl: { type: 'string' },
+    finalUrl: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    fileName: { type: 'string' },
+    destinationDirectory: { type: 'string' },
+    destinationPath: { type: 'string' },
+    createdAt: { type: 'string' },
+    startedAt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    completedAt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    totalBytes: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    downloadedBytes: { type: 'number' },
+    progress: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    warnings: { type: 'array', items: { type: 'string' } }
+  }
+} as const;
+
 const bearerSecurity = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
+const authErrorResponses = {
+  '401': { description: 'Image API authentication failed', content: { 'application/json': { schema: errorSchema } } },
+  '403': { description: 'Image API authentication forbidden or feature disabled', content: { 'application/json': { schema: errorSchema } } }
+} as const;
 
 export function buildOpenApiDocument() {
   return {
@@ -93,7 +208,7 @@ export function buildOpenApiDocument() {
       description: `Node-based ${SERVICE_NAME} ComfyUI image-generation API and control-panel runtime (${RUNTIME_NAME}). Legacy Ollama endpoints are optional and disabled unless LEGACY_OLLAMA_ENABLED=true.`
     },
     servers: [
-      { url: 'http://127.0.0.1:8000', description: 'Local AI Images URL' }
+      { url: 'http://127.0.0.1:3000', description: 'Local AI Images URL' }
     ],
     components: {
       securitySchemes: {
@@ -104,8 +219,13 @@ export function buildOpenApiDocument() {
         Error: errorSchema,
         Gpu: gpuSchema,
         GenerationRequest: generationRequestSchema,
+        Model: modelSchema,
         Job: jobSchema,
-        Artifact: artifactSchema
+        JobTimings: timingSchema,
+        Artifact: artifactSchema,
+        ModelCatalogEntry: modelCatalogEntrySchema,
+        ModelDownloadRequest: modelDownloadRequestSchema,
+        ModelDownloadJob: modelDownloadJobSchema
       }
     },
     paths: {
@@ -113,39 +233,28 @@ export function buildOpenApiDocument() {
         get: {
           summary: 'Image service health',
           description: 'Unauthenticated compatibility health endpoint. In the default image-only mode this reports the same image-service state as /api/v1/health and does not contact Ollama.',
-          responses: {
-            '200': { description: 'Image service health state' }
-          }
+          responses: { '200': { description: 'Image service health state' } }
         }
       },
       '/api/v1/health': {
         get: {
           summary: 'Image API health',
           security: bearerSecurity,
-          responses: {
-            '200': { description: 'Image service, ComfyUI/mock provider, queue, workflow, model-path, auth, and GPU state' },
-            '401': { description: 'Image API authentication failed', content: { 'application/json': { schema: errorSchema } } }
-          }
+          responses: { '200': { description: 'Image service, ComfyUI/mock provider, queue, workflow, model-path, default-model, install, auth, and GPU state' }, ...authErrorResponses }
         }
       },
       '/api/v1/capabilities': {
         get: {
           summary: 'Image API capabilities',
           security: bearerSecurity,
-          responses: {
-            '200': { description: 'Supported image-generation features and workflow summaries' },
-            '401': { description: 'Image API authentication failed', content: { 'application/json': { schema: errorSchema } } }
-          }
+          responses: { '200': { description: 'Supported image-generation, default-model, model-install, and workflow features' }, ...authErrorResponses }
         }
       },
       '/api/v1/stats': {
         get: {
           summary: 'Runtime stats',
           security: bearerSecurity,
-          responses: {
-            '200': { description: 'ComfyUI/mock provider state, GPU telemetry, queue stats, and recent jobs' },
-            '401': { description: 'Image API authentication failed', content: { 'application/json': { schema: errorSchema } } }
-          }
+          responses: { '200': { description: 'ComfyUI/mock provider state, GPU telemetry, queue stats, and recent jobs' }, ...authErrorResponses }
         }
       },
       '/api/v1/models': {
@@ -153,8 +262,8 @@ export function buildOpenApiDocument() {
           summary: 'Scanned local image model inventory',
           security: bearerSecurity,
           responses: {
-            '200': { description: 'Model files discovered under IMAGE_MODEL_PATHS' },
-            '401': { description: 'Image API authentication failed', content: { 'application/json': { schema: errorSchema } } }
+            '200': { description: 'Model files discovered under IMAGE_MODEL_PATHS, annotated with default and workflow compatibility flags', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, defaultModel: { oneOf: [{ type: 'string' }, { type: 'null' }] }, models: { type: 'array', items: modelSchema } } } } } },
+            ...authErrorResponses
           }
         }
       },
@@ -162,20 +271,65 @@ export function buildOpenApiDocument() {
         post: {
           summary: 'Refresh local image model inventory',
           security: bearerSecurity,
-          responses: {
-            '200': { description: 'Refreshed model inventory' },
-            '401': { description: 'Image API authentication failed', content: { 'application/json': { schema: errorSchema } } }
-          }
+          responses: { '200': { description: 'Refreshed model inventory' }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/models/default': {
+        post: {
+          summary: 'Set the default image checkpoint model',
+          security: bearerSecurity,
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['model'], properties: { model: { type: 'string' } } } } } },
+          responses: { '200': { description: 'Persisted image_default_model and refreshed inventory' }, '404': { description: 'Model not found', content: { 'application/json': { schema: errorSchema } } }, '422': { description: 'Model is not an installed checkpoint' }, ...authErrorResponses }
+        },
+        delete: {
+          summary: 'Clear the default image checkpoint model',
+          security: bearerSecurity,
+          responses: { '200': { description: 'Cleared persisted image_default_model and returned refreshed inventory' }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/model-catalog': {
+        get: {
+          summary: 'Load local model catalog entries',
+          security: bearerSecurity,
+          responses: { '200': { description: 'Runtime, example, or empty operator-editable catalog', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, source: { enum: ['runtime', 'example', 'empty'] }, path: { type: 'string' }, entries: { type: 'array', items: modelCatalogEntrySchema } } } } } }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/model-downloads': {
+        get: {
+          summary: 'List model download jobs',
+          security: bearerSecurity,
+          parameters: [{ name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 250 } }],
+          responses: { '200': { description: 'Recent in-memory and completed logged model downloads', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, enabled: { type: 'boolean' }, jobs: { type: 'array', items: modelDownloadJobSchema } } } } } }, ...authErrorResponses }
+        },
+        post: {
+          summary: 'Start a streamed model download/install job',
+          description: 'Downloads are streamed by Node/fetch to a .part file under an approved model directory, then atomically renamed on success.',
+          security: bearerSecurity,
+          requestBody: { required: true, content: { 'application/json': { schema: modelDownloadRequestSchema } } },
+          responses: { '202': { description: 'Download job queued', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, job: modelDownloadJobSchema } } } } }, '409': { description: 'Destination file exists and overwrite was not requested' }, '422': { description: 'Invalid URL, filename, extension, or destination' }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/model-downloads/{downloadId}': {
+        get: {
+          summary: 'Get one model download job',
+          security: bearerSecurity,
+          parameters: [{ name: 'downloadId', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { '200': { description: 'Download job status', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, job: modelDownloadJobSchema } } } } }, '404': { description: 'Download job not found', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/model-downloads/{downloadId}/cancel': {
+        post: {
+          summary: 'Cancel an in-progress model download',
+          security: bearerSecurity,
+          parameters: [{ name: 'downloadId', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { '200': { description: 'Canceled or current download job state' }, '404': { description: 'Download job not found', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
         }
       },
       '/api/v1/workflows': {
         get: {
           summary: 'Workflow presets',
           security: bearerSecurity,
-          responses: {
-            '200': { description: 'Workflow presets loaded from built-ins and IMAGE_WORKFLOW_PATH' },
-            '401': { description: 'Image API authentication failed', content: { 'application/json': { schema: errorSchema } } }
-          }
+          responses: { '200': { description: 'Workflow presets loaded from built-ins and IMAGE_WORKFLOW_PATH' }, ...authErrorResponses }
         }
       },
       '/api/v1/workflows/{workflowId}': {
@@ -183,11 +337,7 @@ export function buildOpenApiDocument() {
           summary: 'Workflow preset details',
           security: bearerSecurity,
           parameters: [{ name: 'workflowId', in: 'path', required: true, schema: { type: 'string' } }],
-          responses: {
-            '200': { description: 'Workflow preset details and ComfyUI mappings' },
-            '401': { description: 'Image API authentication failed', content: { 'application/json': { schema: errorSchema } } },
-            '404': { description: 'Workflow not found', content: { 'application/json': { schema: errorSchema } } }
-          }
+          responses: { '200': { description: 'Workflow preset details and ComfyUI mappings' }, '404': { description: 'Workflow not found', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
         }
       },
       '/api/v1/generate': {
@@ -195,28 +345,23 @@ export function buildOpenApiDocument() {
           summary: 'Submit an image-generation job',
           security: bearerSecurity,
           requestBody: { required: true, content: { 'application/json': { schema: generationRequestSchema } } },
-          responses: {
-            '200': { description: 'Job completed within sync timeout and result is included' },
-            '202': { description: 'Job queued or running; poll the job/result URLs' },
-            '401': { description: 'Image API authentication failed', content: { 'application/json': { schema: errorSchema } } },
-            '422': { description: 'Invalid generation request' },
-            '503': { description: 'Image generation is disabled' }
-          }
+          responses: { '200': { description: 'Job completed within sync timeout and result is included' }, '202': { description: 'Job queued or running; poll the job/result URLs' }, '422': { description: 'Invalid generation request' }, '503': { description: 'Image generation is disabled' }, ...authErrorResponses }
         }
       },
       '/api/v1/jobs': {
         get: {
           summary: 'List recent image jobs',
+          description: 'Includes in-memory jobs and recent completed jobs reconstructed from artifact sidecar metadata.',
           security: bearerSecurity,
-          responses: { '200': { description: 'Queue stats and recent jobs' } }
+          responses: { '200': { description: 'Queue stats and recent jobs with diffusion timing metrics', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, jobs: { type: 'array', items: jobSchema } } } } } }, ...authErrorResponses }
         }
       },
       '/api/v1/jobs/{jobId}': {
         get: {
-          summary: 'Get image job status',
+          summary: 'Get image job status/details',
           security: bearerSecurity,
           parameters: [{ name: 'jobId', in: 'path', required: true, schema: { type: 'string' } }],
-          responses: { '200': { description: 'Job status', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, job: jobSchema } } } } } }
+          responses: { '200': { description: 'Job status/details', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, job: jobSchema } } } } }, '404': { description: 'Job not found', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
         }
       },
       '/api/v1/jobs/{jobId}/result': {
@@ -227,7 +372,7 @@ export function buildOpenApiDocument() {
             { name: 'jobId', in: 'path', required: true, schema: { type: 'string' } },
             { name: 'format', in: 'query', required: false, schema: { enum: ['metadata', 'url', 'base64', 'binary'] } }
           ],
-          responses: { '200': { description: 'Completed job result' }, '202': { description: 'Job is still queued or running' } }
+          responses: { '200': { description: 'Completed job result' }, '202': { description: 'Job is still queued or running' }, ...authErrorResponses }
         }
       },
       '/api/v1/jobs/{jobId}/cancel': {
@@ -235,7 +380,15 @@ export function buildOpenApiDocument() {
           summary: 'Cancel an image job',
           security: bearerSecurity,
           parameters: [{ name: 'jobId', in: 'path', required: true, schema: { type: 'string' } }],
-          responses: { '200': { description: 'Canceled or current job state' } }
+          responses: { '200': { description: 'Canceled or current job state' }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/jobs/{jobId}/replay': {
+        post: {
+          summary: 'Replay/resubmit an in-memory image job request',
+          security: bearerSecurity,
+          parameters: [{ name: 'jobId', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { '202': { description: 'New job submitted using the original normalized request' }, '404': { description: 'Original job is not in memory' }, ...authErrorResponses }
         }
       },
       '/api/v1/artifacts/{artifactId}': {
@@ -247,7 +400,7 @@ export function buildOpenApiDocument() {
             { name: 'metadata', in: 'query', required: false, schema: { enum: ['1'] } },
             { name: 'format', in: 'query', required: false, schema: { enum: ['metadata'] } }
           ],
-          responses: { '200': { description: 'Artifact bytes, or metadata when requested' }, '404': { description: 'Artifact not found' } }
+          responses: { '200': { description: 'Artifact bytes, or metadata when requested' }, '404': { description: 'Artifact not found' }, ...authErrorResponses }
         }
       },
       '/gpu': {

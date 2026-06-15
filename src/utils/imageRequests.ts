@@ -12,7 +12,8 @@ const MAX_SEED = Number.MAX_SAFE_INTEGER;
 export function validateAndNormalizeGenerationRequest(
   body: unknown,
   runtimeConfig: RuntimeConfig,
-  workflows: WorkflowPreset[]
+  workflows: WorkflowPreset[],
+  options: { defaultImageModel?: string | null } = {}
 ): { ok: true; value: NormalizedGenerationRequest; workflow: WorkflowPreset } | { ok: false; response: ValidationErrorResponse } {
   const details: ValidationDetail[] = [];
 
@@ -37,7 +38,8 @@ export function validateAndNormalizeGenerationRequest(
   const workflowId = validateWorkflowId(body.workflow_id ?? body.workflowId ?? runtimeConfig.imageDefaultWorkflowId, workflows, details);
   const workflow = workflows.find((item) => item.id === workflowId) ?? workflows[0]!;
 
-  const model = validateOptionalModel(body.model ?? workflow.defaults.checkpoint ?? null, details);
+  const defaultImageModel = workflow.comfyui.mappings.checkpointNode && options.defaultImageModel ? options.defaultImageModel : null;
+  const model = validateOptionalModel(body.model ?? defaultImageModel ?? workflow.defaults.checkpoint ?? null, details);
   const width = validateInteger(body.width, ['body', 'width'], MIN_DIMENSION, MAX_DIMENSION, workflow.defaults.width ?? 1024, details);
   const height = validateInteger(body.height, ['body', 'height'], MIN_DIMENSION, MAX_DIMENSION, workflow.defaults.height ?? 1024, details);
   const steps = validateInteger(body.steps, ['body', 'steps'], MIN_STEPS, MAX_STEPS, workflow.defaults.steps ?? 28, details);

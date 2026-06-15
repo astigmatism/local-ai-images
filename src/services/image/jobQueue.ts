@@ -13,6 +13,7 @@ import type {
   WorkflowPreset
 } from '../../types.ts';
 import { ArtifactStore } from './artifactStore.ts';
+import { calculateJobTimings, summarizeImageJob } from '../../utils/jobMetrics.ts';
 
 interface QueueItem {
   jobId: string;
@@ -63,6 +64,7 @@ export class ImageJobQueue {
       createdAt: now,
       updatedAt: now,
       startedAt: null,
+      queuedAt: now,
       completedAt: null,
       provider: this.provider.name,
       providerJobId: null,
@@ -84,19 +86,7 @@ export class ImageJobQueue {
     return [...this.jobs.values()]
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, boundedLimit)
-      .map((job) => ({
-        id: job.id,
-        status: job.status,
-        createdAt: job.createdAt,
-        updatedAt: job.updatedAt,
-        startedAt: job.startedAt,
-        completedAt: job.completedAt,
-        provider: job.provider,
-        workflowId: job.workflowId,
-        model: job.model,
-        artifactCount: job.artifacts.length,
-        error: job.error ? { ...job.error } : null
-      }));
+      .map((job) => summarizeImageJob(job));
   }
 
   getJob(jobId: string): ImageJob {
@@ -207,14 +197,24 @@ export class ImageJobQueue {
       }
 
       job.providerJobId = providerResult.providerJobId ?? null;
+      const completedAt = new Date().toISOString();
       const artifacts = await this.artifactStore.saveArtifacts({
         jobId: job.id,
         provider: providerResult.provider,
         workflowId: item.workflow.id,
         request: job.request,
-        images: providerResult.images
+        images: providerResult.images,
+        job: {
+          id: job.id,
+          status: 'succeeded',
+          createdAt: job.createdAt,
+          queuedAt: job.queuedAt,
+          startedAt: job.startedAt,
+          completedAt,
+          timings: calculateJobTimings({ ...job, completedAt })
+        }
       });
-      this.markSucceeded(job, artifacts, providerResult.metadata);
+      this.markSucceeded(job, artifacts, providerResult.metadata, completedAt);
     } catch (error: unknown) {
       if (job.status === 'canceled') {
         this.notify(job);
@@ -239,8 +239,8 @@ export class ImageJobQueue {
     job.updatedAt = now;
   }
 
-  private markSucceeded(job: ImageJob, artifacts: ArtifactMetadata[], metadata: Record<string, unknown>): void {
-    const now = new Date().toISOString();
+  private markSucceeded(job: ImageJob, artifacts: ArtifactMetadata[], metadata: Record<string, unknown>, completedAt?: string): void {
+    const now = completedAt ?? new Date().toISOString();
     job.status = 'succeeded';
     job.artifacts = artifacts;
     job.metadata = metadata;

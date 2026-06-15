@@ -15,6 +15,17 @@ const managedEnvKeys = [
   'IMAGE_DEFAULT_WORKFLOW_ID',
   'IMAGE_QUEUE_CONCURRENCY',
   'IMAGE_MAX_QUEUED_JOBS',
+  'MODEL_INSTALLS_ENABLED',
+  'MODEL_INSTALL_MAX_BYTES',
+  'MODEL_INSTALL_ALLOW_CKPT',
+  'MODEL_CATALOG_PATH',
+  'MODEL_DOWNLOAD_METADATA_PATH',
+  'COMFYUI_CHECKPOINT_PATH',
+  'COMFYUI_LORA_PATH',
+  'COMFYUI_VAE_PATH',
+  'COMFYUI_CONTROLNET_PATH',
+  'COMFYUI_UPSCALER_PATH',
+  'COMFYUI_OTHER_MODEL_PATH',
   'LEGACY_OLLAMA_ENABLED',
   'OLLAMA_BASE_URL',
   'DEFAULT_MODEL',
@@ -46,6 +57,13 @@ test('loadRuntimeConfig parses image-generation backend, paths, auth, and queue 
     process.env.IMAGE_DEFAULT_WORKFLOW_ID = 'custom';
     process.env.IMAGE_QUEUE_CONCURRENCY = '2';
     process.env.IMAGE_MAX_QUEUED_JOBS = '9';
+    process.env.MODEL_INSTALLS_ENABLED = 'true';
+    process.env.MODEL_INSTALL_MAX_BYTES = '123456';
+    process.env.MODEL_INSTALL_ALLOW_CKPT = 'true';
+    process.env.MODEL_CATALOG_PATH = './config/catalog.json';
+    process.env.MODEL_DOWNLOAD_METADATA_PATH = './config/downloads.json';
+    process.env.COMFYUI_CHECKPOINT_PATH = '/srv/comfyui/models/checkpoints';
+    process.env.COMFYUI_LORA_PATH = '/srv/comfyui/models/loras';
 
     const config = loadRuntimeConfig();
     assert.equal(config.imageBackend, 'mock');
@@ -59,6 +77,13 @@ test('loadRuntimeConfig parses image-generation backend, paths, auth, and queue 
     assert.equal(config.imageDefaultWorkflowId, 'custom');
     assert.equal(config.imageQueueConcurrency, 2);
     assert.equal(config.imageMaxQueuedJobs, 9);
+    assert.equal(config.modelInstallsEnabled, true);
+    assert.equal(config.modelInstallMaxBytes, 123456);
+    assert.equal(config.modelInstallAllowCkpt, true);
+    assert.equal(config.modelCatalogPath, path.resolve(process.cwd(), './config/catalog.json'));
+    assert.equal(config.modelDownloadMetadataPath, path.resolve(process.cwd(), './config/downloads.json'));
+    assert.equal(config.modelInstallDirectories.checkpoint, '/srv/comfyui/models/checkpoints');
+    assert.equal(config.modelInstallDirectories.lora, '/srv/comfyui/models/loras');
   });
 });
 
@@ -72,6 +97,10 @@ test('loadRuntimeConfig uses image-focused defaults with legacy Ollama disabled'
     assert.equal(config.ollamaBaseUrl, '');
     assert.equal(config.defaultModel, '');
     assert.equal(config.prewarmDefaultModelOnStart, false);
+    assert.equal(config.modelInstallsEnabled, false);
+    assert.equal(config.modelInstallMaxBytes, 20 * 1024 * 1024 * 1024);
+    assert.equal(config.modelInstallAllowCkpt, false);
+    assert.equal(config.modelInstallDirectories.checkpoint, path.resolve(process.cwd(), './models/checkpoints'));
   });
 });
 
