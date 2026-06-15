@@ -31,6 +31,7 @@ export interface RuntimeConfig {
   imageWorkflowPath: string;
   imageArtifactPath: string;
   imageArtifactPublicBaseUrl: string;
+  favoriteImagePromptsPath: string;
   imageDefaultModel: string;
   imageDefaultWorkflowId: string;
   imagePreloadDefaultOnStartup: boolean;
@@ -261,6 +262,29 @@ export interface ImageArtifactData {
   providerMetadata?: Record<string, unknown>;
 }
 
+export interface FavoriteImagePrompt {
+  id: string;
+  title: string;
+  description?: string | null;
+  requestPayload: Record<string, unknown>;
+  prompt: string;
+  negativePrompt?: string | null;
+  promptPreview: string;
+  negativePromptPreview?: string | null;
+  model?: string | null;
+  workflow?: string | null;
+  workflowId?: string | null;
+  sampler?: string | null;
+  scheduler?: string | null;
+  width?: number | null;
+  height?: number | null;
+  steps?: number | null;
+  cfgScale?: number | null;
+  seed?: string | number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ArtifactMetadata {
   id: string;
   jobId: string;
@@ -279,6 +303,7 @@ export interface ArtifactMetadata {
   negativePrompt?: string;
   seed: number;
   request: Record<string, unknown>;
+  requestPayload?: Record<string, unknown>;
   providerMetadata?: Record<string, unknown>;
   job?: {
     id: string;
@@ -329,6 +354,7 @@ export interface ImageJob {
   id: string;
   status: JobStatus;
   request: NormalizedGenerationRequest;
+  requestPayload?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
@@ -372,6 +398,7 @@ export interface ImageJobSummary {
   artifacts: PublicArtifactMetadata[];
   thumbnailUrl: string | null;
   request: NormalizedGenerationRequest;
+  requestPayload?: Record<string, unknown>;
   metadata: Record<string, unknown>;
   timings: JobTimingMetrics;
   queueWaitMs: number | null;

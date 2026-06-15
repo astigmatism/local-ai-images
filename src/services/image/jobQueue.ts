@@ -52,7 +52,7 @@ export class ImageJobQueue {
     this.onJobCompleted = options.onJobCompleted;
   }
 
-  submit(request: NormalizedGenerationRequest, workflow: WorkflowPreset): ImageJob {
+  submit(request: NormalizedGenerationRequest, workflow: WorkflowPreset, requestPayload?: Record<string, unknown>): ImageJob {
     if (this.queue.length >= this.maxQueuedJobs) {
       throw new AppError('IMAGE_QUEUE_FULL', 'The image generation queue is full. Try again after existing jobs complete.', 429, {
         queued: this.queue.length,
@@ -65,6 +65,7 @@ export class ImageJobQueue {
       id: crypto.randomUUID(),
       status: 'queued',
       request,
+      ...(requestPayload ? { requestPayload: cloneRecord(requestPayload) } : {}),
       createdAt: now,
       updatedAt: now,
       startedAt: null,
@@ -207,6 +208,7 @@ export class ImageJobQueue {
         provider: providerResult.provider,
         workflowId: item.workflow.id,
         request: job.request,
+        ...(job.requestPayload ? { requestPayload: job.requestPayload } : {}),
         images: providerResult.images,
         job: {
           id: job.id,
@@ -311,6 +313,10 @@ function isTerminalStatus(status: JobStatus): boolean {
 
 function cloneJob(job: ImageJob): ImageJob {
   return JSON.parse(JSON.stringify(job)) as ImageJob;
+}
+
+function cloneRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
 }
 
 function safeFilenamePrefix(jobId: string): string {

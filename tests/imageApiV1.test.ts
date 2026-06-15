@@ -21,6 +21,7 @@ async function tempImageRuntimeConfig(overrides = {}) {
     imageModelPaths: [modelPath],
     imageWorkflowPath: workflowPath,
     imageArtifactPath: artifactPath,
+    favoriteImagePromptsPath: path.join(root, 'favorite-image-prompts.json'),
     imageDefaultSyncTimeoutMs: 0,
     imageMaxSyncTimeoutMs: 2000,
     imageMockDelayMs: 1,
@@ -204,5 +205,82 @@ test('configured image API keys enforce bearer or X-API-Key authentication', asy
     assert.equal(bearer.status, 200);
     const xApiKey = await fetch(`${baseUrl}/api/v1/capabilities`, { headers: { 'x-api-key': 'secret' } });
     assert.equal(xApiKey.status, 200);
+  });
+});
+
+test('favorite prompt endpoints persist full image-generation request payloads', async () => {
+  const runtimeConfig = await tempImageRuntimeConfig();
+  const payload = {
+    prompt: 'a favorite glass lighthouse',
+    negative_prompt: 'low detail',
+    model: 'demo.safetensors',
+    workflow_id: 'sdxl-text-to-image',
+    width: 768,
+    height: 512,
+    steps: 18,
+    cfg_scale: 6.5,
+    seed: 42,
+    sampler_name: 'euler',
+    scheduler: 'normal',
+    output: 'url',
+    metadata: { source: 'test-suite' },
+    future_provider_field: { preserved: true }
+  };
+  let favoriteId = '';
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    const createResponse = await fetch(`${baseUrl}/api/v1/favorite-prompts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Glass lighthouse favorite', request_payload: payload })
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json();
+    assert.equal(created.ok, true);
+    assert.equal(created.favorite.prompt, payload.prompt);
+    assert.equal(created.favorite.negativePrompt, payload.negative_prompt);
+    assert.equal(created.favorite.width, payload.width);
+    assert.deepEqual(created.favorite.requestPayload.future_provider_field, { preserved: true });
+    favoriteId = created.favorite.id;
+
+    const list = await (await fetch(`${baseUrl}/api/v1/favorite-prompts`)).json();
+    assert.equal(list.ok, true);
+    assert.equal(list.favorites.length, 1);
+    assert.equal(list.favorites[0].title, 'Glass lighthouse favorite');
+    assert.equal(list.favorites[0].requestPayload, undefined);
+
+    const single = await (await fetch(`${baseUrl}/api/v1/favorite-prompts/${favoriteId}`)).json();
+    assert.equal(single.ok, true);
+    assert.equal(single.favorite.requestPayload.prompt, payload.prompt);
+
+    const patched = await (await fetch(`${baseUrl}/api/v1/favorite-prompts/${favoriteId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Renamed favorite', notes: 'kept for regression coverage' })
+    })).json();
+    assert.equal(patched.favorite.title, 'Renamed favorite');
+    assert.equal(patched.favorite.description, 'kept for regression coverage');
+  });
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    const persisted = await (await fetch(`${baseUrl}/api/v1/favorite-prompts/${favoriteId}`)).json();
+    assert.equal(persisted.ok, true);
+    assert.equal(persisted.favorite.title, 'Renamed favorite');
+    assert.deepEqual(persisted.favorite.requestPayload.future_provider_field, { preserved: true });
+
+    const deleted = await (await fetch(`${baseUrl}/api/v1/favorite-prompts/${favoriteId}`, { method: 'DELETE' })).json();
+    assert.equal(deleted.ok, true);
+    const missing = await fetch(`${baseUrl}/api/v1/favorite-prompts/${favoriteId}`);
+    assert.equal(missing.status, 404);
   });
 });

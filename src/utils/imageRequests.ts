@@ -77,6 +77,31 @@ export function validateAndNormalizeGenerationRequest(
   };
 }
 
+
+export function generationRequestToApiPayload(request: NormalizedGenerationRequest, sourcePayload: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ...cloneRecord(sourcePayload),
+    prompt: request.prompt,
+    negative_prompt: request.negativePrompt,
+    model: request.model,
+    workflow_id: request.workflowId,
+    width: request.width,
+    height: request.height,
+    steps: request.steps,
+    cfg_scale: request.cfgScale,
+    seed: request.seed,
+    sampler_name: request.samplerName,
+    scheduler: request.scheduler,
+    output: request.output,
+    sync_timeout_ms: request.syncTimeoutMs,
+    metadata: request.metadata
+  };
+}
+
+function cloneRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
+}
+
 export function normalizeResultDelivery(value: string | null, fallback: OutputDelivery): OutputDelivery | null {
   if (!value || value.trim() === '') return fallback;
   const normalized = value.trim().toLowerCase();

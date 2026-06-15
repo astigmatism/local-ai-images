@@ -137,6 +137,7 @@ function normalizeBaseUrl(value: string): string {
 export function loadRuntimeConfig(): RuntimeConfig {
   const configPath = readPath('CONFIG_PATH', './config/local-ai-images.json');
   const artifactPath = readPath('IMAGE_ARTIFACT_PATH', './data/artifacts');
+  const favoriteImagePromptsPath = readPath('FAVORITE_IMAGE_PROMPTS_PATH', path.join(path.dirname(configPath), 'favorite-image-prompts.json'));
   const artifactPublicBaseUrl = readOptionalString('IMAGE_ARTIFACT_PUBLIC_BASE_URL') || '/api/v1/artifacts';
   const legacyOllamaEnabled = readBoolean('LEGACY_OLLAMA_ENABLED', false);
   const imageModelPaths = readPathList('IMAGE_MODEL_PATHS', ['./models']);
@@ -178,6 +179,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
     imageWorkflowPath: readPath('IMAGE_WORKFLOW_PATH', './config/workflows'),
     imageArtifactPath: artifactPath,
     imageArtifactPublicBaseUrl: normalizeBaseUrl(artifactPublicBaseUrl),
+    favoriteImagePromptsPath,
     imageDefaultModel: readOptionalString('IMAGE_DEFAULT_MODEL'),
     imageDefaultWorkflowId,
     imagePreloadDefaultOnStartup: readBoolean('IMAGE_PRELOAD_DEFAULT_ON_STARTUP', false),

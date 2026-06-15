@@ -47,6 +47,7 @@ export function testRuntimeConfig(overrides: Partial<RuntimeConfig> = {}): Runti
     imageWorkflowPath: '/tmp/local-ai-images-workflows',
     imageArtifactPath: '/tmp/local-ai-images-artifacts',
     imageArtifactPublicBaseUrl: '/api/v1/artifacts',
+    favoriteImagePromptsPath: '/tmp/local-ai-images-favorite-prompts.json',
     imageDefaultModel: '',
     imageDefaultWorkflowId: 'sdxl-text-to-image',
     imagePreloadDefaultOnStartup: false,

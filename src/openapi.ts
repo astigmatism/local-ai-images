@@ -57,6 +57,61 @@ const generationRequestSchema = {
   }
 } as const;
 
+
+const favoriteImagePromptSchema = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    id: { type: 'string' },
+    title: { type: 'string' },
+    description: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    requestPayload: generationRequestSchema,
+    prompt: { type: 'string' },
+    negativePrompt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    promptPreview: { type: 'string' },
+    negativePromptPreview: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    model: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    workflow: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    workflowId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    sampler: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    scheduler: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    width: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    height: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    steps: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    cfgScale: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    seed: { oneOf: [{ type: 'number' }, { type: 'string' }, { type: 'null' }] },
+    createdAt: { type: 'string' },
+    updatedAt: { type: 'string' }
+  }
+} as const;
+
+const favoriteImagePromptCreateSchema = {
+  type: 'object',
+  required: ['request_payload'],
+  additionalProperties: true,
+  properties: {
+    title: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    notes: { type: 'string' },
+    request_payload: generationRequestSchema,
+    requestPayload: generationRequestSchema
+  }
+} as const;
+
+const favoriteImagePromptPatchSchema = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    title: { type: 'string' },
+    name: { type: 'string' },
+    description: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    notes: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    request_payload: generationRequestSchema,
+    requestPayload: generationRequestSchema
+  }
+} as const;
+
 const deletePreviewSchema = {
   type: 'object',
   additionalProperties: true,
@@ -317,6 +372,9 @@ export function buildOpenApiDocument() {
         Error: errorSchema,
         Gpu: gpuSchema,
         GenerationRequest: generationRequestSchema,
+        FavoriteImagePrompt: favoriteImagePromptSchema,
+        FavoriteImagePromptCreateRequest: favoriteImagePromptCreateSchema,
+        FavoriteImagePromptPatchRequest: favoriteImagePromptPatchSchema,
         Model: modelSchema,
         ModelInventoryResponse: modelInventoryResponseSchema,
         ModelPreloadStatus: modelPreloadStatusSchema,
@@ -473,6 +531,44 @@ export function buildOpenApiDocument() {
           security: bearerSecurity,
           parameters: [{ name: 'workflowId', in: 'path', required: true, schema: { type: 'string' } }],
           responses: { '200': { description: 'Workflow preset details and ComfyUI mappings' }, '404': { description: 'Workflow not found', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
+        }
+      },
+
+      '/api/v1/favorite-prompts': {
+        get: {
+          summary: 'List saved favorite image-generation prompts',
+          description: 'Returns compact favorite records without generated image binaries. Use the item endpoint to retrieve the stored full generation request payload.',
+          security: bearerSecurity,
+          parameters: [{ name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 250 } }],
+          responses: { '200': { description: 'Saved favorite generation requests', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorites: { type: 'array', items: favoriteImagePromptSchema } } } } } }, ...authErrorResponses }
+        },
+        post: {
+          summary: 'Save a favorite image-generation request payload',
+          description: 'Persists the full generation request payload, including unknown future fields, after validating that a prompt exists.',
+          security: bearerSecurity,
+          requestBody: { required: true, content: { 'application/json': { schema: favoriteImagePromptCreateSchema } } },
+          responses: { '201': { description: 'Favorite prompt saved', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorite: favoriteImagePromptSchema } } } } }, '422': { description: 'Invalid favorite payload' }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/favorite-prompts/{favoriteId}': {
+        get: {
+          summary: 'Read one saved favorite prompt',
+          security: bearerSecurity,
+          parameters: [{ name: 'favoriteId', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { '200': { description: 'Favorite prompt including the full stored generation request payload', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorite: favoriteImagePromptSchema } } } } }, '404': { description: 'Favorite not found', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
+        },
+        patch: {
+          summary: 'Rename, annotate, or replace a saved favorite prompt',
+          security: bearerSecurity,
+          parameters: [{ name: 'favoriteId', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: favoriteImagePromptPatchSchema } } },
+          responses: { '200': { description: 'Updated favorite prompt', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorite: favoriteImagePromptSchema } } } } }, '404': { description: 'Favorite not found', content: { 'application/json': { schema: errorSchema } } }, '422': { description: 'Invalid favorite update' }, ...authErrorResponses }
+        },
+        delete: {
+          summary: 'Delete a saved favorite prompt',
+          security: bearerSecurity,
+          parameters: [{ name: 'favoriteId', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { '200': { description: 'Deleted favorite prompt' }, '404': { description: 'Favorite not found', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
         }
       },
       '/api/v1/generate': {

@@ -69,6 +69,7 @@ export function summarizeImageJob(job: ImageJob) {
     artifacts: job.artifacts.map(publicArtifactMetadata),
     thumbnailUrl: job.artifacts[0]?.url ?? null,
     request: job.request,
+    ...(job.requestPayload ? { requestPayload: cloneRecord(job.requestPayload) } : {}),
     metadata: job.metadata,
     timings,
     queueWaitMs: timings.queueWaitMs,
@@ -78,6 +79,10 @@ export function summarizeImageJob(job: ImageJob) {
     stepsPerSecond: timings.stepsPerSecond,
     error: job.error ? { ...job.error } : null
   };
+}
+
+function cloneRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
 }
 
 function publicArtifactMetadata(artifact: ImageJob['artifacts'][number]) {

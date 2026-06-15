@@ -18,6 +18,7 @@ export class ArtifactStore {
     provider: string;
     workflowId: string;
     request: NormalizedGenerationRequest;
+    requestPayload?: Record<string, unknown>;
     images: ImageArtifactData[];
     job?: ArtifactMetadata['job'];
   }): Promise<ArtifactMetadata[]> {
@@ -50,6 +51,7 @@ export class ArtifactStore {
         ...(options.request.negativePrompt ? { negativePrompt: options.request.negativePrompt } : {}),
         seed: options.request.seed,
         request: publicRequestMetadata(options.request),
+        ...(options.requestPayload ? { requestPayload: cloneRecord(options.requestPayload) } : {}),
         ...(image.providerMetadata ? { providerMetadata: image.providerMetadata } : {}),
         ...(options.job ? { job: options.job } : {})
       };
@@ -150,6 +152,7 @@ function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
   const first = artifacts[0]!;
   const job = first.job;
   const request = first.request ?? {};
+  const requestPayload = first.requestPayload ?? request;
   return {
     id: jobId,
     status: job?.status ?? 'succeeded',
@@ -177,6 +180,7 @@ function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
     artifacts: artifacts.map((artifact) => publicArtifactMetadata(artifact)),
     thumbnailUrl: artifacts[0]?.url ?? null,
     request,
+    requestPayload,
     metadata: {},
     timings: job?.timings ?? {
       queueWaitMs: null,
@@ -188,6 +192,10 @@ function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
     error: null,
     durable: true
   };
+}
+
+function cloneRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
 }
 
 function publicArtifactMetadata(artifact: ArtifactMetadata) {

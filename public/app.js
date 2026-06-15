@@ -7,10 +7,12 @@ const state = {
   imageModels: null,
   imageWorkflows: null,
   imageJobs: null,
+  favoritePrompts: null,
   modelDownloads: null,
   modelCatalog: null,
   imageError: null,
-  activeJobId: null
+  activeJobId: null,
+  loadedFavoritePayloadBase: null
 };
 
 const thumbnailObjectUrls = new Map();
@@ -70,6 +72,55 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function clonePayload(value) {
+  return isPlainObject(value) ? JSON.parse(JSON.stringify(value)) : {};
+}
+
+function payloadString(payload, keys) {
+  if (!isPlainObject(payload)) return '';
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function payloadNumber(payload, keys) {
+  if (!isPlainObject(payload)) return null;
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function payloadSeed(payload) {
+  if (!isPlainObject(payload)) return null;
+  const value = payload.seed;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  return null;
+}
+
+function defaultFavoriteTitleFromPayload(payload, fallback = 'Favorite image prompt') {
+  const prompt = payloadString(payload, ['prompt', 'positive_prompt', 'positivePrompt']);
+  const compact = prompt.replace(/\s+/g, ' ').trim();
+  if (!compact) return fallback;
+  return compact.length > 80 ? `${compact.slice(0, 79).trimEnd()}…` : compact;
+}
+
+function compactJsonPayload(payload) {
+  return clonePayload(payload);
 }
 
 function renderKeyValues(values) {
@@ -426,6 +477,60 @@ function recentImageJobs() {
   return state.imageJobs?.jobs || state.imageStats?.recent_jobs || [];
 }
 
+function savedFavoritePrompts() {
+  return state.favoritePrompts?.favorites || [];
+}
+
+function renderFavoriteMeta(favorite) {
+  return `<div class="compact-meta favorite-meta">
+    ${renderCompactMetaLine([
+      ['Model', favorite.model ? `<code>${escapeHtml(favorite.model)}</code>` : '<span class="muted">n/a</span>'],
+      ['Workflow', escapeHtml(favorite.workflowId || favorite.workflow || 'n/a')],
+      ['Updated', escapeHtml(formatDate(favorite.updatedAt))]
+    ])}
+    ${renderCompactMetaLine([
+      ['Size', escapeHtml(`${favorite.width ?? 'n/a'} x ${favorite.height ?? 'n/a'}`)],
+      ['Steps', escapeHtml(favorite.steps ?? 'n/a')],
+      ['Seed', escapeHtml(favorite.seed ?? 'n/a')],
+      ['CFG / sampler', escapeHtml(`${favorite.cfgScale ?? 'n/a'} / ${favorite.sampler ?? 'n/a'}`)],
+      ['Scheduler', escapeHtml(favorite.scheduler ?? 'n/a')]
+    ])}
+  </div>`;
+}
+
+function renderFavoritePrompts() {
+  const target = $('#favorite-prompts');
+  if (!target) return;
+  const favorites = savedFavoritePrompts();
+  if (!state.favoritePrompts) {
+    target.innerHTML = imageApiAuthRequiredWithoutKey()
+      ? '<p class="muted">Enter the dashboard API key above to load saved favorites.</p>'
+      : '<p class="muted">No saved favorite data loaded yet.</p>';
+    return;
+  }
+  if (favorites.length === 0) {
+    target.innerHTML = '<p class="muted">No saved favorites yet. Use Save Favorite from the generator or a recent job.</p>';
+    return;
+  }
+
+  target.innerHTML = `<div class="favorite-prompt-list">${favorites.map((favorite) => `<article class="favorite-prompt-card" data-favorite-id="${escapeHtml(favorite.id)}">
+    <div class="favorite-title-row">
+      <div>
+        <h3>${escapeHtml(favorite.title || 'Untitled favorite')}</h3>
+        ${favorite.description ? `<p class="muted favorite-description">${escapeHtml(favorite.description)}</p>` : ''}
+      </div>
+      <div class="button-row favorite-actions">
+        <button type="button" data-favorite-action="load">Load</button>
+        <button type="button" class="secondary" data-favorite-action="rename">Rename</button>
+        <button type="button" class="secondary danger" data-favorite-action="delete">Delete</button>
+      </div>
+    </div>
+    ${renderPromptBlock('Prompt', favorite.promptPreview || favorite.prompt || '', 'No prompt recorded')}
+    ${favorite.negativePromptPreview ? renderPromptBlock('Negative Prompt', favorite.negativePromptPreview, 'No negative prompt recorded') : ''}
+    ${renderFavoriteMeta(favorite)}
+  </article>`).join('')}</div>`;
+}
+
 function renderJobMetrics(job) {
   const timings = jobTimings(job);
   const artifacts = jobArtifacts(job);
@@ -500,6 +605,7 @@ function renderJobs() {
       </div>
       <div class="job-card-actions">
         <button type="button" class="secondary" data-job-action="reuse-prompt" data-job-index="${escapeHtml(index)}" data-job-id="${escapeHtml(jobId)}">Reuse Prompt</button>
+        <button type="button" class="secondary" data-job-action="save-favorite" data-job-index="${escapeHtml(index)}" data-job-id="${escapeHtml(jobId)}">Save Favorite</button>
       </div>
       <div class="job-prompt-grid">
         ${renderPromptBlock('Prompt', prompt, 'No prompt recorded')}
@@ -687,7 +793,10 @@ function applyWorkflowDefaults(overwrite = true) {
 
 function buildPlaygroundPayload() {
   const status = currentPreloadStatus();
+  const basePayload = isPlainObject(state.loadedFavoritePayloadBase) ? clonePayload(state.loadedFavoritePayloadBase) : {};
+  const baseMetadata = isPlainObject(basePayload.metadata) ? basePayload.metadata : {};
   const payload = {
+    ...basePayload,
     prompt: $('#playground-prompt')?.value.trim() || '',
     negative_prompt: $('#playground-negative')?.value.trim() || '',
     workflow_id: $('#playground-workflow')?.value || undefined,
@@ -700,7 +809,7 @@ function buildPlaygroundPayload() {
     scheduler: $('#playground-scheduler')?.value.trim() || undefined,
     output: $('#playground-output')?.value || 'url',
     sync_timeout_ms: Number($('#playground-sync-timeout')?.value || 0),
-    metadata: { source: 'portal-generator' }
+    metadata: { ...baseMetadata, source: 'portal-generator' }
   };
   const model = selectedPlaygroundModel() || status?.currentDefaultCheckpoint || '';
   if (model) payload.model = model;
@@ -753,6 +862,7 @@ function renderAll() {
   renderQueue();
   renderImageModels();
   renderWorkflows();
+  renderFavoritePrompts();
   renderJobs();
   renderGpus();
   renderModelDownloads();
@@ -773,6 +883,7 @@ async function refreshImageApi() {
     state.imageModels = null;
     state.imageWorkflows = null;
     state.imageJobs = null;
+    state.favoritePrompts = null;
     state.modelDownloads = null;
     state.modelCatalog = null;
     state.imageError = new Error('Dashboard API key required for protected /api/v1 calls. Paste one IMAGE_API_KEYS value above.');
@@ -780,11 +891,12 @@ async function refreshImageApi() {
     return;
   }
 
-  const [stats, models, workflows, jobs, downloads, catalog] = await Promise.allSettled([
+  const [stats, models, workflows, jobs, favorites, downloads, catalog] = await Promise.allSettled([
     fetchJson('/api/v1/stats'),
     fetchJson('/api/v1/models'),
     fetchJson('/api/v1/workflows'),
     fetchJson('/api/v1/jobs?limit=10'),
+    fetchJson('/api/v1/favorite-prompts?limit=50'),
     fetchJson('/api/v1/model-downloads?limit=20'),
     fetchJson('/api/v1/model-catalog')
   ]);
@@ -793,10 +905,11 @@ async function refreshImageApi() {
   if (models.status === 'fulfilled') state.imageModels = models.value;
   if (workflows.status === 'fulfilled') state.imageWorkflows = workflows.value;
   if (jobs.status === 'fulfilled') state.imageJobs = jobs.value;
+  if (favorites.status === 'fulfilled') state.favoritePrompts = favorites.value;
   if (downloads.status === 'fulfilled') state.modelDownloads = downloads.value;
   if (catalog.status === 'fulfilled') state.modelCatalog = catalog.value;
 
-  const rejected = [stats, models, workflows, jobs, downloads, catalog].find((result) => result.status === 'rejected');
+  const rejected = [stats, models, workflows, jobs, favorites, downloads, catalog].find((result) => result.status === 'rejected');
   if (rejected) {
     state.imageError = rejected.reason;
     console.warn(rejected.reason);
@@ -816,6 +929,12 @@ async function refreshModelsOnly(message = 'Model inventory refreshed.') {
   state.imageModels = await fetchJson('/api/v1/models/refresh', { method: 'POST' });
   renderImageModels();
   setImageFeedback(message);
+}
+
+async function refreshFavoritesOnly(message = '') {
+  state.favoritePrompts = await fetchJson('/api/v1/favorite-prompts?limit=50');
+  renderFavoritePrompts();
+  if (message) setImageFeedback(message);
 }
 
 function setImageFeedback(message, ok = true) {
@@ -919,6 +1038,181 @@ async function handleDefaultAction(event) {
   }
 }
 
+function selectPlaygroundModelByPayload(model) {
+  if (!model) return true;
+  const select = $('#playground-model');
+  if (!select) return false;
+  const direct = [...select.options].find((option) => option.value === model);
+  if (direct) {
+    select.value = direct.value;
+    return true;
+  }
+  const matched = checkpointModels().find((candidate) => modelMatches(candidate, model));
+  if (matched) {
+    select.value = modelIdentifier(matched);
+    return true;
+  }
+  return false;
+}
+
+function selectWorkflowByPayload(workflowId) {
+  if (!workflowId) return true;
+  const select = $('#playground-workflow');
+  if (!select) return false;
+  const match = [...select.options].find((option) => option.value === workflowId);
+  if (!match) return false;
+  select.value = match.value;
+  return true;
+}
+
+function setInputValue(selector, value) {
+  const input = $(selector);
+  if (!input || value === null || value === undefined || value === '') return;
+  input.value = value;
+}
+
+function applyGenerationPayloadToPlayground(payload) {
+  const requestPayload = compactJsonPayload(payload);
+  const warnings = [];
+  state.loadedFavoritePayloadBase = requestPayload;
+
+  const promptInput = $('#playground-prompt');
+  const negativeInput = $('#playground-negative');
+  if (promptInput) promptInput.value = payloadString(requestPayload, ['prompt', 'positive_prompt', 'positivePrompt']);
+  if (negativeInput) negativeInput.value = payloadString(requestPayload, ['negative_prompt', 'negativePrompt']);
+
+  const model = payloadString(requestPayload, ['model']);
+  if (model && !selectPlaygroundModelByPayload(model)) warnings.push(`model ${model}`);
+
+  const workflowId = payloadString(requestPayload, ['workflow_id', 'workflowId', 'workflow']);
+  if (workflowId && !selectWorkflowByPayload(workflowId)) warnings.push(`workflow ${workflowId}`);
+
+  setInputValue('#playground-width', payloadNumber(requestPayload, ['width']));
+  setInputValue('#playground-height', payloadNumber(requestPayload, ['height']));
+  setInputValue('#playground-steps', payloadNumber(requestPayload, ['steps']));
+  setInputValue('#playground-cfg-scale', payloadNumber(requestPayload, ['cfg_scale', 'cfgScale', 'guidance_scale', 'guidanceScale']));
+  setInputValue('#playground-sampler', payloadString(requestPayload, ['sampler_name', 'samplerName', 'sampler']));
+  setInputValue('#playground-scheduler', payloadString(requestPayload, ['scheduler']));
+  setInputValue('#playground-output', payloadString(requestPayload, ['output', 'output_delivery', 'outputDelivery']) || 'url');
+  setInputValue('#playground-sync-timeout', payloadNumber(requestPayload, ['sync_timeout_ms', 'syncTimeoutMs']));
+
+  const seed = payloadSeed(requestPayload);
+  const randomSeed = $('#playground-random-seed');
+  const seedInput = $('#playground-seed');
+  if (seed === null || Number(seed) < 0) {
+    if (randomSeed) randomSeed.checked = true;
+    if (seedInput) seedInput.value = '-1';
+  } else {
+    if (randomSeed) randomSeed.checked = false;
+    if (seedInput) seedInput.value = seed;
+  }
+
+  updatePlaygroundPreview();
+  return warnings;
+}
+
+function favoritePromptById(favoriteId) {
+  return savedFavoritePrompts().find((favorite) => String(favorite.id || '') === favoriteId) || null;
+}
+
+async function saveFavoritePayload(payload, defaultTitle = 'Favorite image prompt') {
+  const prompt = payloadString(payload, ['prompt', 'positive_prompt', 'positivePrompt']);
+  if (!prompt) {
+    setImageFeedback('Prompt is required before saving a favorite.', false);
+    return;
+  }
+  const title = window.prompt('Save favorite as:', defaultFavoriteTitleFromPayload(payload, defaultTitle));
+  if (title === null) {
+    setImageFeedback('Save favorite canceled.', false);
+    return;
+  }
+  const body = {
+    title: title.trim() || defaultFavoriteTitleFromPayload(payload, defaultTitle),
+    request_payload: compactJsonPayload(payload)
+  };
+  const created = await fetchJson('/api/v1/favorite-prompts', { method: 'POST', body: JSON.stringify(body) });
+  await refreshFavoritesOnly(`Saved favorite “${created.favorite?.title || body.title}”.`);
+}
+
+async function handleSaveCurrentFavorite() {
+  const payload = buildPlaygroundPayload();
+  if (!payload.prompt) {
+    setImageFeedback('Prompt is required before saving a favorite.', false);
+    return;
+  }
+  try {
+    await saveFavoritePayload(payload, 'Current generator settings');
+  } catch (error) {
+    setImageFeedback(`Unable to save favorite: ${error.message}`, false);
+  }
+}
+
+function jobFavoritePayload(job) {
+  if (isPlainObject(job?.requestPayload)) return compactJsonPayload(job.requestPayload);
+  if (isPlainObject(job?.request_payload)) return compactJsonPayload(job.request_payload);
+  if (isPlainObject(job?.request)) return compactJsonPayload(job.request);
+  const payload = {
+    prompt: jobPrompt(job),
+    negative_prompt: jobNegativePrompt(job),
+    model: job?.model || undefined,
+    workflow_id: job?.workflowId || undefined,
+    width: job?.width || undefined,
+    height: job?.height || undefined,
+    steps: job?.steps || undefined,
+    cfg_scale: job?.cfgScale || undefined,
+    seed: job?.seed ?? undefined,
+    sampler_name: job?.samplerName || undefined,
+    scheduler: job?.scheduler || undefined,
+    output: job?.output || undefined
+  };
+  for (const key of Object.keys(payload)) {
+    if (payload[key] === undefined || payload[key] === '') delete payload[key];
+  }
+  return payload;
+}
+
+async function handleFavoriteAction(event) {
+  const button = event.target.closest('[data-favorite-action]');
+  if (!button || button.disabled) return;
+  const card = button.closest('[data-favorite-id]');
+  const favoriteId = card?.dataset?.favoriteId;
+  if (!favoriteId) return;
+  const summary = favoritePromptById(favoriteId);
+  const action = button.dataset.favoriteAction;
+
+  try {
+    if (action === 'load') {
+      const response = await fetchJson(`/api/v1/favorite-prompts/${encodeURIComponent(favoriteId)}`);
+      const favorite = response.favorite;
+      const warnings = applyGenerationPayloadToPlayground(favorite?.requestPayload || {});
+      const warningText = warnings.length ? ` Some settings are no longer available and were not selected: ${warnings.join(', ')}.` : '';
+      setImageFeedback(`Loaded favorite “${favorite?.title || summary?.title || favoriteId}” into Generate image.${warningText}`, warnings.length === 0);
+      return;
+    }
+
+    if (action === 'rename') {
+      const nextTitle = window.prompt('Rename favorite:', summary?.title || '');
+      if (nextTitle === null) return;
+      if (!nextTitle.trim()) {
+        setImageFeedback('Favorite title cannot be empty.', false);
+        return;
+      }
+      await fetchJson(`/api/v1/favorite-prompts/${encodeURIComponent(favoriteId)}`, { method: 'PATCH', body: JSON.stringify({ title: nextTitle.trim() }) });
+      await refreshFavoritesOnly('Renamed favorite.');
+      return;
+    }
+
+    if (action === 'delete') {
+      const ok = window.confirm(`Delete saved favorite “${summary?.title || favoriteId}”?`);
+      if (!ok) return;
+      await fetchJson(`/api/v1/favorite-prompts/${encodeURIComponent(favoriteId)}`, { method: 'DELETE' });
+      await refreshFavoritesOnly('Deleted favorite.');
+    }
+  } catch (error) {
+    setImageFeedback(error.message, false);
+  }
+}
+
 function findJobFromReuseButton(button) {
   const jobs = recentImageJobs();
   const index = Number(button.dataset.jobIndex);
@@ -927,21 +1221,37 @@ function findJobFromReuseButton(button) {
   return jobs.find((job) => String(job.id || '') === id) || null;
 }
 
-function handleJobAction(event) {
+async function handleJobAction(event) {
   const button = event.target.closest('[data-job-action]');
   if (!button || button.disabled) return;
-  if (button.dataset.jobAction !== 'reuse-prompt') return;
   const job = findJobFromReuseButton(button);
-  const promptInput = $('#playground-prompt');
-  const negativeInput = $('#playground-negative');
-  if (!job || !promptInput || !negativeInput) {
-    setImageFeedback('Unable to reuse that prompt from the current job list.', false);
+  if (!job) {
+    setImageFeedback('Unable to find that job in the current list.', false);
     return;
   }
-  promptInput.value = jobPrompt(job);
-  negativeInput.value = jobNegativePrompt(job);
-  updatePlaygroundPreview();
-  setImageFeedback(`Copied prompt${jobNegativePrompt(job) ? ' and negative prompt' : ''} from job ${job.id || 'n/a'} into Generate image.`);
+
+  if (button.dataset.jobAction === 'reuse-prompt') {
+    const promptInput = $('#playground-prompt');
+    const negativeInput = $('#playground-negative');
+    if (!promptInput || !negativeInput) {
+      setImageFeedback('Unable to reuse that prompt from the current job list.', false);
+      return;
+    }
+    promptInput.value = jobPrompt(job);
+    negativeInput.value = jobNegativePrompt(job);
+    updatePlaygroundPreview();
+    setImageFeedback(`Copied prompt${jobNegativePrompt(job) ? ' and negative prompt' : ''} from job ${job.id || 'n/a'} into Generate image.`);
+    return;
+  }
+
+  if (button.dataset.jobAction === 'save-favorite') {
+    try {
+      const payload = jobFavoritePayload(job);
+      await saveFavoritePayload(payload, `Job ${job.id || 'image'} settings`);
+    } catch (error) {
+      setImageFeedback(`Unable to save job as favorite: ${error.message}`, false);
+    }
+  }
 }
 
 async function handlePlaygroundSubmit(event) {
@@ -1046,6 +1356,7 @@ function wireEvents() {
   $('#image-models').addEventListener('click', handleModelAction);
   $('#default-model-status').addEventListener('click', handleDefaultAction);
   $('#image-jobs').addEventListener('click', handleJobAction);
+  $('#favorite-prompts')?.addEventListener('click', handleFavoriteAction);
   $('#playground-form').addEventListener('submit', handlePlaygroundSubmit);
   $('#apply-workflow-defaults').addEventListener('click', () => {
     applyWorkflowDefaults(true);
@@ -1054,6 +1365,14 @@ function wireEvents() {
   $('#playground-load-selected').addEventListener('click', () => handlePlaygroundModelButton('load'));
   $('#playground-set-selected-default').addEventListener('click', () => handlePlaygroundModelButton('default'));
   $('#playground-preload-selected-startup').addEventListener('click', () => handlePlaygroundModelButton('startup'));
+  $('#playground-save-favorite')?.addEventListener('click', handleSaveCurrentFavorite);
+  $('#refresh-favorites-button')?.addEventListener('click', async () => {
+    try {
+      await refreshFavoritesOnly('Saved favorites refreshed.');
+    } catch (error) {
+      setImageFeedback(`Unable to refresh favorites: ${error.message}`, false);
+    }
+  });
   $('#playground-cancel').addEventListener('click', async () => {
     if (!state.activeJobId) return;
     try {

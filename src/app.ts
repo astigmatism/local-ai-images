@@ -8,10 +8,10 @@ import { buildOpenApiDocument } from './openapi.ts';
 import { toLegacyGpu } from './services/gpuService.ts';
 import { createImageRuntime, type ImageRuntime } from './services/image/runtime.ts';
 import { findInventoryModel, modelMatchesDefault } from './services/image/modelIdentity.ts';
-import type { AppConfig, ArtifactMetadata, GpuServiceLike, ImageJob, ModelInventory, ModelInventoryItem, OllamaClientLike, OllamaImageGenerateOptions, OutputDelivery, RuntimeConfig, WorkflowPreset } from './types.ts';
+import type { AppConfig, ArtifactMetadata, FavoriteImagePrompt, GpuServiceLike, ImageJob, ModelInventory, ModelInventoryItem, OllamaClientLike, OllamaImageGenerateOptions, OutputDelivery, RuntimeConfig, WorkflowPreset } from './types.ts';
 import { validateModelLoadRequest, validateModelName } from './utils/validation.ts';
 import { authenticateImageApiRequest } from './utils/auth.ts';
-import { normalizeResultDelivery, validateAndNormalizeGenerationRequest } from './utils/imageRequests.ts';
+import { generationRequestToApiPayload, normalizeResultDelivery, validateAndNormalizeGenerationRequest } from './utils/imageRequests.ts';
 import { summarizeImageJob } from './utils/jobMetrics.ts';
 import { isDefaultModelLoaded } from './utils/modelState.ts';
 import { APPLICATION_VERSION, RUNTIME_NAME, SERVICE_NAME } from './version.ts';
@@ -411,6 +411,34 @@ async function routeImageApiV1(
     return;
   }
 
+
+  if (method === 'GET' && pathName === '/api/v1/favorite-prompts') {
+    await handleImageApiFavoritePrompts(response, dependencies, url);
+    return;
+  }
+
+  if (method === 'POST' && pathName === '/api/v1/favorite-prompts') {
+    await handleImageApiCreateFavoritePrompt(request, response, dependencies);
+    return;
+  }
+
+  const favoritePromptMatch = /^\/api\/v1\/favorite-prompts\/([^/]+)$/u.exec(pathName);
+  if (favoritePromptMatch?.[1]) {
+    const favoriteId = decodeURIComponent(favoritePromptMatch[1]);
+    if (method === 'GET') {
+      await handleImageApiFavoritePrompt(response, dependencies, favoriteId);
+      return;
+    }
+    if (method === 'PATCH') {
+      await handleImageApiUpdateFavoritePrompt(request, response, dependencies, favoriteId);
+      return;
+    }
+    if (method === 'DELETE') {
+      await handleImageApiDeleteFavoritePrompt(response, dependencies, favoriteId);
+      return;
+    }
+  }
+
   if (method === 'POST' && pathName === '/api/v1/generate') {
     await handleImageApiGenerate(request, response, dependencies);
     return;
@@ -507,6 +535,7 @@ async function handleImageApiCapabilities(response: ServerResponse, dependencies
       workflows: '/api/v1/workflows',
       generate: '/api/v1/generate',
       jobs: '/api/v1/jobs',
+      favorite_prompts: '/api/v1/favorite-prompts',
       artifacts: '/api/v1/artifacts/{artifactId}',
       model_catalog: '/api/v1/model-catalog',
       model_downloads: '/api/v1/model-downloads',
@@ -774,6 +803,62 @@ async function handleImageApiWorkflow(response: ServerResponse, dependencies: Re
   }
 }
 
+async function handleImageApiFavoritePrompts(response: ServerResponse, dependencies: ResolvedAppDependencies, url: URL): Promise<void> {
+  try {
+    const limit = readQueryInteger(url, 'limit', 100, 1, 250);
+    const favorites = await dependencies.imageRuntime.favoritePromptStore.list(limit);
+    sendJson(response, 200, {
+      ok: true,
+      path: dependencies.imageRuntime.favoritePromptStore.path,
+      favorites: favorites.map(publicFavoritePromptSummary)
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'FAVORITE_PROMPTS_LIST_FAILED'));
+  }
+}
+
+async function handleImageApiFavoritePrompt(response: ServerResponse, dependencies: ResolvedAppDependencies, favoriteId: string): Promise<void> {
+  try {
+    const favorite = await dependencies.imageRuntime.favoritePromptStore.get(favoriteId);
+    sendJson(response, 200, { ok: true, favorite: publicFavoritePrompt(favorite) });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error));
+  }
+}
+
+async function handleImageApiCreateFavoritePrompt(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    const body = await readJsonBody(request);
+    const favorite = await dependencies.imageRuntime.favoritePromptStore.create(body);
+    sendJson(response, 201, { ok: true, favorite: publicFavoritePrompt(favorite) });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'FAVORITE_PROMPT_CREATE_FAILED'));
+  }
+}
+
+async function handleImageApiUpdateFavoritePrompt(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies, favoriteId: string): Promise<void> {
+  try {
+    const body = await readJsonBody(request);
+    const favorite = await dependencies.imageRuntime.favoritePromptStore.update(favoriteId, body);
+    sendJson(response, 200, { ok: true, favorite: publicFavoritePrompt(favorite) });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error));
+  }
+}
+
+async function handleImageApiDeleteFavoritePrompt(response: ServerResponse, dependencies: ResolvedAppDependencies, favoriteId: string): Promise<void> {
+  try {
+    const favorite = await dependencies.imageRuntime.favoritePromptStore.delete(favoriteId);
+    sendJson(response, 200, {
+      ok: true,
+      deleted_id: favoriteId,
+      favorite: publicFavoritePromptSummary(favorite)
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error));
+  }
+}
+
 async function handleImageApiGenerate(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
   const { imageRuntime, runtimeConfig } = dependencies;
   if (!runtimeConfig.imageGenerationEnabled) {
@@ -799,7 +884,8 @@ async function handleImageApiGenerate(request: IncomingMessage, response: Server
   }
 
   try {
-    const job = imageRuntime.jobQueue.submit(parsed.value, parsed.workflow);
+    const requestPayload = generationRequestToApiPayload(parsed.value, isRecord(body) ? body : {});
+    const job = imageRuntime.jobQueue.submit(parsed.value, parsed.workflow, requestPayload);
     const completedJob = await imageRuntime.jobQueue.waitForCompletion(job.id, parsed.value.syncTimeoutMs);
 
     if (!completedJob) {
@@ -877,7 +963,7 @@ async function handleImageApiJobReplay(response: ServerResponse, dependencies: R
   try {
     const originalJob = dependencies.imageRuntime.jobQueue.getJob(jobId);
     const workflow = await dependencies.imageRuntime.workflowStore.get(originalJob.workflowId);
-    const replayJob = dependencies.imageRuntime.jobQueue.submit(originalJob.request, workflow);
+    const replayJob = dependencies.imageRuntime.jobQueue.submit(originalJob.request, workflow, originalJob.requestPayload);
     sendJson(response, 202, {
       ok: true,
       replayed_from: jobId,
@@ -1017,6 +1103,37 @@ function publicWorkflowDetails(workflow: WorkflowPreset) {
   return {
     ...publicWorkflowSummary(workflow),
     mappings: workflow.comfyui.mappings
+  };
+}
+
+function publicFavoritePromptSummary(favorite: FavoriteImagePrompt) {
+  return {
+    id: favorite.id,
+    title: favorite.title,
+    ...(favorite.description !== undefined ? { description: favorite.description } : {}),
+    prompt: favorite.prompt,
+    negativePrompt: favorite.negativePrompt ?? null,
+    promptPreview: favorite.promptPreview,
+    negativePromptPreview: favorite.negativePromptPreview ?? null,
+    model: favorite.model ?? null,
+    workflow: favorite.workflow ?? null,
+    workflowId: favorite.workflowId ?? favorite.workflow ?? null,
+    sampler: favorite.sampler ?? null,
+    scheduler: favorite.scheduler ?? null,
+    width: favorite.width ?? null,
+    height: favorite.height ?? null,
+    steps: favorite.steps ?? null,
+    cfgScale: favorite.cfgScale ?? null,
+    seed: favorite.seed ?? null,
+    createdAt: favorite.createdAt,
+    updatedAt: favorite.updatedAt
+  };
+}
+
+function publicFavoritePrompt(favorite: FavoriteImagePrompt) {
+  return {
+    ...publicFavoritePromptSummary(favorite),
+    requestPayload: favorite.requestPayload
   };
 }
 
@@ -1798,6 +1915,16 @@ function renderPortalHtml(): string {
         <div id="playground-status"></div>
       </div>
       <div id="playground-default-model" class="notice">Loading default model...</div>
+      <section class="saved-favorites-panel">
+        <div class="section-heading compact-section-heading">
+          <div>
+            <h3>Saved favorites</h3>
+            <p class="hint">Save complete generation requests, then load them back into this form without starting a job automatically.</p>
+          </div>
+          <button id="refresh-favorites-button" class="secondary" type="button">Refresh favorites</button>
+        </div>
+        <div id="favorite-prompts" class="placeholder">Loading saved favorites...</div>
+      </section>
       <div class="playground-layout">
         <form id="playground-form" class="stack">
           <div class="form-grid">
@@ -1834,6 +1961,7 @@ function renderPortalHtml(): string {
           </div>
           <div class="button-row">
             <button type="submit">Submit generation</button>
+            <button id="playground-save-favorite" class="secondary" type="button">Save Favorite</button>
             <button id="playground-load-selected" class="secondary" type="button">Load selected checkpoint now</button>
             <button id="playground-set-selected-default" class="secondary" type="button">Set selected checkpoint as default</button>
             <button id="playground-preload-selected-startup" class="secondary" type="button">Set selected default + preload after restart</button>
