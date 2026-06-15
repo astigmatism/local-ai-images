@@ -1,5 +1,6 @@
 :root {
   color-scheme: light dark;
+  --page-gutter: clamp(16px, 2.5vw, 64px);
   --bg: #111827;
   --card: #1f2937;
   --card-soft: #263244;
@@ -27,8 +28,11 @@ body {
 .site-header,
 main,
 footer {
-  width: min(1180px, calc(100% - 32px));
+  width: 100%;
+  max-width: none;
   margin: 0 auto;
+  padding-left: var(--page-gutter);
+  padding-right: var(--page-gutter);
 }
 
 .site-header {
@@ -36,7 +40,7 @@ footer {
   justify-content: space-between;
   align-items: center;
   gap: 24px;
-  padding: 32px 0 20px;
+  padding: 32px var(--page-gutter) 20px;
 }
 
 h1,
@@ -282,7 +286,7 @@ footer {
   color: var(--muted);
   display: flex;
   justify-content: space-between;
-  padding: 18px 0 28px;
+  padding: 18px var(--page-gutter) 28px;
 }
 
 footer a {
@@ -552,7 +556,8 @@ pre code {
 }
 
 .result-image {
-  max-height: 420px;
+  max-height: 820px;
+  max-height: min(72vh, 820px);
   object-fit: contain;
   margin-bottom: 12px;
 }
@@ -795,23 +800,25 @@ summary {
 }
 
 .recent-jobs-card .hint {
-  max-width: 850px;
+  max-width: 1100px;
 }
 
 .image-job-gallery {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr));
+  gap: clamp(14px, 1.3vw, 24px);
+  align-items: start;
 }
 
 .image-job-card {
   background: var(--card-soft);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 12px;
+  padding: clamp(12px, 0.8vw, 16px);
   display: grid;
   grid-template-columns: 1fr;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -841,6 +848,7 @@ summary {
 .gallery-image-frame {
   aspect-ratio: 1 / 1;
   min-height: 260px;
+  min-height: clamp(260px, 28vw, 720px);
   background: #111827;
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -862,6 +870,7 @@ summary {
 .gallery-image-frame .thumb-placeholder {
   height: 100%;
   min-height: 260px;
+  min-height: clamp(260px, 28vw, 720px);
   border: 0;
   border-radius: 0;
 }
@@ -917,9 +926,24 @@ summary {
   margin-bottom: 0;
 }
 
-@media (min-width: 1120px) {
+@media (min-width: 1600px) {
   .image-job-gallery {
-    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(560px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr));
+  }
+}
+
+@media (min-width: 2200px) {
+  .image-job-gallery {
+    grid-template-columns: repeat(auto-fit, minmax(720px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 720px), 1fr));
+  }
+}
+
+@media (min-width: 3000px) {
+  .image-job-gallery {
+    grid-template-columns: repeat(auto-fit, minmax(900px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 900px), 1fr));
   }
 }
 
