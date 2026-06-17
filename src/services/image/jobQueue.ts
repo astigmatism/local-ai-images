@@ -88,10 +88,11 @@ export class ImageJobQueue {
 
   listJobs(limit = 50): ImageJobSummary[] {
     const boundedLimit = Math.min(Math.max(limit, 1), 250);
-    return [...this.jobs.values()]
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-      .slice(0, boundedLimit)
-      .map((job) => summarizeImageJob(job));
+    return this.sortedJobSummaries().slice(0, boundedLimit);
+  }
+
+  listAllJobs(): ImageJobSummary[] {
+    return this.sortedJobSummaries();
   }
 
   getJob(jobId: string): ImageJob {
@@ -169,6 +170,12 @@ export class ImageJobQueue {
       concurrency: this.concurrency,
       maxQueuedJobs: this.maxQueuedJobs
     };
+  }
+
+  private sortedJobSummaries(): ImageJobSummary[] {
+    return [...this.jobs.values()]
+      .sort(compareJobsNewestFirst)
+      .map((job) => summarizeImageJob(job));
   }
 
   private drain(): void {
@@ -309,6 +316,21 @@ function errorToJobError(error: unknown): ImageJob['error'] {
 
 function isTerminalStatus(status: JobStatus): boolean {
   return status === 'succeeded' || status === 'failed' || status === 'canceled';
+}
+
+function compareJobsNewestFirst(left: ImageJob, right: ImageJob): number {
+  const leftTimestamp = historyTimestamp(left);
+  const rightTimestamp = historyTimestamp(right);
+  if (leftTimestamp !== rightTimestamp) return rightTimestamp - leftTimestamp;
+  return left.id.localeCompare(right.id);
+}
+
+function historyTimestamp(job: ImageJob): number {
+  for (const value of [job.completedAt, job.createdAt, job.startedAt, job.updatedAt, job.queuedAt]) {
+    const parsed = value ? Date.parse(value) : Number.NaN;
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
 }
 
 function cloneJob(job: ImageJob): ImageJob {

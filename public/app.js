@@ -1,5 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
 
+const IMAGE_HISTORY_DEFAULT_PAGE_SIZE = 9;
+
 const state = {
   imageApiKey: window.localStorage.getItem('local-ai-images-api-key') || '',
   imageHealth: null,
@@ -7,6 +9,11 @@ const state = {
   imageModels: null,
   imageWorkflows: null,
   imageJobs: null,
+  imageJobsPage: 1,
+  imageJobsPageSize: IMAGE_HISTORY_DEFAULT_PAGE_SIZE,
+  imageJobsLoading: false,
+  imageJobsError: null,
+  imageJobsRequestId: 0,
   favoritePrompts: null,
   modelDownloads: null,
   modelCatalog: null,
@@ -474,7 +481,90 @@ function renderPromptBlock(label, text, emptyText) {
 }
 
 function recentImageJobs() {
-  return state.imageJobs?.jobs || state.imageStats?.recent_jobs || [];
+  return state.imageJobs?.jobs || state.imageJobs?.items || state.imageStats?.recent_jobs || [];
+}
+
+function imageJobsPageInfo() {
+  const jobs = recentImageJobs();
+  const payload = state.imageJobs || {};
+  const pageSize = positiveInteger(payload.pageSize) || state.imageJobsPageSize || IMAGE_HISTORY_DEFAULT_PAGE_SIZE;
+  const page = positiveInteger(payload.page) || state.imageJobsPage || 1;
+  const totalItems = nonNegativeInteger(payload.totalItems);
+  const totalPages = nonNegativeInteger(payload.totalPages) ?? (totalItems === null ? null : Math.ceil(totalItems / pageSize));
+  const hasPreviousPage = typeof payload.hasPreviousPage === 'boolean' ? payload.hasPreviousPage : page > 1;
+  const hasNextPage = typeof payload.hasNextPage === 'boolean'
+    ? payload.hasNextPage
+    : totalPages === null
+      ? jobs.length >= pageSize
+      : page < totalPages;
+  return { jobs, page, pageSize, totalItems, totalPages, hasPreviousPage, hasNextPage };
+}
+
+function positiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function nonNegativeInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function imageJobsUrl(page = state.imageJobsPage, pageSize = state.imageJobsPageSize) {
+  const params = new URLSearchParams({
+    page: String(Math.max(1, positiveInteger(page) || 1)),
+    pageSize: String(Math.max(1, positiveInteger(pageSize) || IMAGE_HISTORY_DEFAULT_PAGE_SIZE))
+  });
+  return `/api/v1/jobs?${params.toString()}`;
+}
+
+function syncImageJobsPagination(payload) {
+  state.imageJobsPage = positiveInteger(payload?.page) || state.imageJobsPage || 1;
+  state.imageJobsPageSize = positiveInteger(payload?.pageSize) || state.imageJobsPageSize || IMAGE_HISTORY_DEFAULT_PAGE_SIZE;
+}
+
+async function loadImageJobsPage({ page = state.imageJobsPage, pageSize = state.imageJobsPageSize, render = false } = {}) {
+  const requestId = state.imageJobsRequestId + 1;
+  state.imageJobsRequestId = requestId;
+  state.imageJobsLoading = true;
+  state.imageJobsError = null;
+  if (render) renderJobs();
+
+  try {
+    const payload = await fetchJson(imageJobsUrl(page, pageSize));
+    if (requestId !== state.imageJobsRequestId) return null;
+    state.imageJobs = payload;
+    syncImageJobsPagination(payload);
+    return payload;
+  } catch (error) {
+    if (requestId === state.imageJobsRequestId) state.imageJobsError = error;
+    throw error;
+  } finally {
+    if (requestId === state.imageJobsRequestId) {
+      state.imageJobsLoading = false;
+      if (render) renderJobs();
+    }
+  }
+}
+
+function renderJobPaginationControls() {
+  const { jobs, page, pageSize, totalItems, totalPages, hasPreviousPage, hasNextPage } = imageJobsPageInfo();
+  if (!state.imageJobs && !hasPreviousPage && !hasNextPage) return '';
+  const totalPagesLabel = totalPages === null || totalPages === 0 ? '' : ` of ${totalPages}`;
+  const rangeStart = totalItems === null || totalItems === 0 ? 0 : ((page - 1) * pageSize) + 1;
+  const rangeEnd = totalItems === null ? ((page - 1) * pageSize) + jobs.length : Math.min(totalItems, ((page - 1) * pageSize) + jobs.length);
+  const rangeLabel = totalItems === null
+    ? `${jobs.length} shown`
+    : totalItems === 0
+      ? '0 history items'
+      : `${rangeStart}-${rangeEnd} of ${totalItems}`;
+  const loadingText = state.imageJobsLoading ? '<span class="pagination-loading">Loading...</span>' : '';
+  return `<nav class="history-pagination" aria-label="Image history pagination">
+    <button type="button" class="secondary" data-history-page="previous" ${hasPreviousPage && !state.imageJobsLoading ? '' : 'disabled'}>Previous</button>
+    <span class="pagination-status">Page ${escapeHtml(page)}${escapeHtml(totalPagesLabel)} · ${escapeHtml(rangeLabel)} · ${escapeHtml(pageSize)} per page</span>
+    <button type="button" class="secondary" data-history-page="next" ${hasNextPage && !state.imageJobsLoading ? '' : 'disabled'}>Next</button>
+    ${loadingText}
+  </nav>`;
 }
 
 function savedFavoritePrompts() {
@@ -578,14 +668,26 @@ function renderJobMetrics(job) {
 
 function renderJobs() {
   const target = $('#image-jobs');
-  const jobs = recentImageJobs();
+  const { jobs, page, totalItems } = imageJobsPageInfo();
+  const controls = renderJobPaginationControls();
+  const loadingNotice = state.imageJobsLoading ? '<p class="muted history-loading">Loading image history...</p>' : '';
+  const errorNotice = state.imageJobsError
+    ? `<p class="danger-text">Unable to load image history: ${escapeHtml(state.imageJobsError.message || 'Request failed')}</p>`
+    : '';
+
   if (jobs.length === 0) {
-    target.innerHTML = imageApiAuthRequiredWithoutKey()
-      ? '<p class="muted">Enter the dashboard API key above to load recent image jobs.</p>'
-      : '<p class="muted">No image jobs submitted since this process started.</p>';
+    const emptyText = imageApiAuthRequiredWithoutKey()
+      ? 'Enter the dashboard API key above to load recent image jobs.'
+      : state.imageJobsLoading
+        ? 'Loading image history...'
+        : totalItems && page > 1
+          ? 'No image jobs are available on this page.'
+          : 'No image generation history records found.';
+    target.innerHTML = `${errorNotice || loadingNotice}<p class="muted">${escapeHtml(emptyText)}</p>${controls}`;
     return;
   }
-  target.innerHTML = `<div class="image-job-gallery">${jobs.map((job, index) => {
+
+  target.innerHTML = `${errorNotice || loadingNotice}<div class="image-job-gallery">${jobs.map((job, index) => {
     const prompt = jobPrompt(job);
     const negative = jobNegativePrompt(job);
     const imageUrl = firstArtifactUrl(job);
@@ -618,7 +720,7 @@ function renderJobs() {
         <pre><code>${escapeHtml(JSON.stringify({ request: job.request || {}, metadata: job.metadata || {}, artifacts }, null, 2))}</code></pre>
       </details>
     </article>`;
-  }).join('')}</div>`;
+  }).join('')}</div>${controls}`;
   hydrateJobThumbnails();
 }
 
@@ -883,6 +985,8 @@ async function refreshImageApi() {
     state.imageModels = null;
     state.imageWorkflows = null;
     state.imageJobs = null;
+    state.imageJobsError = null;
+    state.imageJobsLoading = false;
     state.favoritePrompts = null;
     state.modelDownloads = null;
     state.modelCatalog = null;
@@ -895,7 +999,7 @@ async function refreshImageApi() {
     fetchJson('/api/v1/stats'),
     fetchJson('/api/v1/models'),
     fetchJson('/api/v1/workflows'),
-    fetchJson('/api/v1/jobs?limit=10'),
+    loadImageJobsPage(),
     fetchJson('/api/v1/favorite-prompts?limit=50'),
     fetchJson('/api/v1/model-downloads?limit=20'),
     fetchJson('/api/v1/model-catalog')
@@ -904,7 +1008,7 @@ async function refreshImageApi() {
   if (stats.status === 'fulfilled') state.imageStats = stats.value;
   if (models.status === 'fulfilled') state.imageModels = models.value;
   if (workflows.status === 'fulfilled') state.imageWorkflows = workflows.value;
-  if (jobs.status === 'fulfilled') state.imageJobs = jobs.value;
+  if (jobs.status === 'rejected') state.imageJobsError = jobs.reason;
   if (favorites.status === 'fulfilled') state.favoritePrompts = favorites.value;
   if (downloads.status === 'fulfilled') state.modelDownloads = downloads.value;
   if (catalog.status === 'fulfilled') state.modelCatalog = catalog.value;
@@ -935,6 +1039,20 @@ async function refreshFavoritesOnly(message = '') {
   state.favoritePrompts = await fetchJson('/api/v1/favorite-prompts?limit=50');
   renderFavoritePrompts();
   if (message) setImageFeedback(message);
+}
+
+async function refreshJobsOnly(message = '') {
+  try {
+    await loadImageJobsPage({ render: true });
+    if (message) setImageFeedback(message);
+  } catch (error) {
+    setImageFeedback(`Unable to refresh image history: ${error.message}`, false);
+  }
+}
+
+async function goToImageJobsPage(page) {
+  state.imageJobsPage = Math.max(1, positiveInteger(page) || 1);
+  await refreshJobsOnly();
 }
 
 function setImageFeedback(message, ok = true) {
@@ -1213,6 +1331,19 @@ async function handleFavoriteAction(event) {
   }
 }
 
+async function handleImageJobsClick(event) {
+  const pageButton = event.target.closest('[data-history-page]');
+  if (pageButton) {
+    if (pageButton.disabled) return;
+    const { page } = imageJobsPageInfo();
+    const nextPage = pageButton.dataset.historyPage === 'next' ? page + 1 : page - 1;
+    await goToImageJobsPage(nextPage);
+    return;
+  }
+
+  await handleJobAction(event);
+}
+
 function findJobFromReuseButton(button) {
   const jobs = recentImageJobs();
   const index = Number(button.dataset.jobIndex);
@@ -1272,6 +1403,7 @@ async function handlePlaygroundSubmit(event) {
     $('#playground-cancel').disabled = !state.activeJobId;
     $('#playground-result').innerHTML = renderGenerationResult(result);
     hydrateJobThumbnails();
+    state.imageJobsPage = 1;
     await refresh();
   } catch (error) {
     $('#playground-result').innerHTML = `<p class="danger-text">${escapeHtml(error.message)}</p>`;
@@ -1355,7 +1487,7 @@ function wireEvents() {
 
   $('#image-models').addEventListener('click', handleModelAction);
   $('#default-model-status').addEventListener('click', handleDefaultAction);
-  $('#image-jobs').addEventListener('click', handleJobAction);
+  $('#image-jobs').addEventListener('click', handleImageJobsClick);
   $('#favorite-prompts')?.addEventListener('click', handleFavoriteAction);
   $('#playground-form').addEventListener('submit', handlePlaygroundSubmit);
   $('#apply-workflow-defaults').addEventListener('click', () => {

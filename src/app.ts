@@ -31,6 +31,9 @@ interface ResolvedAppDependencies extends AppDependencies {
 
 export type RequestHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
 
+const IMAGE_HISTORY_DEFAULT_PAGE_SIZE = 9;
+const IMAGE_HISTORY_MAX_PAGE_SIZE = 250;
+
 export function createRequestHandler(dependencies: AppDependencies): RequestHandler {
   const resolvedDependencies: ResolvedAppDependencies = {
     ...dependencies,
@@ -905,22 +908,72 @@ async function handleImageApiGenerate(request: IncomingMessage, response: Server
 }
 
 async function handleImageApiJobs(response: ServerResponse, dependencies: ResolvedAppDependencies, url: URL): Promise<void> {
-  const limit = readQueryInteger(url, 'limit', 50, 1, 250);
-  const memoryJobs = dependencies.imageRuntime.jobQueue.listJobs(limit);
-  const durableJobs = await dependencies.imageRuntime.artifactStore.listRecentCompletedJobs(limit).catch(() => []);
-  const seen = new Set(memoryJobs.map((job) => job.id));
-  const jobs = [
-    ...memoryJobs,
-    ...durableJobs.filter((job: any) => typeof job?.id === 'string' && !seen.has(job.id))
-  ]
-    .sort((left: any, right: any) => String(right.createdAt).localeCompare(String(left.createdAt)))
-    .slice(0, limit);
+  const pageSize = readImageHistoryPageSize(url);
+  const offset = readOptionalQueryInteger(url, 'offset', 0, Number.MAX_SAFE_INTEGER);
+  const requestedPage = offset === null
+    ? readQueryInteger(url, 'page', 1, 1, Number.MAX_SAFE_INTEGER)
+    : Math.floor(offset / pageSize) + 1;
+  const historyJobs = await listImageHistoryJobs(dependencies);
+  const totalItems = historyJobs.length;
+  const totalPages = totalItems === 0 ? 0 : Math.ceil(totalItems / pageSize);
+  const page = totalPages > 0 ? Math.min(requestedPage, totalPages) : 1;
+  const pageOffset = (page - 1) * pageSize;
+  const jobs = historyJobs.slice(pageOffset, pageOffset + pageSize);
 
   sendJson(response, 200, {
     ok: true,
     queue: dependencies.imageRuntime.jobQueue.stats(),
-    jobs
+    jobs,
+    items: jobs,
+    page,
+    pageSize,
+    offset: pageOffset,
+    totalItems,
+    totalPages,
+    hasNextPage: totalPages > page,
+    hasPreviousPage: page > 1
   });
+}
+
+async function listImageHistoryJobs(dependencies: ResolvedAppDependencies): Promise<unknown[]> {
+  const memoryJobs = dependencies.imageRuntime.jobQueue.listAllJobs();
+  const durableJobs = await dependencies.imageRuntime.artifactStore.listCompletedJobs().catch(() => []);
+  const seen = new Set(memoryJobs.map((job) => job.id));
+  return [
+    ...memoryJobs,
+    ...durableJobs.filter((job) => {
+      const id = imageHistoryJobId(job);
+      return id !== null && !seen.has(id);
+    })
+  ].sort(compareImageHistoryJobsNewestFirst);
+}
+
+function compareImageHistoryJobsNewestFirst(left: unknown, right: unknown): number {
+  const leftTimestamp = imageHistoryTimestamp(left);
+  const rightTimestamp = imageHistoryTimestamp(right);
+  if (leftTimestamp !== rightTimestamp) return rightTimestamp - leftTimestamp;
+  return (imageHistoryJobId(left) ?? '').localeCompare(imageHistoryJobId(right) ?? '');
+}
+
+function imageHistoryTimestamp(job: unknown): number {
+  if (!isRecord(job)) return 0;
+  for (const field of ['completedAt', 'createdAt', 'submittedAt', 'startedAt', 'updatedAt', 'queuedAt']) {
+    const value = job[field];
+    const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function imageHistoryJobId(job: unknown): string | null {
+  return isRecord(job) && typeof job.id === 'string' ? job.id : null;
+}
+
+function readImageHistoryPageSize(url: URL): number {
+  const explicitPageSize = readOptionalQueryInteger(url, 'pageSize', 1, IMAGE_HISTORY_MAX_PAGE_SIZE)
+    ?? readOptionalQueryInteger(url, 'page_size', 1, IMAGE_HISTORY_MAX_PAGE_SIZE)
+    ?? readOptionalQueryInteger(url, 'limit', 1, IMAGE_HISTORY_MAX_PAGE_SIZE);
+  return explicitPageSize ?? IMAGE_HISTORY_DEFAULT_PAGE_SIZE;
 }
 
 async function handleImageApiJob(response: ServerResponse, dependencies: ResolvedAppDependencies, jobId: string): Promise<void> {
@@ -1239,6 +1292,14 @@ function readQueryInteger(url: URL, name: string, fallback: number, min: number,
   if (!raw) return fallback;
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed < min || parsed > max) return fallback;
+  return parsed;
+}
+
+function readOptionalQueryInteger(url: URL, name: string, min: number, max: number): number | null {
+  const raw = url.searchParams.get(name);
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) return null;
   return parsed;
 }
 
@@ -1995,7 +2056,7 @@ function renderPortalHtml(): string {
       <div class="section-heading">
         <div>
           <h2>Recent image jobs</h2>
-          <p class="hint">Gallery of recent results with compact model/workflow settings, timing, step speed, artifacts, and provider metadata. Token counts are shown as N/A unless a provider reports them.</p>
+          <p class="hint">Paginated gallery of recent results with compact model/workflow settings, timing, step speed, artifacts, and provider metadata. Shows 9 history items per page by default so older records can be browsed without rendering the full history at once. Token counts are shown as N/A unless a provider reports them.</p>
         </div>
       </div>
       <div id="image-jobs" class="placeholder">Loading recent image jobs...</div>

@@ -190,6 +190,95 @@ test('POST /api/v1/generate supports async jobs, job result polling, and cancell
   });
 });
 
+test('GET /api/v1/jobs paginates image history newest first with a default page size of 9', async () => {
+  const runtimeConfig = await tempImageRuntimeConfig({ imageDefaultSyncTimeoutMs: 1000, imageMockDelayMs: 1 });
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    for (let index = 1; index <= 12; index += 1) {
+      const generated = await (await fetch(`${baseUrl}/api/v1/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt: `paginated job ${index}`, sync_timeout_ms: 1000 })
+      })).json();
+      assert.equal(generated.ok, true);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+
+    const firstPage = await (await fetch(`${baseUrl}/api/v1/jobs`)).json();
+    assert.equal(firstPage.ok, true);
+    assert.equal(firstPage.page, 1);
+    assert.equal(firstPage.pageSize, 9);
+    assert.equal(firstPage.jobs.length, 9);
+    assert.equal(firstPage.totalItems, 12);
+    assert.equal(firstPage.totalPages, 2);
+    assert.equal(firstPage.hasNextPage, true);
+    assert.equal(firstPage.hasPreviousPage, false);
+    assert.equal(firstPage.jobs[0].prompt, 'paginated job 12');
+    assert.equal(firstPage.jobs[8].prompt, 'paginated job 4');
+
+    const secondPage = await (await fetch(`${baseUrl}/api/v1/jobs?page=2&pageSize=9`)).json();
+    assert.equal(secondPage.ok, true);
+    assert.equal(secondPage.page, 2);
+    assert.equal(secondPage.jobs.length, 3);
+    assert.equal(secondPage.hasNextPage, false);
+    assert.equal(secondPage.hasPreviousPage, true);
+    assert.deepEqual(secondPage.jobs.map((job: { prompt?: string }) => job.prompt), ['paginated job 3', 'paginated job 2', 'paginated job 1']);
+
+    const byLimit = await (await fetch(`${baseUrl}/api/v1/jobs?limit=12`)).json();
+    assert.equal(byLimit.pageSize, 12);
+    assert.equal(byLimit.jobs.length, 12);
+
+    const outOfRange = await (await fetch(`${baseUrl}/api/v1/jobs?page=99&pageSize=9`)).json();
+    assert.equal(outOfRange.page, 2);
+    assert.equal(outOfRange.jobs.length, 3);
+  });
+});
+
+test('GET /api/v1/jobs paginates durable artifact history after restart', async () => {
+  const runtimeConfig = await tempImageRuntimeConfig({ imageDefaultSyncTimeoutMs: 1000, imageMockDelayMs: 1 });
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    for (let index = 1; index <= 10; index += 1) {
+      const generated = await (await fetch(`${baseUrl}/api/v1/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt: `durable page job ${index}`, sync_timeout_ms: 1000 })
+      })).json();
+      assert.equal(generated.ok, true);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+  });
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    const firstPage = await (await fetch(`${baseUrl}/api/v1/jobs`)).json();
+    assert.equal(firstPage.ok, true);
+    assert.equal(firstPage.pageSize, 9);
+    assert.equal(firstPage.totalItems, 10);
+    assert.equal(firstPage.jobs.length, 9);
+    assert.equal(firstPage.jobs[0].prompt, 'durable page job 10');
+
+    const secondPage = await (await fetch(`${baseUrl}/api/v1/jobs?page=2&pageSize=9`)).json();
+    assert.equal(secondPage.page, 2);
+    assert.equal(secondPage.jobs.length, 1);
+    assert.equal(secondPage.jobs[0].prompt, 'durable page job 1');
+    assert.equal(secondPage.jobs[0].durable, true);
+  });
+});
+
 test('configured image API keys enforce bearer or X-API-Key authentication', async () => {
   await withTestServer({
     runtimeConfig: await tempImageRuntimeConfig({ imageApiKeys: ['secret'], requireImageApiAuth: true }),

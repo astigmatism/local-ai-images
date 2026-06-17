@@ -811,6 +811,35 @@ summary {
   align-items: start;
 }
 
+.history-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.history-pagination button {
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.pagination-status,
+.pagination-loading,
+.history-loading {
+  font-size: 0.9rem;
+}
+
+.pagination-loading {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .image-job-card {
   background: var(--card-soft);
   border: 1px solid var(--border);

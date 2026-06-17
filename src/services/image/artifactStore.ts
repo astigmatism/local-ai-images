@@ -85,7 +85,7 @@ export class ArtifactStore {
     throw new AppError('ARTIFACT_NOT_FOUND', `Artifact ${id} was not found.`, 404);
   }
 
-  async listRecentCompletedJobs(limit = 50): Promise<unknown[]> {
+  async listCompletedJobs(): Promise<unknown[]> {
     const metadataFiles = await this.findMetadataFiles();
     const artifacts: ArtifactMetadata[] = [];
     for (const filePath of metadataFiles) {
@@ -106,13 +106,17 @@ export class ArtifactStore {
 
     return [...byJob.entries()]
       .map(([jobId, jobArtifacts]) => durableJobSummary(jobId, jobArtifacts))
-      .sort((left: any, right: any) => String(right.completedAt ?? right.createdAt).localeCompare(String(left.completedAt ?? left.createdAt)))
-      .slice(0, Math.min(Math.max(limit, 1), 250));
+      .sort(compareDurableJobsNewestFirst);
+  }
+
+  async listRecentCompletedJobs(limit = 50): Promise<unknown[]> {
+    const boundedLimit = Math.max(limit, 1);
+    return (await this.listCompletedJobs()).slice(0, boundedLimit);
   }
 
   async getRecentCompletedJob(jobId: string): Promise<unknown | null> {
-    const jobs = await this.listRecentCompletedJobs(250);
-    return jobs.find((job: any) => job?.id === jobId) ?? null;
+    const jobs = await this.listCompletedJobs();
+    return jobs.find((job) => durableJobId(job) === jobId) ?? null;
   }
 
 
@@ -149,7 +153,8 @@ function publicRequestMetadata(request: NormalizedGenerationRequest): Record<str
 }
 
 function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
-  const first = artifacts[0]!;
+  const sortedArtifacts = [...artifacts].sort(compareArtifactsForDisplay);
+  const first = sortedArtifacts[0]!;
   const job = first.job;
   const request = first.request ?? {};
   const requestPayload = first.requestPayload ?? request;
@@ -175,10 +180,10 @@ function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
     samplerName: typeof request.sampler_name === 'string' ? request.sampler_name : null,
     scheduler: typeof request.scheduler === 'string' ? request.scheduler : null,
     output: typeof request.output === 'string' ? request.output : null,
-    artifactCount: artifacts.length,
-    artifactSizes: artifacts.map((artifact) => artifact.sizeBytes),
-    artifacts: artifacts.map((artifact) => publicArtifactMetadata(artifact)),
-    thumbnailUrl: artifacts[0]?.url ?? null,
+    artifactCount: sortedArtifacts.length,
+    artifactSizes: sortedArtifacts.map((artifact) => artifact.sizeBytes),
+    artifacts: sortedArtifacts.map((artifact) => publicArtifactMetadata(artifact)),
+    thumbnailUrl: sortedArtifacts[0]?.url ?? null,
     request,
     requestPayload,
     metadata: {},
@@ -201,6 +206,40 @@ function cloneRecord(record: Record<string, unknown>): Record<string, unknown> {
 function publicArtifactMetadata(artifact: ArtifactMetadata) {
   const { filePath: _filePath, ...publicMetadata } = artifact;
   return publicMetadata;
+}
+
+function compareDurableJobsNewestFirst(left: unknown, right: unknown): number {
+  const leftTimestamp = durableJobTimestamp(left);
+  const rightTimestamp = durableJobTimestamp(right);
+  if (leftTimestamp !== rightTimestamp) return rightTimestamp - leftTimestamp;
+  return durableJobId(left).localeCompare(durableJobId(right));
+}
+
+function durableJobTimestamp(job: unknown): number {
+  if (!isRecord(job)) return 0;
+  for (const field of ['completedAt', 'createdAt', 'submittedAt', 'startedAt', 'updatedAt', 'queuedAt']) {
+    const value = job[field];
+    const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function durableJobId(job: unknown): string {
+  return isRecord(job) && typeof job.id === 'string' ? job.id : '';
+}
+
+function compareArtifactsForDisplay(left: ArtifactMetadata, right: ArtifactMetadata): number {
+  const leftTimestamp = Date.parse(left.createdAt);
+  const rightTimestamp = Date.parse(right.createdAt);
+  if (Number.isFinite(leftTimestamp) && Number.isFinite(rightTimestamp) && leftTimestamp !== rightTimestamp) {
+    return leftTimestamp - rightTimestamp;
+  }
+  return left.fileName.localeCompare(right.fileName);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function extensionForMime(mimeType: string): string {

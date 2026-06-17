@@ -100,6 +100,40 @@ test('ArtifactStore writes image data and sidecar metadata', async () => {
   assert.equal(loaded.buffer.toString(), 'image-bytes');
 });
 
+test('ArtifactStore lists completed job history beyond the old recent cap', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'image-artifacts-history-'));
+  const store = new ArtifactStore(root, '/api/v1/artifacts');
+  const baseTime = Date.parse('2026-01-01T00:00:00.000Z');
+
+  for (let index = 1; index <= 260; index += 1) {
+    const createdAt = new Date(baseTime + index * 1000).toISOString();
+    await store.saveArtifacts({
+      jobId: `history-job-${index}`,
+      provider: 'mock',
+      workflowId: 'sdxl-text-to-image',
+      request: baseRequest({ prompt: `history prompt ${index}` }),
+      images: [{ mimeType: 'image/png', buffer: Buffer.from(`image-${index}`), width: 1, height: 1 }],
+      job: {
+        id: `history-job-${index}`,
+        status: 'succeeded',
+        createdAt,
+        queuedAt: createdAt,
+        startedAt: createdAt,
+        completedAt: createdAt,
+        timings: { queueWaitMs: 0, executionMs: 0, totalMs: 0, secondsPerStep: 0, stepsPerSecond: 0 }
+      }
+    });
+  }
+
+  const jobs = await store.listRecentCompletedJobs(260);
+  assert.equal(jobs.length, 260);
+  assert.equal((jobs[0] as { id?: string }).id, 'history-job-260');
+  assert.equal((jobs[259] as { id?: string }).id, 'history-job-1');
+
+  const oldestJob = await store.getRecentCompletedJob('history-job-1') as { prompt?: string } | null;
+  assert.equal(oldestJob?.prompt, 'history prompt 1');
+});
+
 test('ImageJobQueue moves jobs from queued to succeeded and persists artifacts', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'image-queue-artifacts-'));
   const queue = new ImageJobQueue({

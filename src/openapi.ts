@@ -582,10 +582,17 @@ export function buildOpenApiDocument() {
       },
       '/api/v1/jobs': {
         get: {
-          summary: 'List recent image jobs',
-          description: 'Includes in-memory jobs and recent completed jobs reconstructed from artifact sidecar metadata.',
+          summary: 'List paginated image jobs',
+          description: 'Includes in-memory jobs and completed jobs reconstructed from artifact sidecar metadata. Results are sorted newest-first and paginated with a default page size of 9.',
           security: bearerSecurity,
-          responses: { '200': { description: 'Queue stats and recent jobs with diffusion timing metrics', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, jobs: { type: 'array', items: jobSchema } } } } } }, ...authErrorResponses }
+          parameters: [
+            { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+            { name: 'pageSize', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 250, default: 9 } },
+            { name: 'page_size', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 250 }, description: 'Snake-case alias for pageSize.' },
+            { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 250 }, description: 'Backward-compatible alias for pageSize.' },
+            { name: 'offset', in: 'query', required: false, schema: { type: 'integer', minimum: 0 }, description: 'Optional offset alias. When provided, the response page is derived from offset and pageSize.' }
+          ],
+          responses: { '200': { description: 'Queue stats and paginated jobs with diffusion timing metrics', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, jobs: { type: 'array', items: jobSchema }, items: { type: 'array', items: jobSchema }, page: { type: 'integer' }, pageSize: { type: 'integer' }, offset: { type: 'integer' }, totalItems: { type: 'integer' }, totalPages: { type: 'integer' }, hasNextPage: { type: 'boolean' }, hasPreviousPage: { type: 'boolean' } } } } } }, ...authErrorResponses }
         }
       },
       '/api/v1/jobs/{jobId}': {
