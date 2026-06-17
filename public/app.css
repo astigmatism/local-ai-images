@@ -1096,8 +1096,6 @@ summary {
   color: var(--accent);
 }
 
-
-
 .image-generator-body main {
   padding-top: 0;
   padding-bottom: 32px;
@@ -1123,17 +1121,26 @@ summary {
 
 .image-lab-form {
   display: grid;
-  gap: 7px;
+  gap: 6px;
+  min-width: 0;
 }
 
-.image-lab-utility-row {
+.image-lab-top-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.8fr);
+  align-items: end;
   gap: 8px;
+  min-width: 0;
 }
 
-.image-lab-utility-actions,
+.image-lab-model-field,
+.image-lab-prompt-column,
+.image-lab-gallery-size-control {
+  display: grid;
+  min-width: 0;
+}
+
+.image-lab-top-actions,
 .image-lab-action-panel,
 .image-lab-favorites-heading {
   display: flex;
@@ -1141,8 +1148,17 @@ summary {
   gap: 6px;
 }
 
-.image-lab-utility-row .feedback {
+.image-lab-top-actions {
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.image-lab-top-actions .feedback {
+  flex: 1 1 28ch;
+  max-width: 54ch;
   min-height: 18px;
+  max-height: 38px;
+  overflow: auto;
   margin: 0;
   padding: 5px 7px;
   text-align: right;
@@ -1150,8 +1166,8 @@ summary {
   line-height: 1.25;
 }
 
-.image-lab-utility-actions button,
-.image-lab-utility-actions .button-link,
+.image-lab-top-actions button,
+.image-lab-top-actions .button-link,
 .image-lab-action-panel button,
 .image-lab-favorites-panel button,
 .image-lab-favorite-body button,
@@ -1159,36 +1175,77 @@ summary {
   padding: 5px 8px;
   border-radius: 8px;
   font-size: 0.8rem;
+  white-space: nowrap;
 }
 
-.image-lab-banner-grid {
+.image-lab-main-grid {
   display: grid;
-  grid-template-columns: minmax(210px, 0.75fr) minmax(340px, 1.7fr) minmax(390px, 1.25fr) minmax(160px, 0.55fr);
-  align-items: end;
+  grid-template-columns: minmax(220px, 1.25fr) minmax(220px, 1.25fr) minmax(170px, 0.7fr) minmax(230px, 0.9fr);
+  align-items: stretch;
   gap: 7px;
+  min-width: 0;
+  min-height: 0;
 }
 
-.image-lab-prompt-grid {
+.image-lab-prompt-column {
+  grid-template-rows: auto minmax(126px, 1fr);
+}
+
+.image-lab-parameter-column {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
 }
 
 .image-lab-parameter-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(64px, 1fr));
-  gap: 7px;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  min-width: 0;
+}
+
+.image-lab-parameter-grid label {
+  display: grid;
+  grid-template-columns: minmax(54px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1px 5px;
+  min-width: 0;
+}
+
+.image-lab-parameter-grid .field-label {
+  white-space: nowrap;
+}
+
+.image-lab-parameter-grid input {
+  margin-top: 0;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 0.8rem;
+}
+
+.image-lab-seed-note {
+  grid-column: 3;
+  align-self: center;
+  margin-top: 0;
+  font-size: 0.68rem;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .image-lab-action-panel {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(74px, 0.75fr) minmax(0, 1.25fr);
   align-items: end;
   gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(55, 65, 81, 0.72);
 }
 
 .image-lab-gallery-size-control {
-  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 5px;
 }
 
 .image-lab-controls label {
@@ -1203,16 +1260,26 @@ summary {
 .image-lab-controls select,
 .image-lab-controls textarea {
   margin-top: 2px;
-  padding: 5px 7px;
+  padding: 4px 7px;
   border-radius: 8px;
-  font-size: 0.86rem;
+  font-size: 0.84rem;
+}
+
+.image-lab-controls .image-lab-parameter-grid input {
+  margin-top: 0;
+  padding: 3px 6px;
+  font-size: 0.8rem;
 }
 
 .image-lab-controls textarea {
-  min-height: 44px;
-  max-height: 72px;
+  min-height: 126px;
+  max-height: 196px;
   resize: vertical;
   line-height: 1.25;
+}
+
+.image-lab-prompt-column textarea {
+  height: 100%;
 }
 
 .image-lab-gallery-size-control input[type="range"] {
@@ -1301,46 +1368,65 @@ summary {
 }
 
 .image-lab-favorites-panel {
-  border-top: 1px solid var(--border);
-  margin-top: 6px;
-  padding-top: 6px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  max-height: 206px;
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(17, 24, 39, 0.38);
 }
 
 .image-lab-favorites-heading {
   margin-bottom: 5px;
   font-size: 0.84rem;
+  min-width: 0;
 }
 
 .image-lab-favorites-heading .hint {
   flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.76rem;
 }
 
 .image-lab-favorites-strip {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(140px, 176px);
-  gap: 7px;
-  overflow-x: auto;
-  padding-bottom: 3px;
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 6px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 3px;
   scrollbar-gutter: stable;
+}
+
+.image-lab-favorites-strip p {
+  margin: 0;
 }
 
 .image-lab-favorite-card {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
-  gap: 7px;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 6px;
   min-width: 0;
   background: var(--card-soft);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 6px;
+  padding: 5px;
 }
 
 .image-lab-favorite-thumb {
   display: block;
-  width: 52px;
-  height: 52px;
+  width: 46px;
+  height: 46px;
   padding: 0;
   overflow: hidden;
   border-radius: 8px;
@@ -1363,7 +1449,7 @@ summary {
   display: grid;
   gap: 2px;
   min-width: 0;
-  font-size: 0.76rem;
+  font-size: 0.75rem;
 }
 
 .image-lab-favorite-body strong,
@@ -1372,7 +1458,7 @@ summary {
 }
 
 .image-lab-favorite-body .hint {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
 }
 
 .image-lab-favorite-body .favorite-actions {
@@ -1505,8 +1591,22 @@ summary {
     max-height: min(44vh, 360px);
   }
 
-  .image-lab-banner-grid {
-    grid-template-columns: minmax(210px, 0.8fr) minmax(340px, 1.4fr);
+  .image-lab-main-grid {
+    grid-template-columns: minmax(220px, 1.2fr) minmax(220px, 1.2fr) minmax(164px, 0.7fr) minmax(210px, 0.85fr);
+  }
+
+  .image-lab-top-row {
+    grid-template-columns: minmax(220px, 0.85fr) minmax(0, 1.6fr);
+  }
+}
+
+@media (max-width: 1120px) {
+  .image-lab-main-grid {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+
+  .image-lab-favorites-panel {
+    max-height: 178px;
   }
 }
 
@@ -1522,16 +1622,43 @@ summary {
     border-radius: 0;
   }
 
-  .image-lab-utility-row,
-  .image-lab-banner-grid,
-  .image-lab-prompt-grid,
-  .image-lab-parameter-grid,
+  .image-lab-top-row,
+  .image-lab-main-grid,
   .image-lab-advanced-grid {
     grid-template-columns: 1fr;
   }
 
-  .image-lab-utility-row .feedback {
+  .image-lab-top-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .image-lab-top-actions .feedback {
+    flex-basis: 100%;
+    max-width: none;
     text-align: left;
+  }
+
+  .image-lab-controls textarea {
+    min-height: 92px;
+    max-height: 160px;
+  }
+
+  .image-lab-parameter-grid label,
+  .image-lab-action-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .image-lab-gallery-size-control {
+    grid-template-columns: 1fr;
+  }
+
+  .image-lab-seed-note {
+    grid-column: 1;
+  }
+
+  .image-lab-favorites-panel {
+    max-height: 196px;
   }
 
   .image-lab-favorites-heading {
@@ -1539,7 +1666,8 @@ summary {
     flex-wrap: wrap;
   }
 
-  .image-lab-favorites-strip {
-    grid-auto-columns: minmax(150px, 1fr);
+  .image-lab-favorites-heading .hint {
+    flex-basis: 100%;
+    white-space: normal;
   }
 }

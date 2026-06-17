@@ -1995,63 +1995,73 @@ function renderImageGeneratorHtml(): string {
   <main class="image-lab-shell">
     <section class="card image-lab-controls" aria-label="Image-generation controls">
       <form id="image-lab-form" class="image-lab-form">
-        <div class="image-lab-utility-row">
-          <div class="image-lab-utility-actions">
-            <a class="button-link secondary" href="/">Status portal</a>
-            <button id="image-lab-refresh" class="secondary" type="button">Refresh</button>
-          </div>
-          <div id="image-lab-status" class="feedback" aria-live="polite"></div>
-        </div>
-
-        <div class="image-lab-banner-grid">
+        <div class="image-lab-top-row">
           <label class="image-lab-model-field">
             <span class="field-label">Checkpoint <span class="field-help" tabindex="0" title="Choose an installed checkpoint for the next request. Changing it prewarms the model for this portal only and does not set a global default.">?</span></span>
             <select id="image-lab-model" required></select>
           </label>
 
-          <div class="image-lab-prompt-grid" aria-label="Prompt controls">
-            <label>
-              <span class="field-label">Positive prompt <span class="field-help" tabindex="0" title="Describe what the model should create. Add subject, style, composition, lighting, and details when the image does not follow the prompt or lacks detail.">?</span></span>
-              <textarea id="image-lab-prompt" rows="2" required placeholder="What should the model create?"></textarea>
-            </label>
-            <label>
-              <span class="field-label">Negative prompt <span class="field-help" tabindex="0" title="Describe what to avoid or de-emphasize, such as artifacts, unwanted text, watermarks, bad anatomy, or styles you do not want.">?</span></span>
-              <textarea id="image-lab-negative" rows="2" placeholder="What should the model avoid?"></textarea>
-            </label>
+          <div class="image-lab-top-actions">
+            <div id="image-lab-status" class="feedback" aria-live="polite"></div>
+            <a class="button-link secondary" href="/">Status portal</a>
+            <button id="image-lab-refresh" class="secondary" type="button">Refresh</button>
+          </div>
+        </div>
+
+        <div class="image-lab-main-grid">
+          <label class="image-lab-prompt-column">
+            <span class="field-label">Positive prompt <span class="field-help" tabindex="0" title="Describe what the model should create. Add subject, style, composition, lighting, and details when the image does not follow the prompt or lacks detail.">?</span></span>
+            <textarea id="image-lab-prompt" rows="4" required placeholder="What should the model create?"></textarea>
+          </label>
+
+          <label class="image-lab-prompt-column">
+            <span class="field-label">Negative prompt <span class="field-help" tabindex="0" title="Describe what to avoid or de-emphasize, such as artifacts, unwanted text, watermarks, bad anatomy, or styles you do not want.">?</span></span>
+            <textarea id="image-lab-negative" rows="4" placeholder="What should the model avoid?"></textarea>
+          </label>
+
+          <div class="image-lab-parameter-column" aria-label="Generation parameters">
+            <div class="image-lab-parameter-grid">
+              <label>
+                <span class="field-label">Width <span class="field-help" tabindex="0" title="Larger width increases image size and VRAM/memory use. Reduce it if generation is too slow or memory runs out.">?</span></span>
+                <input id="image-lab-width" type="number" min="64" max="4096" step="64" required>
+              </label>
+              <label>
+                <span class="field-label">Height <span class="field-help" tabindex="0" title="Larger height increases image size and VRAM/memory use. Reduce it if the image is too large, slow, or causing memory failures.">?</span></span>
+                <input id="image-lab-height" type="number" min="64" max="4096" step="64" required>
+              </label>
+              <label>
+                <span class="field-label">Steps <span class="field-help" tabindex="0" title="More steps can refine detail but increase generation time. Lower steps are useful for fast exploration.">?</span></span>
+                <input id="image-lab-steps" type="number" min="1" max="150" step="1" required>
+              </label>
+              <label>
+                <span class="field-label">CFG <span class="field-help" tabindex="0" title="Higher CFG usually follows the prompt more strongly; lower CFG gives the model more freedom. Very high CFG can look harsh, overcooked, or less natural.">?</span></span>
+                <input id="image-lab-cfg" type="number" min="0" max="30" step="0.5" required>
+              </label>
+              <label>
+                <span class="field-label">Seed <span class="field-help" tabindex="0" title="Use the same seed with the same model and settings to reproduce a result more closely. Leave blank for the backend's random-seed behavior; the actual seed is shown on the completed job.">?</span></span>
+                <input id="image-lab-seed" type="number" min="-1" step="1" placeholder="random">
+                <span class="hint image-lab-seed-note">blank = random</span>
+              </label>
+            </div>
+
+            <div class="image-lab-action-panel">
+              <button id="image-lab-generate" type="submit" title="Submit the current generation request. The button is disabled while a request is already submitting to avoid duplicate jobs.">Generate</button>
+              <label class="image-lab-gallery-size-control">
+                <span class="field-label">Gallery size <span class="field-help" tabindex="0" title="Controls the displayed size of gallery cards. Smaller values show more images; larger values make previews easier to inspect.">?</span></span>
+                <input id="image-lab-gallery-size" type="range" min="160" max="620" step="20">
+                <span id="image-lab-gallery-size-value" class="hint"></span>
+              </label>
+            </div>
           </div>
 
-          <div class="image-lab-parameter-grid" aria-label="Generation parameters">
-            <label>
-              <span class="field-label">Width <span class="field-help" tabindex="0" title="Larger width increases image size and VRAM/memory use. Reduce it if generation is too slow or memory runs out.">?</span></span>
-              <input id="image-lab-width" type="number" min="64" max="4096" step="64" required>
-            </label>
-            <label>
-              <span class="field-label">Height <span class="field-help" tabindex="0" title="Larger height increases image size and VRAM/memory use. Reduce it if the image is too large, slow, or causing memory failures.">?</span></span>
-              <input id="image-lab-height" type="number" min="64" max="4096" step="64" required>
-            </label>
-            <label>
-              <span class="field-label">Steps <span class="field-help" tabindex="0" title="More steps can refine detail but increase generation time. Lower steps are useful for fast exploration.">?</span></span>
-              <input id="image-lab-steps" type="number" min="1" max="150" step="1" required>
-            </label>
-            <label>
-              <span class="field-label">CFG <span class="field-help" tabindex="0" title="Higher CFG usually follows the prompt more strongly; lower CFG gives the model more freedom. Very high CFG can look harsh, overcooked, or less natural.">?</span></span>
-              <input id="image-lab-cfg" type="number" min="0" max="30" step="0.5" required>
-            </label>
-            <label>
-              <span class="field-label">Seed <span class="field-help" tabindex="0" title="Use the same seed with the same model and settings to reproduce a result more closely. Leave blank for the backend's random-seed behavior; the actual seed is shown on the completed job.">?</span></span>
-              <input id="image-lab-seed" type="number" min="-1" step="1" placeholder="random">
-              <span class="hint image-lab-seed-note">blank = random</span>
-            </label>
-          </div>
-
-          <div class="image-lab-action-panel">
-            <button id="image-lab-generate" type="submit" title="Submit the current generation request. The button is disabled while a request is already submitting to avoid duplicate jobs.">Generate</button>
-            <label class="image-lab-gallery-size-control">
-              <span class="field-label">Gallery size <span class="field-help" tabindex="0" title="Controls the displayed size of gallery cards. Smaller values show more images; larger values make previews easier to inspect.">?</span></span>
-              <input id="image-lab-gallery-size" type="range" min="160" max="620" step="20">
-              <span id="image-lab-gallery-size-value" class="hint"></span>
-            </label>
-          </div>
+          <section class="image-lab-favorites-panel" aria-label="Saved image favorites">
+            <div class="image-lab-favorites-heading">
+              <strong>Favorites</strong>
+              <span class="hint">Load restores settings only.</span>
+              <button id="image-lab-refresh-favorites" class="secondary" type="button">Refresh</button>
+            </div>
+            <div id="image-lab-favorites" class="image-lab-favorites-strip placeholder">Loading favorites...</div>
+          </section>
         </div>
 
         <details class="image-lab-advanced compact-details">
@@ -2082,15 +2092,6 @@ function renderImageGeneratorHtml(): string {
           </div>
         </details>
       </form>
-
-      <section class="image-lab-favorites-panel" aria-label="Saved image favorites">
-        <div class="image-lab-favorites-heading">
-          <strong>Favorites</strong>
-          <span class="hint">Load restores settings only.</span>
-          <button id="image-lab-refresh-favorites" class="secondary" type="button">Refresh</button>
-        </div>
-        <div id="image-lab-favorites" class="image-lab-favorites-strip placeholder">Loading favorites...</div>
-      </section>
     </section>
 
     <section class="image-lab-gallery-section" aria-label="Generated image gallery">
