@@ -8,7 +8,7 @@ import { buildOpenApiDocument } from './openapi.ts';
 import { toLegacyGpu } from './services/gpuService.ts';
 import { createImageRuntime, type ImageRuntime } from './services/image/runtime.ts';
 import { findInventoryModel, modelMatchesDefault } from './services/image/modelIdentity.ts';
-import type { AppConfig, ArtifactMetadata, FavoriteImagePrompt, GpuServiceLike, ImageJob, ModelInventory, ModelInventoryItem, OllamaClientLike, OllamaImageGenerateOptions, OutputDelivery, RuntimeConfig, WorkflowPreset } from './types.ts';
+import type { AppConfig, ArtifactMetadata, FavoriteImagePrompt, ImageFavorite, GpuServiceLike, ImageJob, ModelInventory, ModelInventoryItem, OllamaClientLike, OllamaImageGenerateOptions, OutputDelivery, RuntimeConfig, WorkflowPreset } from './types.ts';
 import { validateModelLoadRequest, validateModelName } from './utils/validation.ts';
 import { authenticateImageApiRequest } from './utils/auth.ts';
 import { generationRequestToApiPayload, normalizeResultDelivery, validateAndNormalizeGenerationRequest } from './utils/imageRequests.ts';
@@ -70,6 +70,11 @@ async function routeRequest(method: string, url: URL, request: IncomingMessage, 
     return;
   }
 
+  if (method === 'GET' && pathName === '/image-generator') {
+    sendText(response, 200, renderImageGeneratorHtml(), 'text/html; charset=utf-8');
+    return;
+  }
+
   if (method === 'GET' && pathName === '/assets/app.css') {
     sendText(response, 200, await readPublicAsset('app.css', logger), 'text/css; charset=utf-8');
     return;
@@ -77,6 +82,11 @@ async function routeRequest(method: string, url: URL, request: IncomingMessage, 
 
   if (method === 'GET' && pathName === '/assets/app.js') {
     sendText(response, 200, await readPublicAsset('app.js', logger), 'application/javascript; charset=utf-8');
+    return;
+  }
+
+  if (method === 'GET' && pathName === '/assets/image-generator.js') {
+    sendText(response, 200, await readPublicAsset('image-generator.js', logger), 'application/javascript; charset=utf-8');
     return;
   }
 
@@ -442,6 +452,33 @@ async function routeImageApiV1(
     }
   }
 
+  if (method === 'GET' && pathName === '/api/v1/image-favorites') {
+    await handleImageApiImageFavorites(response, dependencies, url);
+    return;
+  }
+
+  if (method === 'POST' && pathName === '/api/v1/image-favorites') {
+    await handleImageApiCreateImageFavorite(request, response, dependencies);
+    return;
+  }
+
+  const imageFavoriteMatch = /^\/api\/v1\/image-favorites\/([^/]+)$/u.exec(pathName);
+  if (imageFavoriteMatch?.[1]) {
+    const favoriteId = decodeURIComponent(imageFavoriteMatch[1]);
+    if (method === 'GET') {
+      await handleImageApiImageFavorite(response, dependencies, favoriteId);
+      return;
+    }
+    if (method === 'PATCH') {
+      await handleImageApiUpdateImageFavorite(request, response, dependencies, favoriteId);
+      return;
+    }
+    if (method === 'DELETE') {
+      await handleImageApiDeleteImageFavorite(response, dependencies, favoriteId);
+      return;
+    }
+  }
+
   if (method === 'POST' && pathName === '/api/v1/generate') {
     await handleImageApiGenerate(request, response, dependencies);
     return;
@@ -539,6 +576,7 @@ async function handleImageApiCapabilities(response: ServerResponse, dependencies
       generate: '/api/v1/generate',
       jobs: '/api/v1/jobs',
       favorite_prompts: '/api/v1/favorite-prompts',
+      image_favorites: '/api/v1/image-favorites',
       artifacts: '/api/v1/artifacts/{artifactId}',
       model_catalog: '/api/v1/model-catalog',
       model_downloads: '/api/v1/model-downloads',
@@ -856,6 +894,62 @@ async function handleImageApiDeleteFavoritePrompt(response: ServerResponse, depe
       ok: true,
       deleted_id: favoriteId,
       favorite: publicFavoritePromptSummary(favorite)
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error));
+  }
+}
+
+async function handleImageApiImageFavorites(response: ServerResponse, dependencies: ResolvedAppDependencies, url: URL): Promise<void> {
+  try {
+    const limit = readQueryInteger(url, 'limit', 100, 1, 250);
+    const favorites = await dependencies.imageRuntime.imageFavoriteStore.list(limit);
+    sendJson(response, 200, {
+      ok: true,
+      path: dependencies.imageRuntime.imageFavoriteStore.path,
+      favorites: favorites.map(publicImageFavoriteSummary)
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'IMAGE_FAVORITES_LIST_FAILED'));
+  }
+}
+
+async function handleImageApiImageFavorite(response: ServerResponse, dependencies: ResolvedAppDependencies, favoriteId: string): Promise<void> {
+  try {
+    const favorite = await dependencies.imageRuntime.imageFavoriteStore.get(favoriteId);
+    sendJson(response, 200, { ok: true, favorite: publicImageFavorite(favorite) });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error));
+  }
+}
+
+async function handleImageApiCreateImageFavorite(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    const body = await readJsonBody(request);
+    const favorite = await dependencies.imageRuntime.imageFavoriteStore.create(body);
+    sendJson(response, 201, { ok: true, favorite: publicImageFavorite(favorite) });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'IMAGE_FAVORITE_CREATE_FAILED'));
+  }
+}
+
+async function handleImageApiUpdateImageFavorite(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies, favoriteId: string): Promise<void> {
+  try {
+    const body = await readJsonBody(request);
+    const favorite = await dependencies.imageRuntime.imageFavoriteStore.update(favoriteId, body);
+    sendJson(response, 200, { ok: true, favorite: publicImageFavorite(favorite) });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error));
+  }
+}
+
+async function handleImageApiDeleteImageFavorite(response: ServerResponse, dependencies: ResolvedAppDependencies, favoriteId: string): Promise<void> {
+  try {
+    const favorite = await dependencies.imageRuntime.imageFavoriteStore.delete(favoriteId);
+    sendJson(response, 200, {
+      ok: true,
+      deleted_id: favoriteId,
+      favorite: publicImageFavoriteSummary(favorite)
     });
   } catch (error: unknown) {
     sendJson(response, statusCodeForError(error), toErrorPayload(error));
@@ -1187,6 +1281,45 @@ function publicFavoritePrompt(favorite: FavoriteImagePrompt) {
   return {
     ...publicFavoritePromptSummary(favorite),
     requestPayload: favorite.requestPayload
+  };
+}
+
+function publicImageFavoriteSummary(favorite: ImageFavorite) {
+  return {
+    id: favorite.id,
+    title: favorite.title,
+    ...(favorite.description !== undefined ? { description: favorite.description } : {}),
+    prompt: favorite.prompt,
+    negativePrompt: favorite.negativePrompt ?? null,
+    promptPreview: favorite.promptPreview,
+    negativePromptPreview: favorite.negativePromptPreview ?? null,
+    model: favorite.model ?? null,
+    workflow: favorite.workflow ?? null,
+    workflowId: favorite.workflowId ?? favorite.workflow ?? null,
+    sampler: favorite.sampler ?? null,
+    scheduler: favorite.scheduler ?? null,
+    width: favorite.width ?? null,
+    height: favorite.height ?? null,
+    steps: favorite.steps ?? null,
+    cfgScale: favorite.cfgScale ?? null,
+    seed: favorite.seed ?? null,
+    artifactId: favorite.artifactId ?? null,
+    artifactUrl: favorite.artifactUrl ?? favorite.imageUrl ?? null,
+    imageUrl: favorite.imageUrl ?? favorite.artifactUrl ?? null,
+    jobId: favorite.jobId ?? null,
+    artifact: favorite.artifact ?? null,
+    artifacts: favorite.artifacts ?? [],
+    createdAt: favorite.createdAt,
+    updatedAt: favorite.updatedAt
+  };
+}
+
+function publicImageFavorite(favorite: ImageFavorite) {
+  return {
+    ...publicImageFavoriteSummary(favorite),
+    requestPayload: favorite.requestPayload,
+    job: favorite.job ?? null,
+    metadata: favorite.metadata ?? null
   };
 }
 
@@ -1851,6 +1984,171 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function renderImageGeneratorHtml(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${SERVICE_NAME} Image Generator</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body class="image-generator-page">
+  <header class="site-header studio-header">
+    <div>
+      <p class="eyebrow">Dedicated image-generation portal</p>
+      <h1>Image Generator</h1>
+      <p class="muted">Generate, browse, favorite, and recall local image results without changing the system default checkpoint.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/">Status Portal</a>
+      <a class="button-link secondary" href="/openapi.json">OpenAPI</a>
+    </div>
+  </header>
+
+  <main class="studio-main">
+    <section class="studio-controls card" aria-label="Image generation controls">
+      <div class="studio-controls-heading">
+        <div>
+          <h2>Generation controls</h2>
+          <p class="hint">Select a checkpoint for this session, load a favorite, tune settings, then generate. Model choices here do not set or persist a global default.</p>
+        </div>
+        <div id="studio-feedback" class="feedback" aria-live="polite"></div>
+      </div>
+
+      <form id="studio-api-key-form" class="studio-auth-row">
+        <label>
+          Dashboard API key
+          <span class="help-badge" tabindex="0" title="Only needed when this server requires IMAGE_API_KEYS. The value is saved in this browser and sent to /api/v1 calls.">?</span>
+          <input id="studio-api-key" type="password" autocomplete="off" placeholder="Only needed if API auth is enabled">
+        </label>
+        <button type="submit" class="secondary">Save key</button>
+        <button id="studio-clear-key" type="button" class="secondary">Clear</button>
+        <span id="studio-auth-status" class="muted">Checking auth...</span>
+      </form>
+
+      <div class="studio-form-and-favorites">
+        <form id="studio-form" class="studio-form">
+          <div class="studio-control-grid studio-control-grid-primary">
+            <label>
+              Checkpoint / model
+              <span class="help-badge" tabindex="0" title="Choose the checkpoint for the next generation. Changing this prewarms the selected checkpoint without setting it as a global default.">?</span>
+              <select id="studio-model" required></select>
+            </label>
+            <label>
+              Workflow
+              <span class="help-badge" tabindex="0" title="Workflow presets map prompt, checkpoint, dimensions, sampler, and image-save fields into ComfyUI.">?</span>
+              <select id="studio-workflow"></select>
+            </label>
+            <label>
+              Gallery tile size
+              <span class="help-badge" tabindex="0" title="Adjust how large generated images appear in the gallery. Smaller tiles show more images at once; larger tiles emphasize previews.">?</span>
+              <input id="studio-gallery-size" type="range" min="220" max="760" step="20" value="360">
+            </label>
+          </div>
+
+          <div id="studio-model-status" class="notice compact-notice">Loading checkpoint list...</div>
+
+          <div class="studio-prompt-grid">
+            <label>
+              Positive prompt
+              <span class="help-badge" tabindex="0" title="Describe what the model should create. Add composition, subject, style, lighting, mood, and details when the image lacks direction.">?</span>
+              <textarea id="studio-prompt" required placeholder="Describe the image to generate"></textarea>
+            </label>
+            <label>
+              Negative prompt
+              <span class="help-badge" tabindex="0" title="Describe what to avoid or de-emphasize, such as artifacts, unwanted styles, extra limbs, blur, text, or low quality.">?</span>
+              <textarea id="studio-negative" placeholder="Things to avoid or de-emphasize"></textarea>
+            </label>
+          </div>
+
+          <div class="studio-control-grid">
+            <label>
+              Width
+              <span class="help-badge" tabindex="0" title="Larger width increases image size and VRAM/memory use. Lower it if generation is too slow or memory runs out.">?</span>
+              <input id="studio-width" type="number" min="64" max="4096" step="64" value="1024">
+            </label>
+            <label>
+              Height
+              <span class="help-badge" tabindex="0" title="Larger height increases image size and VRAM/memory use. Keep dimensions near the model workflow defaults for predictable results.">?</span>
+              <input id="studio-height" type="number" min="64" max="4096" step="64" value="1024">
+            </label>
+            <label>
+              Steps
+              <span class="help-badge" tabindex="0" title="More steps can refine detail but increase generation time. Lower steps if the queue feels slow.">?</span>
+              <input id="studio-steps" type="number" min="1" max="150" step="1" value="28">
+            </label>
+            <label>
+              CFG scale
+              <span class="help-badge" tabindex="0" title="Higher CFG follows the prompt more strongly; lower CFG gives the model more freedom. Very high CFG can look harsh, overcooked, or less natural.">?</span>
+              <input id="studio-cfg-scale" type="number" min="0" max="30" step="0.5" value="7">
+            </label>
+            <label>
+              Seed
+              <span class="help-badge" tabindex="0" title="Using the same seed with the same model and settings helps reproduce a result. Leave random enabled to let the backend choose and then save the returned seed.">?</span>
+              <input id="studio-seed" type="number" step="1" value="-1">
+            </label>
+            <label class="checkbox-label studio-random-seed">
+              <input id="studio-random-seed" type="checkbox" checked>
+              Random seed
+            </label>
+          </div>
+
+          <details class="studio-advanced">
+            <summary>Advanced options</summary>
+            <div class="studio-control-grid">
+              <label>Sampler <input id="studio-sampler" type="text" value="euler"></label>
+              <label>Scheduler <input id="studio-scheduler" type="text" value="normal"></label>
+              <label>Output <select id="studio-output"><option value="url">url</option><option value="metadata">metadata</option><option value="base64">base64</option><option value="binary">binary</option></select></label>
+              <label>Sync timeout ms <input id="studio-sync-timeout" type="number" min="0" step="100" value="0"></label>
+            </div>
+            <div class="studio-request-preview">
+              <h3>Request payload preview</h3>
+              <pre><code id="studio-request-preview">{}</code></pre>
+            </div>
+          </details>
+
+          <div class="button-row studio-submit-row">
+            <button id="studio-generate" type="submit">Generate</button>
+            <button id="studio-prewarm" type="button" class="secondary">Load selected checkpoint now</button>
+            <button id="studio-refresh" type="button" class="secondary">Refresh gallery</button>
+          </div>
+        </form>
+
+        <aside class="studio-favorites-panel" aria-label="Saved image favorites">
+          <div class="section-heading compact-section-heading">
+            <div>
+              <h2>Favorites</h2>
+              <p class="hint">Click Load to restore settings without generating.</p>
+            </div>
+            <button id="studio-refresh-favorites" type="button" class="secondary">Refresh</button>
+          </div>
+          <div id="studio-favorites" class="studio-favorite-strip placeholder">Loading favorites...</div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="studio-gallery-section" aria-label="Generated image gallery">
+      <div class="section-heading studio-gallery-heading">
+        <div>
+          <h2>Gallery</h2>
+          <p class="hint">Newest generated images appear first. Details stay collapsed until opened from the caption area.</p>
+        </div>
+        <div id="studio-gallery-status" class="muted">Loading history...</div>
+      </div>
+      <div id="studio-gallery" class="studio-gallery placeholder">Loading generated images...</div>
+    </section>
+  </main>
+
+  <footer>
+    <span>${SERVICE_NAME} ${APPLICATION_VERSION}</span>
+    <span class="footer-links"><a href="/">Status Portal</a><a href="/openapi.json">OpenAPI</a></span>
+  </footer>
+  <script src="/assets/image-generator.js" type="module"></script>
+</body>
+</html>`;
+}
+
 function renderPortalHtml(): string {
   return `<!doctype html>
 <html lang="en">
@@ -1867,7 +2165,10 @@ function renderPortalHtml(): string {
       <h1>${SERVICE_NAME}</h1>
       <p class="muted">ComfyUI image API, hosted control panel, model installs/defaults, generation testing, async job metrics, artifact storage, and NVIDIA GPU telemetry.</p>
     </div>
-    <button id="refresh-button" type="button">Refresh</button>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/image-generator">Image Generator</a>
+      <button id="refresh-button" type="button">Refresh</button>
+    </div>
   </header>
 
   <main>
@@ -2065,7 +2366,7 @@ function renderPortalHtml(): string {
 
   <footer>
     <span>${SERVICE_NAME} ${APPLICATION_VERSION}</span>
-    <a href="/openapi.json">OpenAPI</a>
+    <span class="footer-links"><a href="/image-generator">Image Generator</a><a href="/openapi.json">OpenAPI</a></span>
   </footer>
   <script src="/assets/app.js" type="module"></script>
 </body>

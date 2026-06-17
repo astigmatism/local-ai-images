@@ -32,6 +32,7 @@ export interface RuntimeConfig {
   imageArtifactPath: string;
   imageArtifactPublicBaseUrl: string;
   favoriteImagePromptsPath: string;
+  imageFavoritesPath: string;
   imageDefaultModel: string;
   imageDefaultWorkflowId: string;
   imagePreloadDefaultOnStartup: boolean;
@@ -281,6 +282,37 @@ export interface FavoriteImagePrompt {
   steps?: number | null;
   cfgScale?: number | null;
   seed?: string | number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ImageFavorite {
+  id: string;
+  title: string;
+  description?: string | null;
+  requestPayload: Record<string, unknown>;
+  prompt: string;
+  negativePrompt?: string | null;
+  promptPreview: string;
+  negativePromptPreview?: string | null;
+  model?: string | null;
+  workflow?: string | null;
+  workflowId?: string | null;
+  sampler?: string | null;
+  scheduler?: string | null;
+  width?: number | null;
+  height?: number | null;
+  steps?: number | null;
+  cfgScale?: number | null;
+  seed?: string | number | null;
+  artifactId?: string | null;
+  artifactUrl?: string | null;
+  imageUrl?: string | null;
+  jobId?: string | null;
+  artifact?: Record<string, unknown> | null;
+  artifacts?: Record<string, unknown>[];
+  job?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
 }

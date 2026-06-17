@@ -4,6 +4,7 @@ import type { ImageGenerationProvider, RuntimeConfig } from '../../types.ts';
 import { ArtifactStore } from './artifactStore.ts';
 import { ComfyUiProvider } from './comfyUiProvider.ts';
 import { FavoritePromptStore } from './favoritePromptStore.ts';
+import { ImageFavoriteStore } from './imageFavoriteStore.ts';
 import { ImageJobQueue } from './jobQueue.ts';
 import { MockImageProvider } from './mockProvider.ts';
 import { ModelCatalog } from './modelCatalog.ts';
@@ -18,6 +19,7 @@ export interface ImageRuntime {
   workflowStore: WorkflowStore;
   artifactStore: ArtifactStore;
   favoritePromptStore: FavoritePromptStore;
+  imageFavoriteStore: ImageFavoriteStore;
   jobQueue: ImageJobQueue;
   modelCatalog: ModelCatalog;
   modelLifecycle: ModelLifecycleManager;
@@ -31,6 +33,7 @@ export function createImageRuntime(runtimeConfig: RuntimeConfig, logger: Logger,
 
   const artifactStore = new ArtifactStore(runtimeConfig.imageArtifactPath, runtimeConfig.imageArtifactPublicBaseUrl);
   const favoritePromptStore = new FavoritePromptStore(runtimeConfig.favoriteImagePromptsPath, runtimeConfig.imageGenerationMaxPromptChars);
+  const imageFavoriteStore = new ImageFavoriteStore(runtimeConfig.imageFavoritesPath, runtimeConfig.imageGenerationMaxPromptChars);
   const modelScanner = new ModelScanner(runtimeConfig.imageModelPaths);
   const workflowStore = new WorkflowStore(runtimeConfig.imageWorkflowPath, runtimeConfig.imageDefaultWorkflowId);
   const modelLifecycle = new ModelLifecycleManager({
@@ -48,6 +51,7 @@ export function createImageRuntime(runtimeConfig: RuntimeConfig, logger: Logger,
     workflowStore,
     artifactStore,
     favoritePromptStore,
+    imageFavoriteStore,
     jobQueue: new ImageJobQueue({
       provider,
       artifactStore,
