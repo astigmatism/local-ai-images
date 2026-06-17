@@ -452,6 +452,7 @@ async function routeImageApiV1(
     }
   }
 
+
   if (method === 'GET' && pathName === '/api/v1/image-favorites') {
     await handleImageApiImageFavorites(response, dependencies, url);
     return;
@@ -1303,12 +1304,10 @@ function publicImageFavoriteSummary(favorite: ImageFavorite) {
     steps: favorite.steps ?? null,
     cfgScale: favorite.cfgScale ?? null,
     seed: favorite.seed ?? null,
+    imageUrl: favorite.imageUrl ?? null,
     artifactId: favorite.artifactId ?? null,
-    artifactUrl: favorite.artifactUrl ?? favorite.imageUrl ?? null,
-    imageUrl: favorite.imageUrl ?? favorite.artifactUrl ?? null,
     jobId: favorite.jobId ?? null,
     artifact: favorite.artifact ?? null,
-    artifacts: favorite.artifacts ?? [],
     createdAt: favorite.createdAt,
     updatedAt: favorite.updatedAt
   };
@@ -1318,8 +1317,7 @@ function publicImageFavorite(favorite: ImageFavorite) {
   return {
     ...publicImageFavoriteSummary(favorite),
     requestPayload: favorite.requestPayload,
-    job: favorite.job ?? null,
-    metadata: favorite.metadata ?? null
+    job: favorite.job ?? null
   };
 }
 
@@ -1990,159 +1988,129 @@ function renderImageGeneratorHtml(): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${SERVICE_NAME} Image Generator</title>
+  <title>Image Generator - ${SERVICE_NAME}</title>
   <link rel="stylesheet" href="/assets/app.css">
 </head>
-<body class="image-generator-page">
-  <header class="site-header studio-header">
-    <div>
-      <p class="eyebrow">Dedicated image-generation portal</p>
-      <h1>Image Generator</h1>
-      <p class="muted">Generate, browse, favorite, and recall local image results without changing the system default checkpoint.</p>
-    </div>
-    <div class="header-actions">
-      <a class="button-link secondary" href="/">Status Portal</a>
-      <a class="button-link secondary" href="/openapi.json">OpenAPI</a>
-    </div>
-  </header>
-
-  <main class="studio-main">
-    <section class="studio-controls card" aria-label="Image generation controls">
-      <div class="studio-controls-heading">
-        <div>
-          <h2>Generation controls</h2>
-          <p class="hint">Select a checkpoint for this session, load a favorite, tune settings, then generate. Model choices here do not set or persist a global default.</p>
+<body class="image-generator-body">
+  <main class="image-lab-shell">
+    <section class="card image-lab-controls" aria-label="Image-generation controls">
+      <form id="image-lab-form" class="image-lab-form">
+        <div class="image-lab-utility-row">
+          <div class="image-lab-utility-actions">
+            <a class="button-link secondary" href="/">Status portal</a>
+            <button id="image-lab-refresh" class="secondary" type="button">Refresh</button>
+          </div>
+          <div id="image-lab-status" class="feedback" aria-live="polite"></div>
         </div>
-        <div id="studio-feedback" class="feedback" aria-live="polite"></div>
-      </div>
 
-      <form id="studio-api-key-form" class="studio-auth-row">
-        <label>
-          Dashboard API key
-          <span class="help-badge" tabindex="0" title="Only needed when this server requires IMAGE_API_KEYS. The value is saved in this browser and sent to /api/v1 calls.">?</span>
-          <input id="studio-api-key" type="password" autocomplete="off" placeholder="Only needed if API auth is enabled">
-        </label>
-        <button type="submit" class="secondary">Save key</button>
-        <button id="studio-clear-key" type="button" class="secondary">Clear</button>
-        <span id="studio-auth-status" class="muted">Checking auth...</span>
+        <div class="image-lab-banner-grid">
+          <label class="image-lab-model-field">
+            <span class="field-label">Checkpoint <span class="field-help" tabindex="0" title="Choose an installed checkpoint for the next request. Changing it prewarms the model for this portal only and does not set a global default.">?</span></span>
+            <select id="image-lab-model" required></select>
+          </label>
+
+          <div class="image-lab-prompt-grid" aria-label="Prompt controls">
+            <label>
+              <span class="field-label">Positive prompt <span class="field-help" tabindex="0" title="Describe what the model should create. Add subject, style, composition, lighting, and details when the image does not follow the prompt or lacks detail.">?</span></span>
+              <textarea id="image-lab-prompt" rows="2" required placeholder="What should the model create?"></textarea>
+            </label>
+            <label>
+              <span class="field-label">Negative prompt <span class="field-help" tabindex="0" title="Describe what to avoid or de-emphasize, such as artifacts, unwanted text, watermarks, bad anatomy, or styles you do not want.">?</span></span>
+              <textarea id="image-lab-negative" rows="2" placeholder="What should the model avoid?"></textarea>
+            </label>
+          </div>
+
+          <div class="image-lab-parameter-grid" aria-label="Generation parameters">
+            <label>
+              <span class="field-label">Width <span class="field-help" tabindex="0" title="Larger width increases image size and VRAM/memory use. Reduce it if generation is too slow or memory runs out.">?</span></span>
+              <input id="image-lab-width" type="number" min="64" max="4096" step="64" required>
+            </label>
+            <label>
+              <span class="field-label">Height <span class="field-help" tabindex="0" title="Larger height increases image size and VRAM/memory use. Reduce it if the image is too large, slow, or causing memory failures.">?</span></span>
+              <input id="image-lab-height" type="number" min="64" max="4096" step="64" required>
+            </label>
+            <label>
+              <span class="field-label">Steps <span class="field-help" tabindex="0" title="More steps can refine detail but increase generation time. Lower steps are useful for fast exploration.">?</span></span>
+              <input id="image-lab-steps" type="number" min="1" max="150" step="1" required>
+            </label>
+            <label>
+              <span class="field-label">CFG <span class="field-help" tabindex="0" title="Higher CFG usually follows the prompt more strongly; lower CFG gives the model more freedom. Very high CFG can look harsh, overcooked, or less natural.">?</span></span>
+              <input id="image-lab-cfg" type="number" min="0" max="30" step="0.5" required>
+            </label>
+            <label>
+              <span class="field-label">Seed <span class="field-help" tabindex="0" title="Use the same seed with the same model and settings to reproduce a result more closely. Leave blank for the backend's random-seed behavior; the actual seed is shown on the completed job.">?</span></span>
+              <input id="image-lab-seed" type="number" min="-1" step="1" placeholder="random">
+              <span class="hint image-lab-seed-note">blank = random</span>
+            </label>
+          </div>
+
+          <div class="image-lab-action-panel">
+            <button id="image-lab-generate" type="submit" title="Submit the current generation request. The button is disabled while a request is already submitting to avoid duplicate jobs.">Generate</button>
+            <label class="image-lab-gallery-size-control">
+              <span class="field-label">Gallery size <span class="field-help" tabindex="0" title="Controls the displayed size of gallery cards. Smaller values show more images; larger values make previews easier to inspect.">?</span></span>
+              <input id="image-lab-gallery-size" type="range" min="160" max="620" step="20">
+              <span id="image-lab-gallery-size-value" class="hint"></span>
+            </label>
+          </div>
+        </div>
+
+        <details class="image-lab-advanced compact-details">
+          <summary>Advanced options</summary>
+          <div class="image-lab-advanced-grid">
+            <label>
+              Sampler
+              <input id="image-lab-sampler" type="text">
+            </label>
+            <label>
+              Scheduler
+              <input id="image-lab-scheduler" type="text">
+            </label>
+            <label>
+              Sync timeout ms
+              <input id="image-lab-sync-timeout" type="number" min="0" step="100" value="1000">
+            </label>
+          </div>
+          <div class="image-lab-preview-columns">
+            <div>
+              <h3>Request payload</h3>
+              <pre><code id="image-lab-request-preview">{}</code></pre>
+            </div>
+            <div>
+              <h3>Last result</h3>
+              <div id="image-lab-last-result" class="placeholder">No image generated yet.</div>
+            </div>
+          </div>
+        </details>
       </form>
 
-      <div class="studio-form-and-favorites">
-        <form id="studio-form" class="studio-form">
-          <div class="studio-control-grid studio-control-grid-primary">
-            <label>
-              Checkpoint / model
-              <span class="help-badge" tabindex="0" title="Choose the checkpoint for the next generation. Changing this prewarms the selected checkpoint without setting it as a global default.">?</span>
-              <select id="studio-model" required></select>
-            </label>
-            <label>
-              Workflow
-              <span class="help-badge" tabindex="0" title="Workflow presets map prompt, checkpoint, dimensions, sampler, and image-save fields into ComfyUI.">?</span>
-              <select id="studio-workflow"></select>
-            </label>
-            <label>
-              Gallery tile size
-              <span class="help-badge" tabindex="0" title="Adjust how large generated images appear in the gallery. Smaller tiles show more images at once; larger tiles emphasize previews.">?</span>
-              <input id="studio-gallery-size" type="range" min="220" max="760" step="20" value="360">
-            </label>
-          </div>
-
-          <div id="studio-model-status" class="notice compact-notice">Loading checkpoint list...</div>
-
-          <div class="studio-prompt-grid">
-            <label>
-              Positive prompt
-              <span class="help-badge" tabindex="0" title="Describe what the model should create. Add composition, subject, style, lighting, mood, and details when the image lacks direction.">?</span>
-              <textarea id="studio-prompt" required placeholder="Describe the image to generate"></textarea>
-            </label>
-            <label>
-              Negative prompt
-              <span class="help-badge" tabindex="0" title="Describe what to avoid or de-emphasize, such as artifacts, unwanted styles, extra limbs, blur, text, or low quality.">?</span>
-              <textarea id="studio-negative" placeholder="Things to avoid or de-emphasize"></textarea>
-            </label>
-          </div>
-
-          <div class="studio-control-grid">
-            <label>
-              Width
-              <span class="help-badge" tabindex="0" title="Larger width increases image size and VRAM/memory use. Lower it if generation is too slow or memory runs out.">?</span>
-              <input id="studio-width" type="number" min="64" max="4096" step="64" value="1024">
-            </label>
-            <label>
-              Height
-              <span class="help-badge" tabindex="0" title="Larger height increases image size and VRAM/memory use. Keep dimensions near the model workflow defaults for predictable results.">?</span>
-              <input id="studio-height" type="number" min="64" max="4096" step="64" value="1024">
-            </label>
-            <label>
-              Steps
-              <span class="help-badge" tabindex="0" title="More steps can refine detail but increase generation time. Lower steps if the queue feels slow.">?</span>
-              <input id="studio-steps" type="number" min="1" max="150" step="1" value="28">
-            </label>
-            <label>
-              CFG scale
-              <span class="help-badge" tabindex="0" title="Higher CFG follows the prompt more strongly; lower CFG gives the model more freedom. Very high CFG can look harsh, overcooked, or less natural.">?</span>
-              <input id="studio-cfg-scale" type="number" min="0" max="30" step="0.5" value="7">
-            </label>
-            <label>
-              Seed
-              <span class="help-badge" tabindex="0" title="Using the same seed with the same model and settings helps reproduce a result. Leave random enabled to let the backend choose and then save the returned seed.">?</span>
-              <input id="studio-seed" type="number" step="1" value="-1">
-            </label>
-            <label class="checkbox-label studio-random-seed">
-              <input id="studio-random-seed" type="checkbox" checked>
-              Random seed
-            </label>
-          </div>
-
-          <details class="studio-advanced">
-            <summary>Advanced options</summary>
-            <div class="studio-control-grid">
-              <label>Sampler <input id="studio-sampler" type="text" value="euler"></label>
-              <label>Scheduler <input id="studio-scheduler" type="text" value="normal"></label>
-              <label>Output <select id="studio-output"><option value="url">url</option><option value="metadata">metadata</option><option value="base64">base64</option><option value="binary">binary</option></select></label>
-              <label>Sync timeout ms <input id="studio-sync-timeout" type="number" min="0" step="100" value="0"></label>
-            </div>
-            <div class="studio-request-preview">
-              <h3>Request payload preview</h3>
-              <pre><code id="studio-request-preview">{}</code></pre>
-            </div>
-          </details>
-
-          <div class="button-row studio-submit-row">
-            <button id="studio-generate" type="submit">Generate</button>
-            <button id="studio-prewarm" type="button" class="secondary">Load selected checkpoint now</button>
-            <button id="studio-refresh" type="button" class="secondary">Refresh gallery</button>
-          </div>
-        </form>
-
-        <aside class="studio-favorites-panel" aria-label="Saved image favorites">
-          <div class="section-heading compact-section-heading">
-            <div>
-              <h2>Favorites</h2>
-              <p class="hint">Click Load to restore settings without generating.</p>
-            </div>
-            <button id="studio-refresh-favorites" type="button" class="secondary">Refresh</button>
-          </div>
-          <div id="studio-favorites" class="studio-favorite-strip placeholder">Loading favorites...</div>
-        </aside>
-      </div>
+      <section class="image-lab-favorites-panel" aria-label="Saved image favorites">
+        <div class="image-lab-favorites-heading">
+          <strong>Favorites</strong>
+          <span class="hint">Load restores settings only.</span>
+          <button id="image-lab-refresh-favorites" class="secondary" type="button">Refresh</button>
+        </div>
+        <div id="image-lab-favorites" class="image-lab-favorites-strip placeholder">Loading favorites...</div>
+      </section>
     </section>
 
-    <section class="studio-gallery-section" aria-label="Generated image gallery">
-      <div class="section-heading studio-gallery-heading">
+    <section class="image-lab-gallery-section" aria-label="Generated image gallery">
+      <div class="section-heading image-lab-gallery-heading">
         <div>
           <h2>Gallery</h2>
-          <p class="hint">Newest generated images appear first. Details stay collapsed until opened from the caption area.</p>
+          <p class="hint">Newest generated images appear first. Details are collapsed until you open a card caption.</p>
         </div>
-        <div id="studio-gallery-status" class="muted">Loading history...</div>
+        <div id="image-lab-gallery-count" class="hint"></div>
       </div>
-      <div id="studio-gallery" class="studio-gallery placeholder">Loading generated images...</div>
+      <div id="image-lab-gallery" class="image-lab-gallery placeholder">Loading recent generated images...</div>
+      <div class="button-row image-lab-load-more-row">
+        <button id="image-lab-load-more" class="secondary" type="button">Load more history</button>
+      </div>
     </section>
   </main>
 
   <footer>
     <span>${SERVICE_NAME} ${APPLICATION_VERSION}</span>
-    <span class="footer-links"><a href="/">Status Portal</a><a href="/openapi.json">OpenAPI</a></span>
+    <a href="/openapi.json">OpenAPI</a>
   </footer>
   <script src="/assets/image-generator.js" type="module"></script>
 </body>
@@ -2166,7 +2134,7 @@ function renderPortalHtml(): string {
       <p class="muted">ComfyUI image API, hosted control panel, model installs/defaults, generation testing, async job metrics, artifact storage, and NVIDIA GPU telemetry.</p>
     </div>
     <div class="header-actions">
-      <a class="button-link secondary" href="/image-generator">Image Generator</a>
+      <a class="button-link" href="/image-generator">Image Generator</a>
       <button id="refresh-button" type="button">Refresh</button>
     </div>
   </header>
@@ -2366,7 +2334,7 @@ function renderPortalHtml(): string {
 
   <footer>
     <span>${SERVICE_NAME} ${APPLICATION_VERSION}</span>
-    <span class="footer-links"><a href="/image-generator">Image Generator</a><a href="/openapi.json">OpenAPI</a></span>
+    <a href="/openapi.json">OpenAPI</a>
   </footer>
   <script src="/assets/app.js" type="module"></script>
 </body>

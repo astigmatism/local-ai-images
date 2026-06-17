@@ -22,6 +22,7 @@ async function tempImageRuntimeConfig(overrides = {}) {
     imageWorkflowPath: workflowPath,
     imageArtifactPath: artifactPath,
     favoriteImagePromptsPath: path.join(root, 'favorite-image-prompts.json'),
+    imageFavoritesPath: path.join(root, 'image-favorites.json'),
     imageDefaultSyncTimeoutMs: 0,
     imageMaxSyncTimeoutMs: 2000,
     imageMockDelayMs: 1,
@@ -370,6 +371,155 @@ test('favorite prompt endpoints persist full image-generation request payloads',
     const deleted = await (await fetch(`${baseUrl}/api/v1/favorite-prompts/${favoriteId}`, { method: 'DELETE' })).json();
     assert.equal(deleted.ok, true);
     const missing = await fetch(`${baseUrl}/api/v1/favorite-prompts/${favoriteId}`);
+    assert.equal(missing.status, 404);
+  });
+});
+
+test('GET /image-generator serves the dedicated generator portal and preload-only frontend asset', async () => {
+  await withTestServer({
+    runtimeConfig: await tempImageRuntimeConfig(),
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    const pageResponse = await fetch(`${baseUrl}/image-generator`);
+    assert.equal(pageResponse.status, 200);
+    assert.match(pageResponse.headers.get('content-type') ?? '', /text\/html/u);
+    const html = await pageResponse.text();
+    assert.match(html, /id="image-lab-form"/u);
+    assert.match(html, /id="image-lab-gallery"/u);
+    assert.match(html, /id="image-lab-model"/u);
+    assert.match(html, /id="image-lab-prompt"/u);
+    assert.match(html, /id="image-lab-negative"/u);
+    assert.match(html, /id="image-lab-width"/u);
+    assert.match(html, /id="image-lab-height"/u);
+    assert.match(html, /id="image-lab-steps"/u);
+    assert.match(html, /id="image-lab-cfg"/u);
+    assert.match(html, /id="image-lab-seed"/u);
+    assert.match(html, /placeholder="random"/u);
+    assert.doesNotMatch(html, /<h1/u);
+    assert.doesNotMatch(html, /Dashboard API key/u);
+    assert.doesNotMatch(html, /id="image-lab-api-key"/u);
+    assert.doesNotMatch(html, /id="image-lab-workflow"/u);
+    assert.doesNotMatch(html, /image-lab-workflow-label/u);
+    assert.doesNotMatch(html, /image-lab-random-seed/u);
+    assert.doesNotMatch(html, /image-lab-prewarm/u);
+    assert.match(html, /\/assets\/image-generator\.js/u);
+
+    const scriptResponse = await fetch(`${baseUrl}/assets/image-generator.js`);
+    assert.equal(scriptResponse.status, 200);
+    assert.match(scriptResponse.headers.get('content-type') ?? '', /application\/javascript/u);
+    const script = await scriptResponse.text();
+    assert.match(script, /\/api\/v1\/models\/preload/u);
+    assert.doesNotMatch(script, /\/api\/v1\/models\/default/u);
+    assert.match(script, /\/api\/v1\/image-favorites/u);
+  });
+});
+
+test('image favorite endpoints persist generated artifact references and full request payloads', async () => {
+  const runtimeConfig = await tempImageRuntimeConfig({ imageDefaultSyncTimeoutMs: 1000, imageMockDelayMs: 1 });
+  const payload = {
+    prompt: 'a persisted gallery favorite',
+    negative_prompt: 'low detail',
+    model: 'demo.safetensors',
+    workflow_id: 'sdxl-text-to-image',
+    width: 512,
+    height: 512,
+    steps: 5,
+    cfg_scale: 6,
+    seed: 123,
+    sampler_name: 'euler',
+    scheduler: 'normal',
+    output: 'url',
+    sync_timeout_ms: 1000,
+    future_provider_field: { preserved: true }
+  };
+  let favoriteId = '';
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    const generateResponse = await fetch(`${baseUrl}/api/v1/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(generateResponse.status, 200);
+    const generated = await generateResponse.json() as { ok: boolean; job: Record<string, unknown>; artifacts: Record<string, unknown>[] };
+    assert.equal(generated.ok, true);
+    assert.equal(generated.job.status, 'succeeded');
+    assert.equal(generated.job.model, payload.model);
+    assert.equal(generated.job.seed, payload.seed);
+    assert.deepEqual((generated.job.requestPayload as Record<string, unknown>).future_provider_field, { preserved: true });
+    assert.ok(generated.artifacts[0]?.url);
+
+    const createResponse = await fetch(`${baseUrl}/api/v1/image-favorites`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Pinned generated image',
+        request_payload: generated.job.requestPayload,
+        image_url: generated.artifacts[0]!.url,
+        artifact_id: generated.artifacts[0]!.id,
+        job_id: generated.job.id,
+        artifact: generated.artifacts[0],
+        job: generated.job
+      })
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as { ok: boolean; favorite: Record<string, unknown> };
+    assert.equal(created.ok, true);
+    assert.equal(created.favorite.title, 'Pinned generated image');
+    assert.equal(created.favorite.prompt, payload.prompt);
+    assert.equal(created.favorite.negativePrompt, payload.negative_prompt);
+    assert.equal(created.favorite.model, payload.model);
+    assert.equal(created.favorite.width, payload.width);
+    assert.equal(created.favorite.height, payload.height);
+    assert.equal(created.favorite.steps, payload.steps);
+    assert.equal(created.favorite.cfgScale, payload.cfg_scale);
+    assert.equal(created.favorite.seed, payload.seed);
+    assert.equal(created.favorite.imageUrl, generated.artifacts[0]!.url);
+    assert.deepEqual((created.favorite.requestPayload as Record<string, unknown>).future_provider_field, { preserved: true });
+    favoriteId = String(created.favorite.id);
+
+    const list = await (await fetch(`${baseUrl}/api/v1/image-favorites`)).json() as { ok: boolean; favorites: Record<string, unknown>[] };
+    assert.equal(list.ok, true);
+    assert.equal(list.favorites.length, 1);
+    assert.equal(list.favorites[0]!.requestPayload, undefined);
+    assert.equal(list.favorites[0]!.artifactId, generated.artifacts[0]!.id);
+
+    const single = await (await fetch(`${baseUrl}/api/v1/image-favorites/${favoriteId}`)).json() as { ok: boolean; favorite: Record<string, unknown> };
+    assert.equal(single.ok, true);
+    assert.equal((single.favorite.requestPayload as Record<string, unknown>).prompt, payload.prompt);
+    assert.equal((single.favorite.job as Record<string, unknown>).id, generated.job.id);
+  });
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    const persisted = await (await fetch(`${baseUrl}/api/v1/image-favorites/${favoriteId}`)).json() as { ok: boolean; favorite: Record<string, unknown> };
+    assert.equal(persisted.ok, true);
+    assert.deepEqual((persisted.favorite.requestPayload as Record<string, unknown>).future_provider_field, { preserved: true });
+
+    const patched = await (await fetch(`${baseUrl}/api/v1/image-favorites/${favoriteId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Renamed pinned image', notes: 'loaded from compact favorites strip' })
+    })).json() as { ok: boolean; favorite: Record<string, unknown> };
+    assert.equal(patched.ok, true);
+    assert.equal(patched.favorite.title, 'Renamed pinned image');
+    assert.equal(patched.favorite.description, 'loaded from compact favorites strip');
+
+    const deleted = await (await fetch(`${baseUrl}/api/v1/image-favorites/${favoriteId}`, { method: 'DELETE' })).json() as { ok: boolean; deleted_id: string };
+    assert.equal(deleted.ok, true);
+    assert.equal(deleted.deleted_id, favoriteId);
+    const missing = await fetch(`${baseUrl}/api/v1/image-favorites/${favoriteId}`);
     assert.equal(missing.status, 404);
   });
 });

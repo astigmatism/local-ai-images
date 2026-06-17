@@ -116,34 +116,12 @@ const imageFavoriteSchema = {
   type: 'object',
   additionalProperties: true,
   properties: {
-    id: { type: 'string' },
-    title: { type: 'string' },
-    description: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    requestPayload: generationRequestSchema,
-    prompt: { type: 'string' },
-    negativePrompt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    promptPreview: { type: 'string' },
-    negativePromptPreview: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    model: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    workflow: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    workflowId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    sampler: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    scheduler: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    width: { oneOf: [{ type: 'number' }, { type: 'null' }] },
-    height: { oneOf: [{ type: 'number' }, { type: 'null' }] },
-    steps: { oneOf: [{ type: 'number' }, { type: 'null' }] },
-    cfgScale: { oneOf: [{ type: 'number' }, { type: 'null' }] },
-    seed: { oneOf: [{ type: 'number' }, { type: 'string' }, { type: 'null' }] },
-    artifactId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    artifactUrl: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    ...favoriteImagePromptSchema.properties,
     imageUrl: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    artifactId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     jobId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     artifact: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
-    artifacts: { type: 'array', items: { type: 'object', additionalProperties: true } },
-    job: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
-    metadata: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
-    createdAt: { type: 'string' },
-    updatedAt: { type: 'string' }
+    job: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] }
   }
 } as const;
 
@@ -158,18 +136,14 @@ const imageFavoriteCreateSchema = {
     notes: { type: 'string' },
     request_payload: generationRequestSchema,
     requestPayload: generationRequestSchema,
-    artifact_id: { type: 'string' },
-    artifactId: { type: 'string' },
-    artifact_url: { type: 'string' },
-    artifactUrl: { type: 'string' },
     image_url: { type: 'string' },
     imageUrl: { type: 'string' },
-    artifact: { type: 'object', additionalProperties: true },
-    artifacts: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    artifact_id: { type: 'string' },
+    artifactId: { type: 'string' },
     job_id: { type: 'string' },
     jobId: { type: 'string' },
-    job: { type: 'object', additionalProperties: true },
-    metadata: { type: 'object', additionalProperties: true }
+    artifact: { type: 'object', additionalProperties: true },
+    job: { type: 'object', additionalProperties: true }
   }
 } as const;
 
@@ -183,18 +157,14 @@ const imageFavoritePatchSchema = {
     notes: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     request_payload: generationRequestSchema,
     requestPayload: generationRequestSchema,
-    artifact_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    artifactId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    artifact_url: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    artifactUrl: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     image_url: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     imageUrl: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    artifact: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
-    artifacts: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    artifact_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    artifactId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     job_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     jobId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-    job: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
-    metadata: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] }
+    artifact: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
+    job: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] }
   }
 } as const;
 
@@ -662,39 +632,39 @@ export function buildOpenApiDocument() {
       },
       '/api/v1/image-favorites': {
         get: {
-          summary: 'List saved favorite generated images',
-          description: 'Returns compact favorite records with image/artifact references. Use the item endpoint to retrieve the stored full generation request payload and job metadata.',
+          summary: 'List saved generated-image favorites',
+          description: 'Returns compact favorite records with image/artifact references but without image binaries. Use the item endpoint to retrieve the full request payload and stored job metadata.',
           security: bearerSecurity,
           parameters: [{ name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 250 } }],
-          responses: { '200': { description: 'Saved generated-image favorites', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorites: { type: 'array', items: imageFavoriteSchema } } } } } }, ...authErrorResponses }
+          responses: { '200': { description: 'Saved image favorites', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorites: { type: 'array', items: imageFavoriteSchema } } } } } }, ...authErrorResponses }
         },
         post: {
           summary: 'Save a generated image as a favorite',
-          description: 'Persists the generated image artifact reference plus the full generation request payload, including unknown future fields. Image bytes are not stored in the favorites file.',
+          description: 'Persists the full generation request payload plus artifact URL/id, job id, and useful job/artifact metadata. Image bytes remain in the existing artifact store.',
           security: bearerSecurity,
           requestBody: { required: true, content: { 'application/json': { schema: imageFavoriteCreateSchema } } },
-          responses: { '201': { description: 'Image favorite saved', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorite: imageFavoriteSchema } } } } }, '422': { description: 'Invalid image favorite payload' }, ...authErrorResponses }
+          responses: { '201': { description: 'Image favorite saved', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorite: imageFavoriteSchema } } } } }, '422': { description: 'Invalid favorite payload' }, ...authErrorResponses }
         }
       },
       '/api/v1/image-favorites/{favoriteId}': {
         get: {
-          summary: 'Read one saved generated-image favorite',
+          summary: 'Read one generated-image favorite',
           security: bearerSecurity,
           parameters: [{ name: 'favoriteId', in: 'path', required: true, schema: { type: 'string' } }],
-          responses: { '200': { description: 'Image favorite including full request payload, artifact reference, and saved job metadata', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorite: imageFavoriteSchema } } } } }, '404': { description: 'Image favorite not found', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
+          responses: { '200': { description: 'Image favorite including full generation request payload', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorite: imageFavoriteSchema } } } } }, '404': { description: 'Favorite not found', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
         },
         patch: {
-          summary: 'Rename, annotate, or replace a saved generated-image favorite',
+          summary: 'Rename, annotate, or update a generated-image favorite',
           security: bearerSecurity,
           parameters: [{ name: 'favoriteId', in: 'path', required: true, schema: { type: 'string' } }],
           requestBody: { required: true, content: { 'application/json': { schema: imageFavoritePatchSchema } } },
-          responses: { '200': { description: 'Updated image favorite', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorite: imageFavoriteSchema } } } } }, '404': { description: 'Image favorite not found', content: { 'application/json': { schema: errorSchema } } }, '422': { description: 'Invalid image favorite update' }, ...authErrorResponses }
+          responses: { '200': { description: 'Updated image favorite', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, favorite: imageFavoriteSchema } } } } }, '404': { description: 'Favorite not found', content: { 'application/json': { schema: errorSchema } } }, '422': { description: 'Invalid favorite update' }, ...authErrorResponses }
         },
         delete: {
-          summary: 'Delete a saved generated-image favorite',
+          summary: 'Delete a generated-image favorite',
           security: bearerSecurity,
           parameters: [{ name: 'favoriteId', in: 'path', required: true, schema: { type: 'string' } }],
-          responses: { '200': { description: 'Deleted image favorite' }, '404': { description: 'Image favorite not found', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
+          responses: { '200': { description: 'Deleted image favorite' }, '404': { description: 'Favorite not found', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
         }
       },
       '/api/v1/generate': {

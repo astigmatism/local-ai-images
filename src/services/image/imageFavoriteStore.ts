@@ -6,8 +6,7 @@ import type { ImageFavorite } from '../../types.ts';
 
 const MAX_TITLE_CHARS = 140;
 const MAX_DESCRIPTION_CHARS = 2000;
-const PROMPT_PREVIEW_CHARS = 240;
-const MAX_FAVORITES = 1000;
+const PREVIEW_CHARS = 240;
 
 export class ImageFavoriteStore {
   private readonly filePath: string;
@@ -45,18 +44,27 @@ export class ImageFavoriteStore {
     }
 
     const requestPayload = readRequestPayload(body);
-    const derived = deriveFavoriteFields(requestPayload, this.maxPromptChars);
-    const imageFields = deriveImageFields(body);
-    const title = normalizeTitle(readNullableString(body.title ?? body.name, 'title'), derived.prompt);
+    const derived = deriveFields(requestPayload, this.maxPromptChars);
+    const artifact = readArtifact(body);
+    const job = readJob(body);
+    const imageUrl = readStringFrom(body, ['image_url', 'imageUrl', 'url']) ?? stringField(artifact, 'url');
+    const artifactId = readStringFrom(body, ['artifact_id', 'artifactId']) ?? stringField(artifact, 'id');
+    const jobId = readStringFrom(body, ['job_id', 'jobId']) ?? stringField(job, 'id') ?? stringField(artifact, 'jobId') ?? stringField(artifact, 'job_id');
+    const title = normalizeTitle(readNullableString(body.title ?? body.name, 'title'), derived.prompt, jobId);
     const description = normalizeDescription(body.description ?? body.notes);
     const now = new Date().toISOString();
+
     const favorite: ImageFavorite = {
       id: crypto.randomUUID(),
       title,
       ...(description !== undefined ? { description } : {}),
       requestPayload,
       ...derived,
-      ...imageFields,
+      ...(imageUrl !== null ? { imageUrl } : {}),
+      ...(artifactId !== null ? { artifactId } : {}),
+      ...(jobId !== null ? { jobId } : {}),
+      ...(artifact !== null ? { artifact } : {}),
+      ...(job !== null ? { job } : {}),
       createdAt: now,
       updatedAt: now
     };
@@ -95,19 +103,21 @@ export class ImageFavoriteStore {
 
     if (hasRequestPayload(body)) {
       const requestPayload = readRequestPayload(body);
-      const derived = deriveFavoriteFields(requestPayload, this.maxPromptChars);
       next = {
         ...next,
         requestPayload,
-        ...derived
+        ...deriveFields(requestPayload, this.maxPromptChars)
       };
     }
 
-    if (hasImageFields(body)) {
-      next = {
-        ...next,
-        ...deriveImageFields(body)
-      };
+    if (hasOwn(body, 'artifact') || hasOwn(body, 'artifact_metadata') || hasOwn(body, 'artifactMetadata') || hasOwn(body, 'job')) {
+      const artifact = readArtifact(body);
+      const job = readJob(body);
+      next.artifact = artifact;
+      next.job = job;
+      next.imageUrl = readStringFrom(body, ['image_url', 'imageUrl', 'url']) ?? stringField(artifact, 'url') ?? next.imageUrl ?? null;
+      next.artifactId = readStringFrom(body, ['artifact_id', 'artifactId']) ?? stringField(artifact, 'id') ?? next.artifactId ?? null;
+      next.jobId = readStringFrom(body, ['job_id', 'jobId']) ?? stringField(job, 'id') ?? stringField(artifact, 'jobId') ?? stringField(artifact, 'job_id') ?? next.jobId ?? null;
     }
 
     next.updatedAt = new Date().toISOString();
@@ -122,23 +132,23 @@ export class ImageFavoriteStore {
     if (index < 0) {
       throw new AppError('IMAGE_FAVORITE_NOT_FOUND', `Image favorite ${id} was not found.`, 404);
     }
-
-    const [removed] = favorites.splice(index, 1);
+    const [deleted] = favorites.splice(index, 1);
     await this.writeAll(favorites);
-    return cloneFavorite(removed!);
+    return cloneFavorite(deleted!);
   }
 
   private async readAll(): Promise<ImageFavorite[]> {
     try {
       const raw = await fs.readFile(this.filePath, 'utf8');
       const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) {
-        throw new AppError('IMAGE_FAVORITES_READ_FAILED', `Image favorites file must contain an array: ${this.filePath}`, 500, { path: this.filePath });
-      }
-      return parsed.filter(isImageFavorite).map(cloneFavorite);
+      const records = Array.isArray(parsed)
+        ? parsed
+        : isRecord(parsed) && Array.isArray(parsed.favorites)
+          ? parsed.favorites
+          : [];
+      return records.map((record) => normalizeStoredFavorite(record, this.maxPromptChars)).filter(isImageFavorite).map(cloneFavorite);
     } catch (error: unknown) {
       if (isNodeError(error) && error.code === 'ENOENT') return [];
-      if (error instanceof AppError) throw error;
       if (error instanceof SyntaxError) {
         throw new AppError('IMAGE_FAVORITES_READ_FAILED', `Image favorites file is not valid JSON: ${this.filePath}`, 500, { path: this.filePath });
       }
@@ -152,10 +162,7 @@ export class ImageFavoriteStore {
   private async writeAll(favorites: ImageFavorite[]): Promise<void> {
     const directory = path.dirname(this.filePath);
     const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-    const normalized = favorites
-      .filter(isImageFavorite)
-      .sort(compareFavoritesNewestFirst)
-      .slice(0, MAX_FAVORITES);
+    const normalized = favorites.filter(isImageFavorite).sort(compareFavoritesNewestFirst);
 
     try {
       await fs.mkdir(directory, { recursive: true });
@@ -171,7 +178,7 @@ export class ImageFavoriteStore {
   }
 }
 
-interface DerivedFavoriteFields {
+interface DerivedFields {
   prompt: string;
   negativePrompt: string | null;
   promptPreview: string;
@@ -188,52 +195,30 @@ interface DerivedFavoriteFields {
   seed: string | number | null;
 }
 
-interface DerivedImageFields {
-  artifactId: string | null;
-  artifactUrl: string | null;
-  imageUrl: string | null;
-  jobId: string | null;
-  artifact: Record<string, unknown> | null;
-  artifacts: Record<string, unknown>[];
-  job: Record<string, unknown> | null;
-  metadata: Record<string, unknown> | null;
-}
-
 function readRequestPayload(body: Record<string, unknown>): Record<string, unknown> {
   const candidate = body.request_payload ?? body.requestPayload ?? body.payload ?? body.request;
-  if (!isRecord(candidate)) {
-    throw new AppError('IMAGE_FAVORITE_PAYLOAD_REQUIRED', 'request_payload/requestPayload must be a JSON object.', 422);
-  }
-  return cloneRecord(candidate);
+  if (isRecord(candidate)) return cloneRecord(candidate);
+
+  const job = isRecord(body.job) ? body.job : null;
+  const jobPayload = job?.requestPayload ?? job?.request_payload ?? job?.request;
+  if (isRecord(jobPayload)) return cloneRecord(jobPayload);
+
+  const artifact = readArtifact(body);
+  const artifactPayload = artifact?.requestPayload ?? artifact?.request_payload ?? artifact?.request;
+  if (isRecord(artifactPayload)) return cloneRecord(artifactPayload);
+
+  throw new AppError('IMAGE_FAVORITE_PAYLOAD_REQUIRED', 'request_payload/requestPayload must be a JSON object, or a job/artifact with a request payload must be provided.', 422);
 }
 
 function hasRequestPayload(body: Record<string, unknown>): boolean {
   return hasOwn(body, 'request_payload') || hasOwn(body, 'requestPayload') || hasOwn(body, 'payload') || hasOwn(body, 'request');
 }
 
-function hasImageFields(body: Record<string, unknown>): boolean {
-  return hasOwn(body, 'artifact')
-    || hasOwn(body, 'imageArtifact')
-    || hasOwn(body, 'artifacts')
-    || hasOwn(body, 'artifact_id')
-    || hasOwn(body, 'artifactId')
-    || hasOwn(body, 'artifact_url')
-    || hasOwn(body, 'artifactUrl')
-    || hasOwn(body, 'image_url')
-    || hasOwn(body, 'imageUrl')
-    || hasOwn(body, 'job')
-    || hasOwn(body, 'metadata');
-}
-
-function deriveFavoriteFields(payload: Record<string, unknown>, maxPromptChars: number): DerivedFavoriteFields {
-  const prompt = firstString(payload, ['prompt', 'positive_prompt', 'positivePrompt']);
-  if (!prompt) {
-    throw new AppError('IMAGE_FAVORITE_PROMPT_REQUIRED', 'Saved generation request payload must include a non-empty prompt.', 422);
-  }
+function deriveFields(payload: Record<string, unknown>, maxPromptChars: number): DerivedFields {
+  const prompt = firstString(payload, ['prompt', 'positive_prompt', 'positivePrompt']) ?? '';
   if (prompt.length > maxPromptChars) {
     throw new AppError('IMAGE_FAVORITE_PROMPT_TOO_LONG', `Prompt must be ${maxPromptChars} characters or fewer.`, 422, { max_prompt_chars: maxPromptChars });
   }
-
   const negativePrompt = firstString(payload, ['negative_prompt', 'negativePrompt']) ?? null;
   if (negativePrompt && negativePrompt.length > maxPromptChars) {
     throw new AppError('IMAGE_FAVORITE_NEGATIVE_TOO_LONG', `Negative prompt must be ${maxPromptChars} characters or fewer.`, 422, { max_prompt_chars: maxPromptChars });
@@ -258,58 +243,72 @@ function deriveFavoriteFields(payload: Record<string, unknown>, maxPromptChars: 
   };
 }
 
-function deriveImageFields(body: Record<string, unknown>): DerivedImageFields {
-  const artifact = isRecord(body.artifact)
-    ? cloneRecord(body.artifact)
-    : isRecord(body.imageArtifact)
-      ? cloneRecord(body.imageArtifact)
-      : null;
-  const artifacts = Array.isArray(body.artifacts)
-    ? body.artifacts.filter(isRecord).map((item) => cloneRecord(item))
-    : artifact
-      ? [cloneRecord(artifact)]
-      : [];
-  const firstArtifact = artifact ?? artifacts[0] ?? null;
-  const job = isRecord(body.job) ? cloneRecord(body.job) : null;
-  const metadata = isRecord(body.metadata) ? cloneRecord(body.metadata) : null;
-  const artifactId = readFirstStringFromValues([
-    body.artifact_id,
-    body.artifactId,
-    firstArtifact?.id,
-    firstArtifact?.artifactId
-  ]);
-  const imageUrl = readFirstStringFromValues([
-    body.image_url,
-    body.imageUrl,
-    body.artifact_url,
-    body.artifactUrl,
-    firstArtifact?.url,
-    firstArtifact?.imageUrl,
-    firstArtifact?.artifactUrl
-  ]);
-  const jobId = readFirstStringFromValues([
-    body.job_id,
-    body.jobId,
-    firstArtifact?.jobId,
-    firstArtifact?.job_id,
-    job?.id
-  ]);
+function readArtifact(body: Record<string, unknown>): Record<string, unknown> | null {
+  const direct = body.artifact ?? body.artifact_metadata ?? body.artifactMetadata;
+  if (isRecord(direct)) return cloneRecord(direct);
+  const job = isRecord(body.job) ? body.job : null;
+  const artifacts = Array.isArray(job?.artifacts) ? job.artifacts : [];
+  const first = artifacts.find(isRecord);
+  return first ? cloneRecord(first) : null;
+}
+
+function readJob(body: Record<string, unknown>): Record<string, unknown> | null {
+  return isRecord(body.job) ? cloneRecord(body.job) : null;
+}
+
+function normalizeStoredFavorite(value: unknown, maxPromptChars: number): ImageFavorite | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || !isRecord(value.requestPayload)) return null;
+  const createdAt = typeof value.createdAt === 'string' ? value.createdAt : new Date().toISOString();
+  const updatedAt = typeof value.updatedAt === 'string' ? value.updatedAt : createdAt;
+  let derived: DerivedFields;
+  try {
+    derived = deriveFields(value.requestPayload, maxPromptChars);
+  } catch {
+    derived = {
+      prompt: typeof value.prompt === 'string' ? value.prompt : '',
+      negativePrompt: typeof value.negativePrompt === 'string' ? value.negativePrompt : null,
+      promptPreview: typeof value.promptPreview === 'string' ? value.promptPreview : '',
+      negativePromptPreview: typeof value.negativePromptPreview === 'string' ? value.negativePromptPreview : null,
+      model: null,
+      workflow: null,
+      workflowId: null,
+      sampler: null,
+      scheduler: null,
+      width: null,
+      height: null,
+      steps: null,
+      cfgScale: null,
+      seed: null
+    };
+  }
 
   return {
-    artifactId,
-    artifactUrl: imageUrl,
-    imageUrl,
-    jobId,
-    artifact,
-    artifacts,
-    job,
-    metadata
+    id: value.id,
+    title: typeof value.title === 'string' && value.title.trim() ? value.title : normalizeTitle(null, derived.prompt, stringField(value, 'jobId')),
+    ...(hasOwn(value, 'description') ? { description: typeof value.description === 'string' || value.description === null ? value.description : null } : {}),
+    requestPayload: cloneRecord(value.requestPayload),
+    ...derived,
+    ...(readOptionalStoredString(value, 'imageUrl') !== undefined ? { imageUrl: readOptionalStoredString(value, 'imageUrl') } : {}),
+    ...(readOptionalStoredString(value, 'artifactId') !== undefined ? { artifactId: readOptionalStoredString(value, 'artifactId') } : {}),
+    ...(readOptionalStoredString(value, 'jobId') !== undefined ? { jobId: readOptionalStoredString(value, 'jobId') } : {}),
+    ...(isRecord(value.artifact) || value.artifact === null ? { artifact: value.artifact === null ? null : cloneRecord(value.artifact) } : {}),
+    ...(isRecord(value.job) || value.job === null ? { job: value.job === null ? null : cloneRecord(value.job) } : {}),
+    createdAt,
+    updatedAt
   };
 }
 
-function normalizeTitle(value: string | null, prompt: string): string {
-  const title = value?.trim() || defaultTitleFromPrompt(prompt);
-  return limitText(title, MAX_TITLE_CHARS);
+function readOptionalStoredString(record: Record<string, unknown>, key: string): string | null | undefined {
+  if (!hasOwn(record, key)) return undefined;
+  const value = record[key];
+  if (value === null) return null;
+  return typeof value === 'string' ? value : null;
+}
+
+function normalizeTitle(value: string | null, prompt: string, jobId?: string | null): string {
+  const compactPrompt = previewText(prompt).replace(/\s+/gu, ' ').trim();
+  const fallback = compactPrompt || (jobId ? `Image job ${jobId}` : 'Untitled image favorite');
+  return limitText(value?.trim() || fallback, MAX_TITLE_CHARS);
 }
 
 function normalizeDescription(value: unknown): string | null | undefined {
@@ -330,18 +329,13 @@ function readNullableString(value: unknown, fieldName: string): string | null {
   return value;
 }
 
-function defaultTitleFromPrompt(prompt: string): string {
-  const title = previewText(prompt).replace(/\s+/gu, ' ').trim();
-  return title || 'Untitled image favorite';
-}
-
 function previewText(value: string): string {
-  return limitText(value.replace(/\s+/gu, ' ').trim(), PROMPT_PREVIEW_CHARS);
+  return limitText(value.replace(/\s+/gu, ' ').trim(), PREVIEW_CHARS);
 }
 
 function limitText(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
-  return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}...`;
+  return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 }
 
 function firstString(record: Record<string, unknown>, keys: string[]): string | null {
@@ -375,19 +369,33 @@ function firstSeed(record: Record<string, unknown>, keys: string[]): string | nu
   return null;
 }
 
-function readFirstStringFromValues(values: unknown[]): string | null {
-  for (const value of values) {
+function readStringFrom(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
     if (typeof value === 'string' && value.trim()) return value.trim();
-    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   }
   return null;
+}
+
+function stringField(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function compareFavoritesNewestFirst(left: ImageFavorite, right: ImageFavorite): number {
+  const leftValue = Date.parse(left.updatedAt || left.createdAt);
+  const rightValue = Date.parse(right.updatedAt || right.createdAt);
+  if (Number.isFinite(leftValue) && Number.isFinite(rightValue) && leftValue !== rightValue) {
+    return rightValue - leftValue;
+  }
+  return right.id.localeCompare(left.id);
 }
 
 function cloneRecord(record: Record<string, unknown>): Record<string, unknown> {
   try {
     return JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
   } catch (error: unknown) {
-    throw new AppError('IMAGE_FAVORITE_PAYLOAD_NOT_JSON', 'Saved image favorite payload must be JSON-serializable.', 422, {
+    throw new AppError('IMAGE_FAVORITE_PAYLOAD_NOT_JSON', 'Saved generation request payload must be JSON-serializable.', 422, {
       cause: error instanceof Error ? error.message : String(error)
     });
   }
@@ -395,10 +403,6 @@ function cloneRecord(record: Record<string, unknown>): Record<string, unknown> {
 
 function cloneFavorite(favorite: ImageFavorite): ImageFavorite {
   return JSON.parse(JSON.stringify(favorite)) as ImageFavorite;
-}
-
-function compareFavoritesNewestFirst(left: ImageFavorite, right: ImageFavorite): number {
-  return String(right.updatedAt || right.createdAt).localeCompare(String(left.updatedAt || left.createdAt));
 }
 
 function isImageFavorite(value: unknown): value is ImageFavorite {

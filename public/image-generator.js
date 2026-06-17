@@ -1,59 +1,40 @@
 const $ = (selector) => document.querySelector(selector);
 
-const API_KEY_STORAGE_KEY = 'local-ai-images-api-key';
-const GALLERY_SIZE_STORAGE_KEY = 'local-ai-images-generator-gallery-size';
-const DEFAULT_GALLERY_TILE_SIZE = 360;
-const MAX_GALLERY_JOBS = 80;
+const DEFAULT_GALLERY_LIMIT = 48;
+const MAX_GALLERY_LIMIT = 250;
+const GALLERY_LIMIT_STEP = 48;
+const DEFAULT_TILE_SIZE = 300;
 
 const state = {
-  imageApiKey: window.localStorage.getItem(API_KEY_STORAGE_KEY) || '',
   imageHealth: null,
   imageModels: null,
   imageWorkflows: null,
+  selectedWorkflowId: null,
   imageJobs: null,
   imageFavorites: null,
   imageError: null,
   activeJobId: null,
-  generating: false,
-  prewarming: false,
-  loadedPayloadBase: null,
-  renderedJobs: [],
-  gallerySize: Number(window.localStorage.getItem(GALLERY_SIZE_STORAGE_KEY)) || DEFAULT_GALLERY_TILE_SIZE,
-  lastMessage: null
+  isGenerating: false,
+  prewarmingModel: null,
+  loadedFavoritePayloadBase: null,
+  galleryLimit: DEFAULT_GALLERY_LIMIT,
+  galleryTileSize: readStoredGallerySize(),
+  lastResult: null
 };
 
 const thumbnailObjectUrls = new Map();
-const observedImages = new WeakSet();
-const thumbnailObserver = 'IntersectionObserver' in window
-  ? new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.isIntersecting) {
-          thumbnailObserver.unobserve(entry.target);
-          hydrateOneImage(entry.target);
-        }
-      }
-    }, { rootMargin: '600px 0px' })
-  : null;
+
+function readStoredGallerySize() {
+  const raw = window.localStorage.getItem('local-ai-images-gallery-size');
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 160 && parsed <= 620 ? parsed : DEFAULT_TILE_SIZE;
+}
 
 async function fetchJson(url, options = {}) {
   const headers = { 'content-type': 'application/json', ...(options.headers || {}) };
-  if (url.startsWith('/api/v1') && state.imageApiKey) {
-    headers.authorization = `Bearer ${state.imageApiKey}`;
-  }
   const response = await fetch(url, { ...options, headers });
   const text = await response.text();
-  let body = {};
-  if (text) {
-    try {
-      body = JSON.parse(text);
-    } catch (error) {
-      const message = `Expected JSON from ${url}, but received ${response.headers.get('content-type') || 'unknown content type'}.`;
-      const parseError = new Error(message);
-      parseError.status = response.status;
-      parseError.bodyText = text.slice(0, 2000);
-      throw parseError;
-    }
-  }
+  const body = text ? JSON.parse(text) : {};
   if (!response.ok) {
     const message = body?.error?.message || body?.detail?.[0]?.msg || `HTTP ${response.status}`;
     const error = new Error(message);
@@ -64,28 +45,8 @@ async function fetchJson(url, options = {}) {
   return body;
 }
 
-async function fetchPossiblyJson(url, options = {}) {
-  const headers = { 'content-type': 'application/json', ...(options.headers || {}) };
-  if (url.startsWith('/api/v1') && state.imageApiKey) {
-    headers.authorization = `Bearer ${state.imageApiKey}`;
-  }
-  const response = await fetch(url, { ...options, headers });
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    const body = await response.json();
-    if (!response.ok) {
-      const message = body?.error?.message || body?.detail?.[0]?.msg || `HTTP ${response.status}`;
-      const error = new Error(message);
-      error.status = response.status;
-      error.body = body;
-      throw error;
-    }
-    return body;
-  }
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-  return { ok: true, binary: true, contentType };
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function escapeHtml(value) {
@@ -102,14 +63,7 @@ function isPlainObject(value) {
 }
 
 function clonePayload(value) {
-  if (!isPlainObject(value)) return {};
-  return JSON.parse(JSON.stringify(value));
-}
-
-function compactText(value, maxChars = 140) {
-  const compact = String(value || '').replace(/\s+/g, ' ').trim();
-  if (compact.length <= maxChars) return compact;
-  return `${compact.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+  return isPlainObject(value) ? JSON.parse(JSON.stringify(value)) : {};
 }
 
 function formatDate(value) {
@@ -121,153 +75,24 @@ function formatDate(value) {
 function formatDurationMs(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return 'n/a';
   const ms = Number(value);
-  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 })} s`;
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 })} s`;
 }
 
-function readNumericInput(id, fallback = null) {
-  const element = $(`#${id}`);
-  if (!element || String(element.value).trim() === '') return fallback;
-  const parsed = Number(element.value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+function previewText(value, max = 140) {
+  const compact = String(value || '').replace(/\s+/g, ' ').trim();
+  return compact.length > max ? `${compact.slice(0, Math.max(0, max - 1)).trimEnd()}...` : compact;
 }
 
-function readTextInput(id) {
-  const element = $(`#${id}`);
-  return element ? String(element.value || '').trim() : '';
-}
-
-function setControlValue(id, value) {
-  const element = $(`#${id}`);
-  if (!element || value === undefined || value === null) return;
-  element.value = String(value);
-}
-
-function setFeedback(message, tone = '') {
-  state.lastMessage = { message, tone };
-  const target = $('#studio-feedback');
-  if (!target) return;
-  target.className = `feedback ${tone}`.trim();
-  target.textContent = message || '';
-}
-
-function setGalleryStatus(message) {
-  const target = $('#studio-gallery-status');
-  if (target) target.textContent = message || '';
-}
-
-function statusPill(label, tone = '') {
+function statusPill(label, tone = 'ok') {
   return `<span class="status-pill ${escapeHtml(tone)}">${escapeHtml(label)}</span>`;
-}
-
-function imageApiAuthRequiredWithoutKey() {
-  const auth = state.imageHealth?.auth;
-  return Boolean(auth?.enabled && !state.imageApiKey);
-}
-
-function modelIdentifier(model) {
-  return model?.comfyName || model?.fileName || model?.relativePath || model?.id || model?.name || '';
-}
-
-function normalizeModel(value) {
-  return String(value || '').trim().replace(/\\/g, '/').toLowerCase();
-}
-
-function modelMatches(model, value) {
-  const normalized = normalizeModel(value);
-  if (!model || !normalized) return false;
-  return [model.id, model.comfyName, model.fileName, model.relativePath, model.path, model.name, model.displayName]
-    .filter(Boolean)
-    .some((candidate) => normalizeModel(candidate) === normalized);
-}
-
-function checkpointModels() {
-  return (state.imageModels?.models || []).filter((model) => model.type === 'checkpoint');
-}
-
-function selectedModelValue() {
-  return $('#studio-model')?.value || '';
-}
-
-function selectedWorkflow() {
-  const workflowId = $('#studio-workflow')?.value || state.imageWorkflows?.default_workflow_id || '';
-  return (state.imageWorkflows?.workflows || []).find((workflow) => workflow.id === workflowId) || null;
-}
-
-function selectModelIfAvailable(value) {
-  const select = $('#studio-model');
-  if (!select || !value) return false;
-  const model = checkpointModels().find((candidate) => modelMatches(candidate, value));
-  if (!model) return false;
-  select.value = modelIdentifier(model);
-  return true;
-}
-
-function removeAliases(payload, keys) {
-  for (const key of keys) delete payload[key];
-}
-
-function buildGenerationPayload() {
-  const payload = clonePayload(state.loadedPayloadBase);
-  const prompt = readTextInput('studio-prompt');
-  const negative = readTextInput('studio-negative');
-  const workflowId = $('#studio-workflow')?.value || state.imageWorkflows?.default_workflow_id || 'sdxl-text-to-image';
-  const model = selectedModelValue();
-
-  payload.prompt = prompt;
-  if (negative) {
-    payload.negative_prompt = negative;
-  } else {
-    removeAliases(payload, ['negative_prompt', 'negativePrompt']);
-  }
-
-  payload.workflow_id = workflowId;
-  if (model) {
-    payload.model = model;
-  } else {
-    delete payload.model;
-  }
-
-  const width = readNumericInput('studio-width');
-  const height = readNumericInput('studio-height');
-  const steps = readNumericInput('studio-steps');
-  const cfgScale = readNumericInput('studio-cfg-scale');
-  if (width !== null) payload.width = width;
-  if (height !== null) payload.height = height;
-  if (steps !== null) payload.steps = steps;
-  if (cfgScale !== null) payload.cfg_scale = cfgScale;
-
-  const randomSeed = $('#studio-random-seed')?.checked ?? true;
-  const seedValue = readTextInput('studio-seed');
-  if (randomSeed || seedValue === '') {
-    payload.seed = -1;
-  } else {
-    const parsedSeed = Number(seedValue);
-    payload.seed = Number.isFinite(parsedSeed) ? parsedSeed : seedValue;
-  }
-
-  const sampler = readTextInput('studio-sampler');
-  const scheduler = readTextInput('studio-scheduler');
-  if (sampler) payload.sampler_name = sampler;
-  else removeAliases(payload, ['sampler_name', 'samplerName', 'sampler']);
-  if (scheduler) payload.scheduler = scheduler;
-  else delete payload.scheduler;
-
-  payload.output = $('#studio-output')?.value || 'url';
-  const syncTimeout = readNumericInput('studio-sync-timeout', 0);
-  payload.sync_timeout_ms = syncTimeout ?? 0;
-
-  const metadata = isPlainObject(payload.metadata) ? clonePayload(payload.metadata) : {};
-  metadata.source = 'image-generator-portal';
-  payload.metadata = metadata;
-
-  return payload;
 }
 
 function payloadString(payload, keys) {
   if (!isPlainObject(payload)) return '';
   for (const key of keys) {
     const value = payload[key];
-    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'string' && value.trim()) return value;
   }
   return '';
 }
@@ -293,240 +118,217 @@ function payloadSeed(payload) {
   return null;
 }
 
-function apiPayloadFromNormalizedRequest(request) {
-  if (!isPlainObject(request)) return {};
-  const payload = {};
-  if (request.prompt) payload.prompt = request.prompt;
-  if (request.negativePrompt) payload.negative_prompt = request.negativePrompt;
-  if (request.model) payload.model = request.model;
-  if (request.workflowId) payload.workflow_id = request.workflowId;
-  if (Number.isFinite(Number(request.width))) payload.width = Number(request.width);
-  if (Number.isFinite(Number(request.height))) payload.height = Number(request.height);
-  if (Number.isFinite(Number(request.steps))) payload.steps = Number(request.steps);
-  if (Number.isFinite(Number(request.cfgScale))) payload.cfg_scale = Number(request.cfgScale);
-  if (Number.isFinite(Number(request.seed))) payload.seed = Number(request.seed);
-  if (request.samplerName) payload.sampler_name = request.samplerName;
-  if (request.scheduler) payload.scheduler = request.scheduler;
-  if (request.output) payload.output = request.output;
-  if (Number.isFinite(Number(request.syncTimeoutMs))) payload.sync_timeout_ms = Number(request.syncTimeoutMs);
-  if (isPlainObject(request.metadata)) payload.metadata = clonePayload(request.metadata);
-  return payload;
-}
-
-function jobPayload(job) {
-  const payload = clonePayload(job?.requestPayload || job?.request_payload || apiPayloadFromNormalizedRequest(job?.request));
-  if (!payload.prompt && job?.prompt) payload.prompt = job.prompt;
-  const negative = job?.negativePrompt || job?.negative_prompt;
-  if (!payload.negative_prompt && negative) payload.negative_prompt = negative;
-  if (!payload.model && job?.model) payload.model = job.model;
-  if (!payload.workflow_id && job?.workflowId) payload.workflow_id = job.workflowId;
-  if (!payload.width && Number.isFinite(Number(job?.width))) payload.width = Number(job.width);
-  if (!payload.height && Number.isFinite(Number(job?.height))) payload.height = Number(job.height);
-  if (!payload.steps && Number.isFinite(Number(job?.steps))) payload.steps = Number(job.steps);
-  if (!payload.cfg_scale && Number.isFinite(Number(job?.cfgScale))) payload.cfg_scale = Number(job.cfgScale);
-  if (Number.isFinite(Number(job?.seed))) payload.seed = Number(job.seed);
-  if (!payload.sampler_name && job?.samplerName) payload.sampler_name = job.samplerName;
-  if (!payload.scheduler && job?.scheduler) payload.scheduler = job.scheduler;
-  if (!payload.output && job?.output) payload.output = job.output;
-  return payload;
-}
-
-function favoritePayload(favorite) {
-  return clonePayload(favorite?.requestPayload || favorite?.request_payload || favorite?.payload || favorite?.request);
-}
-
-function defaultFavoriteTitleFromPayload(payload, fallback = 'Image favorite') {
-  const prompt = payloadString(payload, ['prompt', 'positive_prompt', 'positivePrompt']);
-  const compact = compactText(prompt, 90);
-  return compact || fallback;
-}
-
-function updateRequestPreview() {
-  const preview = $('#studio-request-preview');
-  if (!preview) return;
-  try {
-    preview.textContent = JSON.stringify(buildGenerationPayload(), null, 2);
-  } catch (error) {
-    preview.textContent = `Unable to build preview: ${error.message}`;
-  }
-}
-
-function applyWorkflowDefaults(force = false) {
-  const workflow = selectedWorkflow();
-  const defaults = workflow?.defaults || {};
-  const setIfEmpty = (id, value) => {
-    const element = $(`#${id}`);
-    if (!element || value === undefined || value === null) return;
-    if (force || String(element.value || '').trim() === '') element.value = String(value);
-  };
-  setIfEmpty('studio-width', defaults.width);
-  setIfEmpty('studio-height', defaults.height);
-  setIfEmpty('studio-steps', defaults.steps);
-  setIfEmpty('studio-cfg-scale', defaults.cfgScale);
-  setIfEmpty('studio-sampler', defaults.samplerName);
-  setIfEmpty('studio-scheduler', defaults.scheduler);
-  if (force && defaults.seed !== undefined) {
-    setControlValue('studio-seed', defaults.seed);
-    const randomSeed = $('#studio-random-seed');
-    if (randomSeed) randomSeed.checked = Number(defaults.seed) === -1;
-  }
-}
-
-function applyPayloadToControls(payload, options = {}) {
-  if (!isPlainObject(payload)) {
-    setFeedback('Favorite load failed: stored request payload is missing or invalid.', 'error');
-    return;
-  }
-  state.loadedPayloadBase = clonePayload(payload);
-  setControlValue('studio-prompt', payloadString(payload, ['prompt', 'positive_prompt', 'positivePrompt']));
-  setControlValue('studio-negative', payloadString(payload, ['negative_prompt', 'negativePrompt']));
-
-  const workflowId = payloadString(payload, ['workflow_id', 'workflowId', 'workflow']);
-  if (workflowId && $('#studio-workflow')) {
-    $('#studio-workflow').value = workflowId;
-  }
-
-  const model = payloadString(payload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']);
-  const modelFound = model ? selectModelIfAvailable(model) : true;
-  if (model && !modelFound && $('#studio-model')) {
-    const select = $('#studio-model');
-    const option = document.createElement('option');
-    option.value = model;
-    option.textContent = `${model} (missing locally)`;
-    option.dataset.missing = '1';
-    select.appendChild(option);
-    select.value = model;
-  }
-
-  const width = payloadNumber(payload, ['width']);
-  const height = payloadNumber(payload, ['height']);
-  const steps = payloadNumber(payload, ['steps']);
-  const cfgScale = payloadNumber(payload, ['cfg_scale', 'cfgScale', 'guidance_scale', 'guidanceScale']);
-  const syncTimeout = payloadNumber(payload, ['sync_timeout_ms', 'syncTimeoutMs']);
-  if (width !== null) setControlValue('studio-width', width);
-  if (height !== null) setControlValue('studio-height', height);
-  if (steps !== null) setControlValue('studio-steps', steps);
-  if (cfgScale !== null) setControlValue('studio-cfg-scale', cfgScale);
-  if (syncTimeout !== null) setControlValue('studio-sync-timeout', syncTimeout);
-
-  const seed = payloadSeed(payload);
-  if (seed !== null) {
-    setControlValue('studio-seed', seed);
-    const randomSeed = $('#studio-random-seed');
-    if (randomSeed) randomSeed.checked = Number(seed) === -1;
-  } else {
-    const randomSeed = $('#studio-random-seed');
-    if (randomSeed) randomSeed.checked = true;
-    setControlValue('studio-seed', '-1');
-  }
-
-  const sampler = payloadString(payload, ['sampler_name', 'samplerName', 'sampler']);
-  const scheduler = payloadString(payload, ['scheduler']);
-  const output = payloadString(payload, ['output']);
-  if (sampler) setControlValue('studio-sampler', sampler);
-  if (scheduler) setControlValue('studio-scheduler', scheduler);
-  if (output && $('#studio-output')) $('#studio-output').value = output;
-
-  updateRequestPreview();
-
-  if (model && !modelFound) {
-    setFeedback(`Loaded settings, but checkpoint "${model}" is not in the current local model list. Restore what you can or install/rescan that model.`, 'error');
-    return;
-  }
-  if (options.silent !== true) {
-    setFeedback(seed === null ? 'Loaded favorite settings. Seed was missing, so random seed is enabled.' : 'Loaded favorite settings. Click Generate when ready.', seed === null ? 'error' : 'ok');
-  }
-}
-
-function renderAuth() {
-  const input = $('#studio-api-key');
-  if (input) input.value = state.imageApiKey;
-  const auth = state.imageHealth?.auth;
-  const target = $('#studio-auth-status');
+function setStatus(message, ok = true) {
+  const target = $('#image-lab-status');
   if (!target) return;
-  if (!auth) {
-    target.textContent = state.imageApiKey ? 'Browser key saved; auth status loading.' : 'Checking auth...';
-    return;
-  }
-  if (!auth.enabled) {
-    target.innerHTML = '<span class="status-pill ok">No API key needed</span>';
-    return;
-  }
-  if (auth.configured_key_count === 0) {
-    target.innerHTML = '<span class="status-pill bad">Auth misconfigured</span>';
-    return;
-  }
-  target.innerHTML = state.imageApiKey
-    ? '<span class="status-pill ok">Browser key saved</span>'
-    : '<span class="status-pill warn">API key required</span>';
+  target.className = `feedback ${ok ? 'ok' : 'error'}`;
+  target.textContent = message || '';
 }
 
-function renderModelControls() {
-  const modelSelect = $('#studio-model');
-  const workflowSelect = $('#studio-workflow');
-  if (!modelSelect || !workflowSelect) return;
+function modelIdentifier(model) {
+  return model?.comfyName || model?.fileName || model?.relativePath || model?.id || '';
+}
 
-  const currentModel = modelSelect.value;
-  const models = checkpointModels();
-  if (!state.imageModels) {
-    modelSelect.innerHTML = '<option value="">Loading checkpoints...</option>';
-    modelSelect.disabled = true;
-  } else if (!models.length) {
-    modelSelect.innerHTML = '<option value="">No checkpoint models found</option>';
-    modelSelect.disabled = true;
-  } else {
-    modelSelect.disabled = false;
-    modelSelect.innerHTML = models.map((model) => {
-      const value = modelIdentifier(model);
-      const size = model.sizeBytes ? ` - ${(model.sizeBytes / 1024 / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 2 })} GiB` : '';
-      return `<option value="${escapeHtml(value)}">${escapeHtml(model.displayName || model.fileName || value)}${escapeHtml(size)}</option>`;
-    }).join('');
-    if (currentModel && models.some((model) => modelMatches(model, currentModel))) modelSelect.value = currentModel;
-    if (!modelSelect.value && models[0]) modelSelect.value = modelIdentifier(models[0]);
-  }
+function normalizeModel(value) {
+  return String(value || '').trim().replace(/\\/g, '/').toLowerCase();
+}
 
-  const currentWorkflow = workflowSelect.value;
+function modelMatches(model, value) {
+  const normalized = normalizeModel(value);
+  if (!normalized || !model) return false;
+  return [model.id, model.comfyName, model.fileName, model.relativePath, model.path, model.name, model.displayName]
+    .filter(Boolean)
+    .some((candidate) => normalizeModel(candidate) === normalized);
+}
+
+function checkpointModels() {
+  return (state.imageModels?.models || []).filter((model) => model.type === 'checkpoint');
+}
+
+function selectedModel() {
+  return $('#image-lab-model')?.value || '';
+}
+
+function defaultWorkflowId() {
+  return state.imageWorkflows?.default_workflow_id
+    || state.imageWorkflows?.defaultWorkflowId
+    || state.imageModels?.defaultWorkflowId
+    || state.imageModels?.default_workflow_id
+    || state.imageWorkflows?.workflows?.[0]?.id
+    || '';
+}
+
+function selectedWorkflowId() {
   const workflows = state.imageWorkflows?.workflows || [];
-  workflowSelect.innerHTML = workflows.length
-    ? workflows.map((workflow) => `<option value="${escapeHtml(workflow.id)}">${escapeHtml(workflow.name || workflow.id)}</option>`).join('')
-    : '<option value="sdxl-text-to-image">sdxl-text-to-image</option>';
-  if (currentWorkflow && workflows.some((workflow) => workflow.id === currentWorkflow)) {
-    workflowSelect.value = currentWorkflow;
-  } else if (state.imageWorkflows?.default_workflow_id) {
-    workflowSelect.value = state.imageWorkflows.default_workflow_id;
+  if (state.selectedWorkflowId && workflows.some((workflow) => workflow.id === state.selectedWorkflowId)) {
+    return state.selectedWorkflowId;
   }
+  const fallback = defaultWorkflowId();
+  state.selectedWorkflowId = fallback || null;
+  return fallback;
+}
+
+function selectedWorkflow() {
+  const id = selectedWorkflowId();
+  return (state.imageWorkflows?.workflows || []).find((workflow) => workflow.id === id) || state.imageWorkflows?.workflows?.[0] || null;
+}
+
+
+function renderModelOptions() {
+  const select = $('#image-lab-model');
+  if (!select) return;
+  const previous = select.value;
+  const checkpoints = checkpointModels();
+  const lastLoaded = checkpoints.find((model) => model.isLastConfirmedLoaded) || null;
+  const selected = checkpoints.some((model) => modelMatches(model, previous))
+    ? previous
+    : lastLoaded
+      ? modelIdentifier(lastLoaded)
+      : checkpoints[0]
+        ? modelIdentifier(checkpoints[0])
+        : '';
+  const placeholder = checkpoints.length > 0 ? 'Choose a checkpoint' : 'No checkpoint models found';
+  select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>` + checkpoints.map((model) => {
+    const labels = [];
+    if (model.isLastConfirmedLoaded) labels.push('last loaded/prewarmed');
+    if (model.loadedStatus === 'default_not_confirmed_loaded') labels.push('available');
+    const label = `${model.comfyName || model.fileName}${labels.length ? ` (${labels.join(', ')})` : ''}`;
+    return `<option value="${escapeHtml(modelIdentifier(model))}">${escapeHtml(label)}</option>`;
+  }).join('');
+  select.value = selected;
+}
+
+function applyWorkflowDefaults(overwrite = false) {
+  const workflow = selectedWorkflow();
+  if (!workflow) return;
+  const defaults = workflow.defaults || {};
+  const pairs = [
+    ['#image-lab-width', defaults.width],
+    ['#image-lab-height', defaults.height],
+    ['#image-lab-steps', defaults.steps],
+    ['#image-lab-cfg', defaults.cfgScale],
+    ['#image-lab-sampler', defaults.samplerName],
+    ['#image-lab-scheduler', defaults.scheduler]
+  ];
+  for (const [selector, value] of pairs) {
+    const input = $(selector);
+    if (!input || value === undefined || value === null) continue;
+    if (overwrite || input.value === '') input.value = value;
+  }
+}
+
+function renderControls() {
+  renderModelOptions();
   applyWorkflowDefaults(false);
-  renderModelStatus();
+  const slider = $('#image-lab-gallery-size');
+  const sliderValue = $('#image-lab-gallery-size-value');
+  if (slider) slider.value = String(state.galleryTileSize);
+  if (sliderValue) sliderValue.textContent = `${state.galleryTileSize}px`;
+  const generateButton = $('#image-lab-generate');
+  if (generateButton) {
+    generateButton.disabled = Boolean(state.isGenerating || state.prewarmingModel);
+    generateButton.textContent = state.isGenerating ? 'Generating...' : state.prewarmingModel ? 'Prewarming...' : 'Generate';
+  }
+  updatePayloadPreview();
 }
 
-function renderModelStatus() {
-  const target = $('#studio-model-status');
-  if (!target) return;
-  if (imageApiAuthRequiredWithoutKey()) {
-    target.textContent = 'Enter the dashboard API key to load checkpoint inventory.';
-    return;
+function buildGenerationPayload() {
+  const basePayload = isPlainObject(state.loadedFavoritePayloadBase) ? clonePayload(state.loadedFavoritePayloadBase) : {};
+  const baseMetadata = isPlainObject(basePayload.metadata) ? basePayload.metadata : {};
+  const workflow = selectedWorkflow();
+  const seedRaw = $('#image-lab-seed')?.value.trim() || '';
+  const parsedSeed = seedRaw === '' ? -1 : Number(seedRaw);
+  const payload = {
+    ...basePayload,
+    prompt: $('#image-lab-prompt')?.value.trim() || '',
+    negative_prompt: $('#image-lab-negative')?.value.trim() || '',
+    workflow_id: workflow?.id || basePayload.workflow_id || basePayload.workflowId || undefined,
+    model: selectedModel() || undefined,
+    width: Number($('#image-lab-width')?.value || 0) || undefined,
+    height: Number($('#image-lab-height')?.value || 0) || undefined,
+    steps: Number($('#image-lab-steps')?.value || 0) || undefined,
+    cfg_scale: Number($('#image-lab-cfg')?.value || 0),
+    seed: Number.isFinite(parsedSeed) ? parsedSeed : -1,
+    sampler_name: $('#image-lab-sampler')?.value.trim() || undefined,
+    scheduler: $('#image-lab-scheduler')?.value.trim() || undefined,
+    output: 'url',
+    sync_timeout_ms: Number($('#image-lab-sync-timeout')?.value || 0) || 1000,
+    metadata: { ...baseMetadata, source: 'image-generator-portal' }
+  };
+  for (const key of Object.keys(payload)) {
+    if (payload[key] === undefined || payload[key] === '') delete payload[key];
   }
-  if (!state.imageModels) {
-    target.textContent = state.imageError ? `Checkpoint list unavailable: ${state.imageError.message}` : 'Loading checkpoint list...';
-    return;
-  }
-  const models = checkpointModels();
-  const preload = state.imageModels?.preload || state.imageModels?.defaultStatus || state.imageHealth?.models?.preload;
-  const loaded = preload?.lastConfirmedLoadedModel || preload?.lastPreloadModel || null;
-  target.innerHTML = `${escapeHtml(models.length)} checkpoint model${models.length === 1 ? '' : 's'} available.${loaded ? ` Last confirmed loaded: <code>${escapeHtml(loaded)}</code>.` : ''}`;
+  return payload;
 }
 
-function favoriteIdentitySet() {
-  const identities = new Set();
-  for (const favorite of state.imageFavorites?.favorites || []) {
-    if (favorite.jobId) identities.add(`job:${favorite.jobId}`);
-    if (favorite.artifactId) identities.add(`artifact:${favorite.artifactId}`);
-    for (const artifact of favorite.artifacts || []) {
-      if (artifact?.id) identities.add(`artifact:${artifact.id}`);
-      if (artifact?.jobId) identities.add(`job:${artifact.jobId}`);
-    }
+function updatePayloadPreview() {
+  const preview = $('#image-lab-request-preview');
+  if (preview) preview.textContent = JSON.stringify(buildGenerationPayload(), null, 2);
+}
+
+function setInputValue(selector, value) {
+  const input = $(selector);
+  if (!input || value === null || value === undefined || value === '') return;
+  input.value = String(value);
+}
+
+function selectModelByPayload(model) {
+  if (!model) return true;
+  const select = $('#image-lab-model');
+  if (!select) return false;
+  const direct = [...select.options].find((option) => option.value === model);
+  if (direct) {
+    select.value = direct.value;
+    return true;
   }
-  return identities;
+  const matched = checkpointModels().find((candidate) => modelMatches(candidate, model));
+  if (matched) {
+    select.value = modelIdentifier(matched);
+    return true;
+  }
+  return false;
+}
+
+function selectedWorkflowMatches(_workflowId) {
+  return true;
+}
+
+function applyGenerationPayloadToControls(payload) {
+  const requestPayload = clonePayload(payload);
+  const warnings = [];
+  state.loadedFavoritePayloadBase = requestPayload;
+
+  const prompt = payloadString(requestPayload, ['prompt', 'positive_prompt', 'positivePrompt']);
+  const negative = payloadString(requestPayload, ['negative_prompt', 'negativePrompt']);
+  const promptInput = $('#image-lab-prompt');
+  const negativeInput = $('#image-lab-negative');
+  if (promptInput) promptInput.value = prompt;
+  if (negativeInput) negativeInput.value = negative;
+
+  const model = payloadString(requestPayload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']);
+  if (model && !selectModelByPayload(model)) warnings.push(`model ${model}`);
+
+  setInputValue('#image-lab-width', payloadNumber(requestPayload, ['width']));
+  setInputValue('#image-lab-height', payloadNumber(requestPayload, ['height']));
+  setInputValue('#image-lab-steps', payloadNumber(requestPayload, ['steps']));
+  setInputValue('#image-lab-cfg', payloadNumber(requestPayload, ['cfg_scale', 'cfgScale', 'guidance_scale', 'guidanceScale']));
+  setInputValue('#image-lab-sampler', payloadString(requestPayload, ['sampler_name', 'samplerName', 'sampler']));
+  setInputValue('#image-lab-scheduler', payloadString(requestPayload, ['scheduler']));
+  setInputValue('#image-lab-sync-timeout', payloadNumber(requestPayload, ['sync_timeout_ms', 'syncTimeoutMs']));
+
+  const seed = payloadSeed(requestPayload);
+  const seedInput = $('#image-lab-seed');
+  if (seed === null) {
+    warnings.push('seed missing; seed input left random');
+    if (seedInput) seedInput.value = '';
+  } else if (Number(seed) < 0) {
+    if (seedInput) seedInput.value = '';
+  } else if (seedInput) {
+    seedInput.value = String(seed);
+  }
+
+  updatePayloadPreview();
+  return warnings;
 }
 
 function jobArtifacts(job) {
@@ -534,262 +336,254 @@ function jobArtifacts(job) {
 }
 
 function firstArtifact(job) {
-  return jobArtifacts(job).find((artifact) => artifact?.url) || null;
+  return jobArtifacts(job).find((artifact) => artifact?.url) || jobArtifacts(job)[0] || null;
 }
 
-function firstArtifactUrl(job) {
+function firstImageUrl(job) {
   return job?.thumbnailUrl || firstArtifact(job)?.url || '';
 }
 
-function jobSavedAsFavorite(job, identities) {
-  if (!job) return false;
-  if (job.id && identities.has(`job:${job.id}`)) return true;
-  return jobArtifacts(job).some((artifact) => artifact?.id && identities.has(`artifact:${artifact.id}`));
+function jobPrompt(job) {
+  return job?.prompt || job?.request?.prompt || '';
 }
 
-function renderCompactMetaLine(values) {
-  const parts = values
-    .filter(([, value]) => value !== null && value !== undefined && value !== '')
-    .map(([key, value]) => `<span><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</span>`);
-  return parts.length ? `<p class="compact-meta-line">${parts.join('')}</p>` : '';
+function jobNegativePrompt(job) {
+  return job?.negativePrompt || job?.request?.negativePrompt || job?.request?.negative_prompt || '';
+}
+
+function jobRequestPayload(job) {
+  if (isPlainObject(job?.requestPayload)) return clonePayload(job.requestPayload);
+  if (isPlainObject(job?.request_payload)) return clonePayload(job.request_payload);
+  const request = isPlainObject(job?.request) ? job.request : {};
+  const payload = {
+    prompt: jobPrompt(job),
+    negative_prompt: jobNegativePrompt(job),
+    model: job?.model || request.model || undefined,
+    workflow_id: job?.workflowId || request.workflowId || request.workflow_id || undefined,
+    width: job?.width ?? request.width ?? undefined,
+    height: job?.height ?? request.height ?? undefined,
+    steps: job?.steps ?? request.steps ?? undefined,
+    cfg_scale: job?.cfgScale ?? request.cfgScale ?? request.cfg_scale ?? undefined,
+    seed: job?.seed ?? request.seed ?? undefined,
+    sampler_name: job?.samplerName || request.samplerName || request.sampler_name || undefined,
+    scheduler: job?.scheduler || request.scheduler || undefined,
+    output: job?.output || request.output || undefined,
+    sync_timeout_ms: request.syncTimeoutMs ?? request.sync_timeout_ms ?? undefined,
+    metadata: isPlainObject(request.metadata) ? request.metadata : undefined
+  };
+  for (const key of Object.keys(payload)) {
+    if (payload[key] === undefined || payload[key] === '') delete payload[key];
+  }
+  return payload;
+}
+
+function favoriteForJob(job) {
+  const artifact = firstArtifact(job);
+  const artifactId = artifact?.id ? String(artifact.id) : '';
+  const jobId = job?.id ? String(job.id) : '';
+  return (state.imageFavorites?.favorites || []).find((favorite) => {
+    return (artifactId && favorite.artifactId === artifactId) || (jobId && favorite.jobId === jobId);
+  }) || null;
+}
+
+function hydrateImages() {
+  for (const image of document.querySelectorAll('img[data-artifact-url]')) {
+    const url = image.dataset.artifactUrl;
+    if (!url || image.dataset.loaded === '1') continue;
+    if (thumbnailObjectUrls.has(url)) {
+      image.src = thumbnailObjectUrls.get(url);
+      image.hidden = false;
+      image.dataset.loaded = '1';
+      image.nextElementSibling?.remove();
+      continue;
+    }
+    fetch(url)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.blob();
+      })
+      .then((blob) => {
+        const objectUrl = URL.createObjectURL(blob);
+        thumbnailObjectUrls.set(url, objectUrl);
+        image.src = objectUrl;
+        const anchor = image.closest('a');
+        if (anchor) anchor.href = objectUrl;
+        image.hidden = false;
+        image.dataset.loaded = '1';
+        image.nextElementSibling?.remove();
+      })
+      .catch(() => {
+        image.hidden = true;
+        image.nextElementSibling?.replaceWith(Object.assign(document.createElement('div'), { className: 'thumb-placeholder', textContent: 'Image unavailable' }));
+      });
+  }
+}
+
+function renderLastResult() {
+  const target = $('#image-lab-last-result');
+  if (!target) return;
+  const result = state.lastResult;
+  if (!result) {
+    target.innerHTML = '<p class="muted">No image generated yet.</p>';
+    return;
+  }
+  const job = result.job || {};
+  const artifact = firstArtifact(job) || (result.artifacts || []).find((item) => item?.url) || null;
+  const imageUrl = artifact?.url || '';
+  const tone = job.status === 'succeeded' ? 'ok' : job.status === 'failed' ? 'bad' : 'warn';
+  target.innerHTML = `<div class="generation-result image-lab-result">
+    <p>${statusPill(job.status || 'submitted', tone)} Job <code>${escapeHtml(job.id || 'n/a')}</code></p>
+    ${imageUrl ? `<a href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="result-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Last generated image" loading="lazy" hidden><div class="thumb-placeholder">Loading result image...</div></a>` : '<div class="thumb-placeholder">No image artifact available</div>'}
+    <p class="compact-meta-line"><span><strong>Seed:</strong> ${escapeHtml(job.seed ?? job.request?.seed ?? 'n/a')}</span><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span></p>
+  </div>`;
+  hydrateImages();
+}
+
+function currentJobs() {
+  const jobs = state.imageJobs?.jobs || state.imageJobs?.items || [];
+  return [...jobs].sort((a, b) => {
+    const bDate = new Date(b.completedAt || b.updatedAt || b.createdAt || 0).getTime();
+    const aDate = new Date(a.completedAt || a.updatedAt || a.createdAt || 0).getTime();
+    return bDate - aDate;
+  });
 }
 
 function renderGallery() {
-  const gallery = $('#studio-gallery');
-  if (!gallery) return;
-  const jobs = (state.imageJobs?.jobs || state.imageJobs?.items || [])
-    .slice()
-    .sort((left, right) => String(right.completedAt || right.updatedAt || right.createdAt || '').localeCompare(String(left.completedAt || left.updatedAt || left.createdAt || '')))
-    .slice(0, MAX_GALLERY_JOBS);
-
-  if (imageApiAuthRequiredWithoutKey()) {
-    gallery.className = 'studio-gallery placeholder';
-    gallery.textContent = 'Enter the dashboard API key to load the gallery.';
-    setGalleryStatus('API key required');
-    return;
+  const target = $('#image-lab-gallery');
+  const count = $('#image-lab-gallery-count');
+  const loadMore = $('#image-lab-load-more');
+  if (!target) return;
+  document.documentElement.style.setProperty('--image-lab-gallery-size', `${state.galleryTileSize}px`);
+  const jobs = currentJobs();
+  if (count) {
+    const total = state.imageJobs?.totalItems;
+    count.textContent = total === undefined ? `${jobs.length} shown` : `${jobs.length} of ${total} shown`;
   }
-
+  if (loadMore) {
+    const hasNext = Boolean(state.imageJobs?.hasNextPage) && state.galleryLimit < MAX_GALLERY_LIMIT;
+    loadMore.disabled = !hasNext;
+    loadMore.hidden = jobs.length === 0;
+  }
   if (!state.imageJobs) {
-    gallery.className = 'studio-gallery placeholder';
-    gallery.textContent = state.imageError ? `Gallery failed to load: ${state.imageError.message}` : 'Loading generated images...';
-    setGalleryStatus('Loading history...');
+    target.innerHTML = '<p class="muted">Loading recent image jobs...</p>';
     return;
   }
-
-  if (!jobs.length) {
-    state.renderedJobs = [];
-    gallery.className = 'studio-gallery placeholder';
-    gallery.textContent = 'No generated images yet. Submit a generation to start the gallery.';
-    setGalleryStatus('0 images');
+  if (jobs.length === 0) {
+    target.innerHTML = '<p class="muted">No generated images found yet. Submit a generation to start the gallery.</p>';
     return;
   }
-
-  state.renderedJobs = jobs;
-  gallery.className = 'studio-gallery';
-  gallery.style.setProperty('--studio-tile-size', `${state.gallerySize}px`);
-  const identities = favoriteIdentitySet();
-  gallery.innerHTML = jobs.map((job, index) => renderGalleryCard(job, index, identities)).join('');
-  setGalleryStatus(`${jobs.length} newest image job${jobs.length === 1 ? '' : 's'} shown`);
-  hydrateImages(gallery);
+  target.classList.remove('placeholder');
+  target.innerHTML = jobs.map(renderGalleryCard).join('');
+  hydrateImages();
 }
 
-function renderGalleryCard(job, index, identities) {
-  const payload = jobPayload(job);
+function renderGalleryCard(job, index) {
   const artifact = firstArtifact(job);
-  const imageUrl = firstArtifactUrl(job);
-  const prompt = payloadString(payload, ['prompt', 'positive_prompt', 'positivePrompt']) || job?.prompt || '';
-  const negative = payloadString(payload, ['negative_prompt', 'negativePrompt']) || job?.negativePrompt || '';
-  const model = payloadString(payload, ['model']) || job?.model || 'model n/a';
-  const seed = payloadSeed(payload) ?? job?.seed ?? 'n/a';
-  const dimensions = `${payloadNumber(payload, ['width']) ?? job?.width ?? 'n/a'} x ${payloadNumber(payload, ['height']) ?? job?.height ?? 'n/a'}`;
-  const status = job?.status || 'unknown';
-  const statusTone = status === 'succeeded' ? 'ok' : status === 'failed' ? 'bad' : 'warn';
-  const saved = jobSavedAsFavorite(job, identities);
+  const imageUrl = firstImageUrl(job);
+  const prompt = jobPrompt(job);
+  const negative = jobNegativePrompt(job);
+  const payload = jobRequestPayload(job);
+  const favorite = favoriteForJob(job);
   const jobId = job?.id || `job-${index + 1}`;
-  const detailJson = {
-    requestPayload: payload,
-    request: job?.request || null,
-    metadata: job?.metadata || null,
-    artifacts: jobArtifacts(job),
-    timings: job?.timings || {
-      queueWaitMs: job?.queueWaitMs ?? null,
-      executionMs: job?.executionMs ?? null,
-      totalMs: job?.totalMs ?? null,
-      secondsPerStep: job?.secondsPerStep ?? null,
-      stepsPerSecond: job?.stepsPerSecond ?? null
-    },
-    job
-  };
-  return `<article class="studio-gallery-card" data-job-index="${escapeHtml(index)}" data-job-id="${escapeHtml(jobId)}">
-    <div class="studio-card-image-frame">
-      ${imageUrl ? `<a href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="studio-card-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Generated image: ${escapeHtml(compactText(prompt, 120))}" loading="lazy" hidden><div class="thumb-placeholder">Loading image...</div></a>` : '<div class="thumb-placeholder">No image artifact recorded</div>'}
+  const tone = job.status === 'succeeded' ? 'ok' : job.status === 'failed' ? 'bad' : 'warn';
+  const dimensions = `${job.width ?? job.request?.width ?? payload.width ?? 'n/a'} x ${job.height ?? job.request?.height ?? payload.height ?? 'n/a'}`;
+  const seed = job.seed ?? job.request?.seed ?? payload.seed ?? 'n/a';
+  const model = job.model || payload.model || 'model n/a';
+  const requestDetails = { requestPayload: payload, request: job.request || {}, metadata: job.metadata || {}, artifacts: jobArtifacts(job) };
+  return `<article class="image-lab-gallery-card" data-job-index="${escapeHtml(index)}" data-job-id="${escapeHtml(jobId)}">
+    <div class="image-lab-image-frame">
+      ${imageUrl ? `<a class="gallery-image-link" href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="gallery-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Generated image: ${escapeHtml(previewText(prompt, 90) || jobId)}" loading="lazy" hidden><div class="thumb-placeholder">Loading image...</div></a>` : '<div class="thumb-placeholder">No image artifact available</div>'}
     </div>
-    <div class="studio-card-actions">
-      <button type="button" class="secondary" data-gallery-action="load-settings" data-job-index="${escapeHtml(index)}">Reuse Settings</button>
-      <button type="button" class="secondary" data-gallery-action="save-favorite" data-job-index="${escapeHtml(index)}" ${saved ? 'disabled' : ''}>${saved ? 'Saved Favorite' : 'Save Favorite'}</button>
-    </div>
-    <details class="studio-card-details">
+    <details class="image-lab-card-details">
       <summary>
-        <span>${statusPill(status, statusTone)}</span>
-        <strong>${escapeHtml(compactText(prompt, 96) || jobId)}</strong>
-        ${renderCompactMetaLine([
-          ['Model', compactText(model, 42)],
-          ['Size', dimensions],
-          ['Seed', seed],
-          ['Done', formatDate(job?.completedAt || job?.updatedAt || job?.createdAt)]
-        ])}
+        <span class="image-lab-caption-title">${escapeHtml(previewText(prompt, 100) || jobId)}</span>
+        <span class="image-lab-caption-meta"><code>${escapeHtml(model)}</code> - ${escapeHtml(dimensions)} - seed ${escapeHtml(seed)} - ${escapeHtml(formatDate(job.completedAt || job.updatedAt || job.createdAt))}</span>
       </summary>
-      <div class="studio-card-expanded">
-        <h3>Generation details</h3>
-        <dl class="kv">
-          <dt>Job</dt><dd><code>${escapeHtml(jobId)}</code></dd>
-          <dt>Model</dt><dd><code>${escapeHtml(model)}</code></dd>
-          <dt>Workflow</dt><dd><code>${escapeHtml(payloadString(payload, ['workflow_id', 'workflowId']) || job?.workflowId || 'n/a')}</code></dd>
-          <dt>Dimensions</dt><dd>${escapeHtml(dimensions)}</dd>
-          <dt>Steps</dt><dd>${escapeHtml(payloadNumber(payload, ['steps']) ?? job?.steps ?? 'n/a')}</dd>
-          <dt>CFG scale</dt><dd>${escapeHtml(payloadNumber(payload, ['cfg_scale', 'cfgScale']) ?? job?.cfgScale ?? 'n/a')}</dd>
-          <dt>Sampler</dt><dd>${escapeHtml(payloadString(payload, ['sampler_name', 'samplerName', 'sampler']) || job?.samplerName || 'n/a')}</dd>
-          <dt>Scheduler</dt><dd>${escapeHtml(payloadString(payload, ['scheduler']) || job?.scheduler || 'n/a')}</dd>
-          <dt>Seed</dt><dd>${escapeHtml(seed)}</dd>
-          <dt>Total time</dt><dd>${escapeHtml(formatDurationMs(job?.totalMs ?? job?.timings?.totalMs))}</dd>
-          <dt>Artifact</dt><dd>${artifact?.id ? `<code>${escapeHtml(artifact.id)}</code>` : '<span class="muted">n/a</span>'}</dd>
-        </dl>
-        <h3>Positive prompt</h3>
-        <p class="prompt-text bounded-prompt">${prompt ? escapeHtml(prompt) : '<span class="muted">No prompt recorded</span>'}</p>
-        <h3>Negative prompt</h3>
-        <p class="prompt-text bounded-prompt">${negative ? escapeHtml(negative) : '<span class="muted">No negative prompt recorded</span>'}</p>
-        ${job?.error ? `<p class="danger-text">${escapeHtml(job.error.code || 'GENERATION_ERROR')}: ${escapeHtml(job.error.message || 'Generation failed')}</p>` : ''}
-        <h3>Full request payload and job metadata</h3>
-        <pre><code>${escapeHtml(JSON.stringify(detailJson, null, 2))}</code></pre>
+      <div class="image-lab-card-detail-body">
+        <div class="button-row image-lab-card-actions">
+          <button type="button" class="secondary" data-gallery-action="load-settings" data-job-index="${escapeHtml(index)}">Load settings</button>
+          <button type="button" class="secondary" data-gallery-action="copy-payload" data-job-index="${escapeHtml(index)}">Copy payload</button>
+          <button type="button" class="secondary" data-gallery-action="save-favorite" data-job-index="${escapeHtml(index)}" ${favorite ? 'disabled' : ''}>${favorite ? 'Saved favorite' : 'Save Favorite'}</button>
+        </div>
+        <div class="compact-meta job-meta">
+          <p class="compact-meta-line"><span><strong>Status:</strong> ${statusPill(job.status || 'unknown', tone)}</span><span><strong>Workflow:</strong> ${escapeHtml(job.workflowId || payload.workflow_id || 'n/a')}</span><span><strong>Provider:</strong> ${escapeHtml(job.provider || 'n/a')}</span></p>
+          <p class="compact-meta-line"><span><strong>Steps:</strong> ${escapeHtml(job.steps ?? payload.steps ?? 'n/a')}</span><span><strong>CFG:</strong> ${escapeHtml(job.cfgScale ?? payload.cfg_scale ?? 'n/a')}</span><span><strong>Sampler:</strong> ${escapeHtml(job.samplerName ?? payload.sampler_name ?? 'n/a')}</span><span><strong>Scheduler:</strong> ${escapeHtml(job.scheduler ?? payload.scheduler ?? 'n/a')}</span></p>
+          <p class="compact-meta-line"><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span><span><strong>Execution:</strong> ${escapeHtml(formatDurationMs(job.executionMs ?? job.timings?.executionMs))}</span><span><strong>Artifact:</strong> ${escapeHtml(artifact?.id || 'n/a')}</span></p>
+        </div>
+        <div class="job-prompt-grid">
+          ${renderPromptBlock('Positive prompt', prompt, 'No prompt recorded')}
+          ${renderPromptBlock('Negative prompt', negative, 'No negative prompt recorded')}
+        </div>
+        ${job.error ? `<p class="danger-text">${escapeHtml(job.error.code)}: ${escapeHtml(job.error.message)}</p>` : ''}
+        <h3>Full request payload</h3>
+        <pre><code>${escapeHtml(JSON.stringify(payload, null, 2))}</code></pre>
+        <h3>Job, artifact, and provider metadata</h3>
+        <pre><code>${escapeHtml(JSON.stringify(requestDetails, null, 2))}</code></pre>
       </div>
     </details>
   </article>`;
 }
 
-function renderFavorites() {
-  const target = $('#studio-favorites');
-  if (!target) return;
-  if (imageApiAuthRequiredWithoutKey()) {
-    target.className = 'studio-favorite-strip placeholder';
-    target.textContent = 'Enter the dashboard API key to load favorites.';
-    return;
-  }
-  if (!state.imageFavorites) {
-    target.className = 'studio-favorite-strip placeholder';
-    target.textContent = state.imageError ? `Favorites failed to load: ${state.imageError.message}` : 'Loading favorites...';
-    return;
-  }
-  const favorites = state.imageFavorites.favorites || [];
-  if (!favorites.length) {
-    target.className = 'studio-favorite-strip placeholder';
-    target.textContent = 'No saved image favorites yet. Save one from a generated gallery card.';
-    return;
-  }
-  target.className = 'studio-favorite-strip';
-  target.innerHTML = favorites.map((favorite) => renderFavoriteCard(favorite)).join('');
-  hydrateImages(target);
+function renderPromptBlock(label, text, emptyText) {
+  return `<div class="prompt-block">
+    <p class="prompt-label">${escapeHtml(label)}</p>
+    <div class="prompt-text bounded-prompt">${text ? escapeHtml(text) : `<span class="muted">${escapeHtml(emptyText)}</span>`}</div>
+  </div>`;
 }
 
-function renderFavoriteCard(favorite) {
-  const imageUrl = favorite.imageUrl || favorite.artifactUrl || favorite.artifact?.url || favorite.artifacts?.find((artifact) => artifact?.url)?.url || '';
-  const title = favorite.title || favorite.promptPreview || 'Image favorite';
-  const model = favorite.model || 'model n/a';
-  const seed = favorite.seed ?? 'seed n/a';
-  return `<article class="studio-favorite-card" data-favorite-id="${escapeHtml(favorite.id)}">
-    <div class="studio-favorite-thumb">
-      ${imageUrl ? `<img data-artifact-url="${escapeHtml(imageUrl)}" alt="Favorite image: ${escapeHtml(compactText(title, 90))}" loading="lazy" hidden><div class="thumb-placeholder small">Loading...</div>` : '<div class="thumb-placeholder small">No image</div>'}
-    </div>
-    <div class="studio-favorite-body">
-      <h3>${escapeHtml(compactText(title, 68))}</h3>
-      <p class="muted">${escapeHtml(compactText(model, 44))} | seed ${escapeHtml(seed)}</p>
-      <div class="favorite-actions">
-        <button type="button" class="secondary" data-favorite-action="load" data-favorite-id="${escapeHtml(favorite.id)}">Load</button>
-        <button type="button" class="secondary danger" data-favorite-action="delete" data-favorite-id="${escapeHtml(favorite.id)}">Delete</button>
+function renderFavorites() {
+  const target = $('#image-lab-favorites');
+  if (!target) return;
+  const favorites = state.imageFavorites?.favorites || [];
+  if (!state.imageFavorites) {
+    target.innerHTML = '<p class="muted">Loading saved image favorites...</p>';
+    return;
+  }
+  if (favorites.length === 0) {
+    target.innerHTML = '<p class="muted">No image favorites yet. Save a generated gallery item to pin it here.</p>';
+    return;
+  }
+  target.classList.remove('placeholder');
+  target.innerHTML = favorites.map((favorite) => {
+    const imageUrl = favorite.imageUrl || favorite.artifact?.url || '';
+    const caption = favorite.title || favorite.promptPreview || favorite.jobId || 'Image favorite';
+    return `<article class="image-lab-favorite-card" data-favorite-id="${escapeHtml(favorite.id)}">
+      <button type="button" class="image-lab-favorite-thumb" data-favorite-action="load" aria-label="Load favorite ${escapeHtml(caption)}">
+        ${imageUrl ? `<img data-artifact-url="${escapeHtml(imageUrl)}" alt="Favorite image: ${escapeHtml(previewText(caption, 80))}" loading="lazy" hidden><div class="thumb-placeholder">Loading favorite...</div>` : '<div class="thumb-placeholder">No image</div>'}
+      </button>
+      <div class="image-lab-favorite-body">
+        <strong>${escapeHtml(previewText(caption, 72))}</strong>
+        <span class="hint"><code>${escapeHtml(favorite.model || 'model n/a')}</code> - seed ${escapeHtml(favorite.seed ?? 'n/a')}</span>
+        <div class="button-row favorite-actions">
+          <button type="button" data-favorite-action="load">Load</button>
+          <button type="button" class="secondary danger" data-favorite-action="delete">Delete</button>
+        </div>
       </div>
-    </div>
-  </article>`;
+    </article>`;
+  }).join('');
+  hydrateImages();
 }
 
 function renderAll() {
-  renderAuth();
-  renderModelControls();
+  renderControls();
   renderFavorites();
   renderGallery();
-  updateRequestPreview();
+  renderLastResult();
 }
 
-function hydrateImages(root = document) {
-  for (const image of root.querySelectorAll('img[data-artifact-url]')) {
-    if (image.dataset.loaded === '1' || observedImages.has(image)) continue;
-    observedImages.add(image);
-    if (thumbnailObserver) thumbnailObserver.observe(image);
-    else hydrateOneImage(image);
-  }
-}
-
-function hydrateOneImage(image) {
-  const url = image.dataset.artifactUrl;
-  if (!url || image.dataset.loaded === '1') return;
-  if (thumbnailObjectUrls.has(url)) {
-    image.src = thumbnailObjectUrls.get(url);
-    image.hidden = false;
-    image.dataset.loaded = '1';
-    image.nextElementSibling?.remove();
-    return;
-  }
-  const headers = {};
-  if (url.startsWith('/api/v1') && state.imageApiKey) {
-    headers.authorization = `Bearer ${state.imageApiKey}`;
-  }
-  fetch(url, { headers })
-    .then((response) => {
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.blob();
-    })
-    .then((blob) => {
-      const objectUrl = URL.createObjectURL(blob);
-      thumbnailObjectUrls.set(url, objectUrl);
-      image.src = objectUrl;
-      const anchor = image.closest('a');
-      if (anchor) anchor.href = objectUrl;
-      image.hidden = false;
-      image.dataset.loaded = '1';
-      image.nextElementSibling?.remove();
-    })
-    .catch(() => {
-      image.hidden = true;
-      const placeholder = Object.assign(document.createElement('div'), { className: 'thumb-placeholder', textContent: 'Image unavailable' });
-      image.nextElementSibling?.replaceWith(placeholder);
-    });
-}
-
-async function refreshData(options = {}) {
-  if (!options.quiet) setFeedback('Refreshing image-generator data...', '');
+async function refreshAll(message = '') {
   state.imageError = null;
-  try {
-    const health = await fetchJson('/health');
-    state.imageHealth = health;
-  } catch (error) {
+  const publicHealth = await fetchJson('/health').catch((error) => {
     state.imageError = error;
-    setFeedback(`Health check failed: ${error.message}`, 'error');
-  }
-
-  renderAuth();
-  if (imageApiAuthRequiredWithoutKey()) {
-    state.imageModels = null;
-    state.imageWorkflows = null;
-    state.imageJobs = null;
-    state.imageFavorites = null;
-    state.imageError = new Error('Dashboard API key required for protected /api/v1 calls.');
-    renderAll();
-    return;
-  }
+    return null;
+  });
+  if (publicHealth) state.imageHealth = publicHealth;
 
   const [models, workflows, jobs, favorites] = await Promise.allSettled([
     fetchJson('/api/v1/models'),
     fetchJson('/api/v1/workflows'),
-    fetchJson(`/api/v1/jobs?page=1&pageSize=${MAX_GALLERY_JOBS}`),
-    fetchJson('/api/v1/image-favorites?limit=80')
+    loadGalleryData(),
+    fetchJson('/api/v1/image-favorites?limit=50')
   ]);
 
   if (models.status === 'fulfilled') state.imageModels = models.value;
@@ -797,278 +591,269 @@ async function refreshData(options = {}) {
   if (jobs.status === 'fulfilled') state.imageJobs = jobs.value;
   if (favorites.status === 'fulfilled') state.imageFavorites = favorites.value;
 
-  const failed = [models, workflows, jobs, favorites].find((result) => result.status === 'rejected');
-  if (failed) {
-    state.imageError = failed.reason;
-    setFeedback(`Some generator data failed to load: ${failed.reason.message}`, 'error');
-  } else if (!options.quiet) {
-    setFeedback('Image-generator data refreshed.', 'ok');
+  const rejected = [models, workflows, jobs, favorites].find((result) => result.status === 'rejected');
+  if (rejected) {
+    state.imageError = rejected.reason;
+    setStatus(rejected.reason?.message || 'Unable to refresh image generator data.', false);
+  } else if (message) {
+    setStatus(message);
   }
   renderAll();
 }
 
-async function prewarmSelectedModel(options = {}) {
-  const model = selectedModelValue();
+async function loadGalleryData() {
+  const params = new URLSearchParams({ page: '1', pageSize: String(Math.min(state.galleryLimit, MAX_GALLERY_LIMIT)) });
+  return fetchJson(`/api/v1/jobs?${params.toString()}`);
+}
+
+async function refreshGalleryOnly(message = '') {
+  state.imageJobs = await loadGalleryData();
+  renderGallery();
+  if (message) setStatus(message);
+}
+
+async function refreshFavoritesOnly(message = '') {
+  state.imageFavorites = await fetchJson('/api/v1/image-favorites?limit=50');
+  renderFavorites();
+  renderGallery();
+  if (message) setStatus(message);
+}
+
+async function refreshModelsOnly(message = '') {
+  state.imageModels = await fetchJson('/api/v1/models/refresh', { method: 'POST' });
+  renderControls();
+  if (message) setStatus(message);
+}
+
+async function prewarmSelectedModel() {
+  const model = selectedModel();
   if (!model) {
-    setFeedback('Choose an installed checkpoint before prewarming.', 'error');
+    setStatus('Choose a checkpoint before prewarming.', false);
     return false;
   }
-  if (checkpointModels().length && !checkpointModels().some((candidate) => modelMatches(candidate, model))) {
-    setFeedback(`Checkpoint "${model}" is not available locally, so it cannot be prewarmed.`, 'error');
-    return false;
-  }
-  state.prewarming = true;
-  const button = $('#studio-prewarm');
-  if (button) button.disabled = true;
-  renderModelStatus();
+  state.prewarmingModel = model;
+  renderControls();
+  setStatus(`Prewarming ${model} for this generation workflow...`);
   try {
-    setFeedback(`Loading checkpoint "${model}" for this session...`, '');
-    const result = await fetchJson('/api/v1/models/preload', {
-      method: 'POST',
-      body: JSON.stringify({ model })
-    });
-    if (result.inventory) state.imageModels = result.inventory;
-    setFeedback(`Checkpoint "${model}" loaded/prewarmed. This did not change the global default model.`, 'ok');
-    renderModelControls();
+    await fetchJson('/api/v1/models/preload', { method: 'POST', body: JSON.stringify({ model }) });
+    await refreshModelsOnly(`Prewarmed ${model} for this portal.`);
     return true;
   } catch (error) {
-    setFeedback(`Checkpoint prewarm failed: ${error.message}`, 'error');
+    setStatus(`Prewarm failed: ${error.message}`, false);
     return false;
   } finally {
-    state.prewarming = false;
-    if (button) button.disabled = false;
+    state.prewarmingModel = null;
+    renderControls();
   }
 }
 
-async function submitGeneration(event) {
-  event?.preventDefault();
-  if (state.generating) return;
+async function handleGenerate(event) {
+  event.preventDefault();
+  if (state.isGenerating || state.prewarmingModel) return;
   const payload = buildGenerationPayload();
-  if (!payload.prompt) {
-    setFeedback('Enter a positive prompt before generating.', 'error');
-    return;
-  }
   if (!payload.model) {
-    setFeedback('Choose a checkpoint/model before generating.', 'error');
+    setStatus('Choose a checkpoint before generating.', false);
     return;
   }
-  state.generating = true;
-  const generateButton = $('#studio-generate');
-  if (generateButton) generateButton.disabled = true;
+  if (!payload.prompt) {
+    setStatus('Positive prompt is required.', false);
+    return;
+  }
+  state.isGenerating = true;
+  renderControls();
+  setStatus('Submitting generation request...');
   try {
-    setFeedback('Submitting generation request...', '');
-    const result = await fetchPossiblyJson('/api/v1/generate', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
-    if (result.binary) {
-      setFeedback('Generation returned binary image data. Refreshing gallery from persisted job history.', 'ok');
-      await refreshData({ quiet: true });
+    let result = await fetchJson('/api/v1/generate', { method: 'POST', body: JSON.stringify(payload) });
+    if (result.job?.id && ['queued', 'running'].includes(result.job.status)) {
+      state.activeJobId = result.job.id;
+      result = await pollGenerationResult(result.job.id);
+    }
+    state.lastResult = result;
+    const job = result.job || null;
+    if (job?.status && job.status !== 'succeeded') {
+      throw new Error(job.error?.message || `Generation finished with status ${job.status}.`);
+    }
+    if (job) addJobToTop(job);
+    renderLastResult();
+    await refreshGalleryOnly();
+    await refreshModelsOnly();
+    const seed = job?.seed ?? job?.request?.seed ?? 'n/a';
+    if (seed !== 'n/a' && seed !== null && seed !== undefined && Number(seed) >= 0) {
+      const seedInput = $('#image-lab-seed');
+      if (seedInput) seedInput.value = String(seed);
+      updatePayloadPreview();
+    }
+    setStatus(`Generation complete. Actual seed: ${seed}.`);
+  } catch (error) {
+    setStatus(`Generation failed: ${error.message}`, false);
+    const target = $('#image-lab-last-result');
+    if (target) target.innerHTML = `<p class="danger-text">${escapeHtml(error.message)}</p>`;
+  } finally {
+    state.isGenerating = false;
+    renderControls();
+  }
+}
+
+async function pollGenerationResult(jobId) {
+  let last = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await sleep(1500);
+    const result = await fetchJson(`/api/v1/jobs/${encodeURIComponent(jobId)}/result?format=url`);
+    last = result;
+    const status = result.job?.status;
+    if (status !== 'queued' && status !== 'running') return result;
+    setStatus(`Generation ${status}; polling job ${jobId}...`);
+  }
+  return last || fetchJson(`/api/v1/jobs/${encodeURIComponent(jobId)}/result?format=url`);
+}
+
+function addJobToTop(job) {
+  if (!job) return;
+  const current = state.imageJobs?.jobs || state.imageJobs?.items || [];
+  const deduped = current.filter((item) => item.id !== job.id);
+  const nextJobs = [job, ...deduped].slice(0, state.galleryLimit);
+  state.imageJobs = {
+    ...(state.imageJobs || {}),
+    ok: true,
+    jobs: nextJobs,
+    items: nextJobs,
+    totalItems: Math.max(Number(state.imageJobs?.totalItems || 0), nextJobs.length),
+    page: 1,
+    pageSize: state.galleryLimit
+  };
+  renderGallery();
+}
+
+function defaultFavoriteTitle(job) {
+  return previewText(jobPrompt(job), 90) || `Image job ${job?.id || 'favorite'}`;
+}
+
+async function saveFavoriteFromJob(job) {
+  const artifact = firstArtifact(job);
+  const payload = jobRequestPayload(job);
+  if (!isPlainObject(payload) || !payload.prompt) {
+    setStatus('This job does not have a usable prompt payload to save.', false);
+    return;
+  }
+  const title = window.prompt('Save image favorite as:', defaultFavoriteTitle(job));
+  if (title === null) {
+    setStatus('Save favorite canceled.', false);
+    return;
+  }
+  const body = {
+    title: title.trim() || defaultFavoriteTitle(job),
+    request_payload: payload,
+    image_url: artifact?.url || firstImageUrl(job) || undefined,
+    artifact_id: artifact?.id || undefined,
+    job_id: job?.id || undefined,
+    artifact: artifact || undefined,
+    job
+  };
+  await fetchJson('/api/v1/image-favorites', { method: 'POST', body: JSON.stringify(body) });
+  await refreshFavoritesOnly('Saved image favorite with artifact reference and full request payload.');
+}
+
+function findGalleryJob(button) {
+  const jobs = currentJobs();
+  const index = Number(button.dataset.jobIndex);
+  if (Number.isInteger(index) && jobs[index]) return jobs[index];
+  const card = button.closest('[data-job-id]');
+  const jobId = card?.dataset.jobId;
+  return jobs.find((job) => String(job.id || '') === jobId) || null;
+}
+
+async function handleGalleryClick(event) {
+  const button = event.target.closest('[data-gallery-action]');
+  if (!button || button.disabled) return;
+  const job = findGalleryJob(button);
+  if (!job) {
+    setStatus('Unable to find that gallery job in the current list.', false);
+    return;
+  }
+  const action = button.dataset.galleryAction;
+  try {
+    if (action === 'save-favorite') {
+      await saveFavoriteFromJob(job);
       return;
     }
-    const job = result.job;
-    if (job?.id) state.activeJobId = job.id;
-    if (job?.status === 'queued' || job?.status === 'running') {
-      await pollJobUntilDone(job.id, result.status_url);
+    if (action === 'load-settings') {
+      const warnings = applyGenerationPayloadToControls(jobRequestPayload(job));
+      const warningText = warnings.length ? ` Some fields need attention: ${warnings.join(', ')}.` : '';
+      setStatus(`Loaded job settings into the controls.${warningText}`, warnings.length === 0);
+      return;
     }
-    await refreshData({ quiet: true });
-    const refreshedJob = findJobById(job?.id) || job;
-    const seed = refreshedJob?.seed ?? refreshedJob?.request?.seed;
-    setFeedback(`Generation ${refreshedJob?.status || 'completed'}${seed !== undefined ? ` with seed ${seed}` : ''}. Added newest result to the gallery.`, refreshedJob?.status === 'failed' ? 'error' : 'ok');
+    if (action === 'copy-payload') {
+      await navigator.clipboard.writeText(JSON.stringify(jobRequestPayload(job), null, 2));
+      setStatus('Copied full request payload to clipboard.');
+    }
   } catch (error) {
-    setFeedback(`Generation failed: ${error.message}`, 'error');
-  } finally {
-    state.generating = false;
-    state.activeJobId = null;
-    if (generateButton) generateButton.disabled = false;
-    renderAll();
+    setStatus(error.message, false);
   }
 }
 
-async function pollJobUntilDone(jobId, statusUrl) {
-  if (!jobId) return null;
-  const url = statusUrl || `/api/v1/jobs/${encodeURIComponent(jobId)}`;
-  for (let attempt = 0; attempt < 180; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, attempt < 10 ? 700 : 1500));
-    const status = await fetchJson(url);
-    const job = status.job || status;
-    const label = job.status || 'running';
-    setFeedback(`Generation job ${jobId} is ${label}...`, '');
-    if (!['queued', 'running'].includes(label)) return job;
-  }
-  setFeedback(`Generation job ${jobId} is still running. Use Refresh gallery to check again.`, '');
-  return null;
+function favoriteById(id) {
+  return (state.imageFavorites?.favorites || []).find((favorite) => String(favorite.id || '') === id) || null;
 }
 
-function findJobById(jobId) {
-  if (!jobId) return null;
-  return (state.imageJobs?.jobs || state.imageJobs?.items || []).find((job) => job.id === jobId) || null;
-}
-
-async function saveGalleryFavorite(index) {
-  const jobs = state.renderedJobs || (state.imageJobs?.jobs || state.imageJobs?.items || []);
-  const job = jobs[Number(index)];
-  if (!job) {
-    setFeedback('Favorite save failed: gallery job was not found.', 'error');
-    return;
-  }
-  const payload = jobPayload(job);
-  const artifacts = jobArtifacts(job);
-  const artifact = firstArtifact(job) || artifacts[0] || null;
-  const body = {
-    title: defaultFavoriteTitleFromPayload(payload),
-    request_payload: payload,
-    artifact_id: artifact?.id,
-    artifact_url: artifact?.url,
-    image_url: artifact?.url,
-    artifact,
-    artifacts,
-    job_id: job.id,
-    job,
-    metadata: isPlainObject(job.metadata) ? job.metadata : {}
-  };
+async function handleFavoriteClick(event) {
+  const button = event.target.closest('[data-favorite-action]');
+  if (!button || button.disabled) return;
+  const card = button.closest('[data-favorite-id]');
+  const favoriteId = card?.dataset.favoriteId;
+  if (!favoriteId) return;
+  const summary = favoriteById(favoriteId);
+  const action = button.dataset.favoriteAction;
   try {
-    setFeedback('Saving image favorite...', '');
-    await fetchJson('/api/v1/image-favorites', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
-    await loadFavorites();
-    renderFavorites();
-    renderGallery();
-    setFeedback('Image favorite saved with full request payload and artifact reference.', 'ok');
-  } catch (error) {
-    setFeedback(`Favorite save failed: ${error.message}`, 'error');
-  }
-}
-
-function reuseGallerySettings(index) {
-  const jobs = state.renderedJobs || (state.imageJobs?.jobs || state.imageJobs?.items || []);
-  const job = jobs[Number(index)];
-  if (!job) {
-    setFeedback('Unable to load settings: gallery job was not found.', 'error');
-    return;
-  }
-  applyPayloadToControls(jobPayload(job));
-}
-
-async function loadFavorites() {
-  state.imageFavorites = await fetchJson('/api/v1/image-favorites?limit=80');
-}
-
-async function loadFavorite(favoriteId) {
-  try {
-    setFeedback('Loading favorite settings...', '');
-    const result = await fetchJson(`/api/v1/image-favorites/${encodeURIComponent(favoriteId)}`);
-    const favorite = result.favorite;
-    const payload = favoritePayload(favorite);
-    applyPayloadToControls(payload, { silent: true });
-    const model = payloadString(payload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']);
-    if (model) {
-      const exists = checkpointModels().some((candidate) => modelMatches(candidate, model));
-      if (exists) {
-        await prewarmSelectedModel({ quiet: true });
-      } else {
-        setFeedback(`Loaded favorite settings, but checkpoint "${model}" is missing locally. Generation may fail until the model is available.`, 'error');
-        return;
+    if (action === 'load') {
+      const response = await fetchJson(`/api/v1/image-favorites/${encodeURIComponent(favoriteId)}`);
+      const favorite = response.favorite;
+      const warnings = applyGenerationPayloadToControls(favorite?.requestPayload || {});
+      const model = selectedModel();
+      if (model && warnings.every((warning) => !warning.startsWith('model '))) {
+        await prewarmSelectedModel();
       }
+      const warningText = warnings.length ? ` Restored what I could; check: ${warnings.join(', ')}.` : '';
+      setStatus(`Loaded favorite "${favorite?.title || summary?.title || favoriteId}" into controls. It was not submitted.${warningText}`, warnings.length === 0);
+      return;
     }
-    const seed = payloadSeed(payload);
-    setFeedback(seed === null ? 'Loaded favorite settings, but the saved request had no seed. Random seed is enabled.' : 'Loaded favorite settings. Click Generate when ready.', seed === null ? 'error' : 'ok');
+    if (action === 'delete') {
+      const ok = window.confirm(`Delete image favorite "${summary?.title || favoriteId}"?`);
+      if (!ok) return;
+      await fetchJson(`/api/v1/image-favorites/${encodeURIComponent(favoriteId)}`, { method: 'DELETE' });
+      await refreshFavoritesOnly('Deleted image favorite.');
+    }
   } catch (error) {
-    setFeedback(`Favorite load failed: ${error.message}`, 'error');
-  }
-}
-
-async function deleteFavorite(favoriteId) {
-  if (!window.confirm('Delete this saved image favorite?')) return;
-  try {
-    setFeedback('Deleting image favorite...', '');
-    await fetchJson(`/api/v1/image-favorites/${encodeURIComponent(favoriteId)}`, { method: 'DELETE' });
-    await loadFavorites();
-    renderFavorites();
-    renderGallery();
-    setFeedback('Image favorite deleted.', 'ok');
-  } catch (error) {
-    setFeedback(`Favorite delete failed: ${error.message}`, 'error');
+    setStatus(error.message, false);
   }
 }
 
 function wireEvents() {
-  $('#studio-api-key-form')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    state.imageApiKey = $('#studio-api-key')?.value.trim() || '';
-    if (state.imageApiKey) window.localStorage.setItem(API_KEY_STORAGE_KEY, state.imageApiKey);
-    else window.localStorage.removeItem(API_KEY_STORAGE_KEY);
-    await refreshData();
+  $('#image-lab-refresh')?.addEventListener('click', () => refreshAll('Image generator refreshed.'));
+  $('#image-lab-form')?.addEventListener('submit', handleGenerate);
+  $('#image-lab-refresh-favorites')?.addEventListener('click', () => refreshFavoritesOnly('Image favorites refreshed.'));
+  $('#image-lab-gallery')?.addEventListener('click', handleGalleryClick);
+  $('#image-lab-favorites')?.addEventListener('click', handleFavoriteClick);
+  $('#image-lab-load-more')?.addEventListener('click', async () => {
+    state.galleryLimit = Math.min(MAX_GALLERY_LIMIT, state.galleryLimit + GALLERY_LIMIT_STEP);
+    await refreshGalleryOnly(`Showing up to ${state.galleryLimit} newest history items.`);
   });
-  $('#studio-clear-key')?.addEventListener('click', async () => {
-    state.imageApiKey = '';
-    window.localStorage.removeItem(API_KEY_STORAGE_KEY);
-    await refreshData();
+  $('#image-lab-model')?.addEventListener('change', async () => {
+    updatePayloadPreview();
+    if (selectedModel()) await prewarmSelectedModel();
   });
-  $('#studio-form')?.addEventListener('submit', submitGeneration);
-  $('#studio-prewarm')?.addEventListener('click', () => prewarmSelectedModel());
-  $('#studio-refresh')?.addEventListener('click', () => refreshData());
-  $('#studio-refresh-favorites')?.addEventListener('click', async () => {
-    try {
-      await loadFavorites();
-      renderFavorites();
-      renderGallery();
-      setFeedback('Favorites refreshed.', 'ok');
-    } catch (error) {
-      setFeedback(`Favorites refresh failed: ${error.message}`, 'error');
-    }
+  $('#image-lab-gallery-size')?.addEventListener('input', (event) => {
+    state.galleryTileSize = Number(event.target.value) || DEFAULT_TILE_SIZE;
+    window.localStorage.setItem('local-ai-images-gallery-size', String(state.galleryTileSize));
+    const label = $('#image-lab-gallery-size-value');
+    if (label) label.textContent = `${state.galleryTileSize}px`;
+    document.documentElement.style.setProperty('--image-lab-gallery-size', `${state.galleryTileSize}px`);
   });
-
-  $('#studio-model')?.addEventListener('change', async () => {
-    updateRequestPreview();
-    await prewarmSelectedModel();
-  });
-  $('#studio-workflow')?.addEventListener('change', () => {
-    applyWorkflowDefaults(false);
-    updateRequestPreview();
-  });
-  $('#studio-random-seed')?.addEventListener('change', () => {
-    if ($('#studio-random-seed')?.checked) setControlValue('studio-seed', '-1');
-    updateRequestPreview();
-  });
-  $('#studio-gallery-size')?.addEventListener('input', (event) => {
-    state.gallerySize = Number(event.target.value) || DEFAULT_GALLERY_TILE_SIZE;
-    window.localStorage.setItem(GALLERY_SIZE_STORAGE_KEY, String(state.gallerySize));
-    renderGallery();
-  });
-
-  for (const selector of ['#studio-prompt', '#studio-negative', '#studio-width', '#studio-height', '#studio-steps', '#studio-cfg-scale', '#studio-seed', '#studio-sampler', '#studio-scheduler', '#studio-output', '#studio-sync-timeout']) {
-    $(selector)?.addEventListener('input', updateRequestPreview);
-    $(selector)?.addEventListener('change', updateRequestPreview);
+  for (const selector of ['#image-lab-prompt', '#image-lab-negative', '#image-lab-width', '#image-lab-height', '#image-lab-steps', '#image-lab-cfg', '#image-lab-seed', '#image-lab-sampler', '#image-lab-scheduler', '#image-lab-sync-timeout']) {
+    const element = $(selector);
+    element?.addEventListener('input', updatePayloadPreview);
+    element?.addEventListener('change', updatePayloadPreview);
   }
-
-  $('#studio-gallery')?.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-gallery-action]');
-    if (!button) return;
-    const index = button.dataset.jobIndex;
-    if (button.dataset.galleryAction === 'save-favorite') saveGalleryFavorite(index);
-    if (button.dataset.galleryAction === 'load-settings') reuseGallerySettings(index);
-  });
-
-  $('#studio-favorites')?.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-favorite-action]');
-    if (!button) return;
-    const favoriteId = button.dataset.favoriteId;
-    if (button.dataset.favoriteAction === 'load') loadFavorite(favoriteId);
-    if (button.dataset.favoriteAction === 'delete') deleteFavorite(favoriteId);
-  });
 }
 
-function initialize() {
-  const gallerySize = $('#studio-gallery-size');
-  if (gallerySize) gallerySize.value = String(state.gallerySize);
-  const seed = $('#studio-seed');
-  if (seed && !seed.value) seed.value = '-1';
-  wireEvents();
-  renderAll();
-  refreshData({ quiet: true });
-}
-
-initialize();
+wireEvents();
+refreshAll();

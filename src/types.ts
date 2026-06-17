@@ -286,6 +286,7 @@ export interface FavoriteImagePrompt {
   updatedAt: string;
 }
 
+
 export interface ImageFavorite {
   id: string;
   title: string;
@@ -305,14 +306,11 @@ export interface ImageFavorite {
   steps?: number | null;
   cfgScale?: number | null;
   seed?: string | number | null;
-  artifactId?: string | null;
-  artifactUrl?: string | null;
   imageUrl?: string | null;
+  artifactId?: string | null;
   jobId?: string | null;
   artifact?: Record<string, unknown> | null;
-  artifacts?: Record<string, unknown>[];
   job?: Record<string, unknown> | null;
-  metadata?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
 }
