@@ -2045,12 +2045,7 @@ function renderImageGeneratorHtml(): string {
             </div>
 
             <div class="image-lab-action-panel">
-              <button id="image-lab-generate" type="submit" title="Submit the current generation request. The button is disabled while a request is already submitting to avoid duplicate jobs.">Generate</button>
-              <label class="image-lab-gallery-size-control">
-                <span class="field-label">Gallery size <span class="field-help" tabindex="0" title="Controls the displayed size of gallery cards. Smaller values show more images; larger values make previews easier to inspect.">?</span></span>
-                <input id="image-lab-gallery-size" type="range" min="160" max="620" step="20">
-                <span id="image-lab-gallery-size-value" class="hint"></span>
-              </label>
+              <button id="image-lab-generate" type="submit" title="Submit the current generation request. Repeated clicks queue separate jobs with their own pending gallery cards.">Generate!</button>
             </div>
           </div>
 
@@ -2092,6 +2087,7 @@ function renderImageGeneratorHtml(): string {
           </div>
         </details>
       </form>
+      <div id="image-lab-controls-resize" class="image-lab-resize-handle" role="separator" aria-label="Resize controls area" aria-orientation="horizontal" tabindex="0"></div>
     </section>
 
     <section class="image-lab-gallery-section" aria-label="Generated image gallery">
@@ -2100,7 +2096,14 @@ function renderImageGeneratorHtml(): string {
           <h2>Gallery</h2>
           <p class="hint">Newest generated images appear first. Details are collapsed until you open a card caption.</p>
         </div>
-        <div id="image-lab-gallery-count" class="hint"></div>
+        <div class="image-lab-gallery-header-actions">
+          <label class="image-lab-gallery-size-control">
+            <span class="field-label">Gallery size <span class="field-help" tabindex="0" title="Controls the displayed size of gallery cards. Smaller values show more images; larger values make previews easier to inspect.">?</span></span>
+            <input id="image-lab-gallery-size" type="range" min="160" max="620" step="20">
+            <span id="image-lab-gallery-size-value" class="hint"></span>
+          </label>
+          <div id="image-lab-gallery-count" class="hint"></div>
+        </div>
       </div>
       <div id="image-lab-gallery" class="image-lab-gallery placeholder">Loading recent generated images...</div>
       <div class="button-row image-lab-load-more-row">

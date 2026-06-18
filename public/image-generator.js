@@ -4,6 +4,14 @@ const DEFAULT_GALLERY_LIMIT = 48;
 const MAX_GALLERY_LIMIT = 250;
 const GALLERY_LIMIT_STEP = 48;
 const DEFAULT_TILE_SIZE = 300;
+const GALLERY_SIZE_STORAGE_KEY = 'local-ai-images-gallery-size';
+const CONTROLS_HEIGHT_STORAGE_KEY = 'local-ai-images-controls-height';
+const CONTROLS_MIN_HEIGHT = 220;
+const CONTROLS_DEFAULT_HEIGHT = 320;
+const CONTROLS_MAX_VIEWPORT_RATIO = 0.58;
+const GENERATION_POLL_INTERVAL_MS = 1500;
+const GENERATION_POLL_ATTEMPTS = 1200;
+const GENERATION_POLL_FAILURE_LIMIT = 5;
 
 const state = {
   imageHealth: null,
@@ -14,20 +22,61 @@ const state = {
   imageFavorites: null,
   imageError: null,
   activeJobId: null,
-  isGenerating: false,
+  pendingJobs: [],
+  nextClientJobSequence: 0,
   prewarmingModel: null,
   loadedFavoritePayloadBase: null,
   galleryLimit: DEFAULT_GALLERY_LIMIT,
   galleryTileSize: readStoredGallerySize(),
+  controlsHeight: readStoredControlsHeight(),
   lastResult: null
 };
 
 const thumbnailObjectUrls = new Map();
 
 function readStoredGallerySize() {
-  const raw = window.localStorage.getItem('local-ai-images-gallery-size');
+  const raw = window.localStorage.getItem(GALLERY_SIZE_STORAGE_KEY);
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 160 && parsed <= 620 ? parsed : DEFAULT_TILE_SIZE;
+}
+
+function readStoredControlsHeight() {
+  const raw = window.localStorage.getItem(CONTROLS_HEIGHT_STORAGE_KEY);
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function controlsHeightBounds() {
+  const viewportHeight = Math.max(window.innerHeight || 800, 320);
+  const min = Math.min(CONTROLS_MIN_HEIGHT, Math.max(190, viewportHeight - 260));
+  const max = Math.max(min, Math.floor(viewportHeight * CONTROLS_MAX_VIEWPORT_RATIO));
+  const defaultHeight = clampNumber(Math.min(CONTROLS_DEFAULT_HEIGHT, Math.floor(viewportHeight * 0.38)), min, max);
+  return { min, max, defaultHeight };
+}
+
+function normalizedControlsHeight(height = state.controlsHeight) {
+  const { min, max, defaultHeight } = controlsHeightBounds();
+  const candidate = Number.isFinite(Number(height)) ? Number(height) : defaultHeight;
+  return clampNumber(candidate, min, max);
+}
+
+function applyControlsHeight(height = state.controlsHeight, persist = false) {
+  const controls = $('.image-lab-controls');
+  const handle = $('#image-lab-controls-resize');
+  const { min, max } = controlsHeightBounds();
+  const nextHeight = normalizedControlsHeight(height);
+  state.controlsHeight = nextHeight;
+  if (controls) controls.style.setProperty('--image-lab-controls-height', `${nextHeight}px`);
+  if (handle) {
+    handle.setAttribute('aria-valuemin', String(min));
+    handle.setAttribute('aria-valuemax', String(max));
+    handle.setAttribute('aria-valuenow', String(nextHeight));
+  }
+  if (persist) window.localStorage.setItem(CONTROLS_HEIGHT_STORAGE_KEY, String(nextHeight));
 }
 
 async function fetchJson(url, options = {}) {
@@ -226,9 +275,10 @@ function renderControls() {
   if (sliderValue) sliderValue.textContent = `${state.galleryTileSize}px`;
   const generateButton = $('#image-lab-generate');
   if (generateButton) {
-    generateButton.disabled = Boolean(state.isGenerating || state.prewarmingModel);
-    generateButton.textContent = state.isGenerating ? 'Generating...' : state.prewarmingModel ? 'Prewarming...' : 'Generate';
+    generateButton.disabled = Boolean(state.prewarmingModel);
+    generateButton.textContent = 'Generate!';
   }
+  applyControlsHeight();
   updatePayloadPreview();
 }
 
@@ -377,6 +427,139 @@ function jobRequestPayload(job) {
   return payload;
 }
 
+function makeClientJobId() {
+  const random = window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `pending-${random}`;
+}
+
+function requestFromPayload(payload) {
+  return {
+    prompt: payloadString(payload, ['prompt', 'positive_prompt', 'positivePrompt']),
+    negativePrompt: payloadString(payload, ['negative_prompt', 'negativePrompt']),
+    model: payloadString(payload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']) || null,
+    workflowId: payloadString(payload, ['workflow_id', 'workflowId']),
+    width: payloadNumber(payload, ['width']),
+    height: payloadNumber(payload, ['height']),
+    steps: payloadNumber(payload, ['steps']),
+    cfgScale: payloadNumber(payload, ['cfg_scale', 'cfgScale', 'guidance_scale', 'guidanceScale']),
+    seed: payloadSeed(payload),
+    samplerName: payloadString(payload, ['sampler_name', 'samplerName', 'sampler']),
+    scheduler: payloadString(payload, ['scheduler']),
+    output: payloadString(payload, ['output', 'output_delivery', 'outputDelivery']) || 'url',
+    syncTimeoutMs: payloadNumber(payload, ['sync_timeout_ms', 'syncTimeoutMs']),
+    metadata: isPlainObject(payload?.metadata) ? clonePayload(payload.metadata) : {}
+  };
+}
+
+function createPendingJob(payload) {
+  const requestPayload = clonePayload(payload);
+  const request = requestFromPayload(requestPayload);
+  const now = new Date().toISOString();
+  const clientId = makeClientJobId();
+  state.nextClientJobSequence += 1;
+  return {
+    id: clientId,
+    clientId,
+    clientSequence: state.nextClientJobSequence,
+    isClientPending: true,
+    clientStatus: 'Submitting...',
+    status: 'queued',
+    createdAt: now,
+    queuedAt: now,
+    updatedAt: now,
+    startedAt: null,
+    completedAt: null,
+    provider: 'pending',
+    providerJobId: null,
+    workflowId: request.workflowId || requestPayload.workflow_id || requestPayload.workflowId || '',
+    model: request.model,
+    prompt: request.prompt,
+    negativePrompt: request.negativePrompt,
+    seed: request.seed,
+    width: request.width,
+    height: request.height,
+    steps: request.steps,
+    cfgScale: request.cfgScale,
+    samplerName: request.samplerName,
+    scheduler: request.scheduler,
+    output: request.output,
+    artifacts: [],
+    thumbnailUrl: null,
+    request,
+    requestPayload,
+    metadata: { clientStatus: 'Submitting...' },
+    timings: {},
+    error: null
+  };
+}
+
+function addPendingJob(job) {
+  state.pendingJobs = [job, ...state.pendingJobs.filter((item) => item.clientId !== job.clientId && item.id !== job.id)];
+  renderGallery();
+}
+
+function mergeJobUpdate(localJob, jobUpdate, extras = {}) {
+  const update = isPlainObject(jobUpdate) ? jobUpdate : {};
+  const nextMetadata = {
+    ...(isPlainObject(localJob.metadata) ? localJob.metadata : {}),
+    ...(isPlainObject(update.metadata) ? update.metadata : {}),
+    ...(isPlainObject(extras.metadata) ? extras.metadata : {})
+  };
+  return {
+    ...localJob,
+    ...update,
+    ...extras,
+    id: update.id || localJob.id,
+    clientId: localJob.clientId,
+    clientSequence: localJob.clientSequence,
+    isClientPending: localJob.isClientPending && !['succeeded', 'failed', 'canceled'].includes(update.status || extras.status || ''),
+    requestPayload: localJob.requestPayload || update.requestPayload || update.request_payload || {},
+    request: update.request || localJob.request || {},
+    metadata: nextMetadata,
+    updatedAt: update.updatedAt || extras.updatedAt || new Date().toISOString()
+  };
+}
+
+function updatePendingJob(clientId, jobUpdate, extras = {}) {
+  let didUpdate = false;
+  const updateId = jobUpdate?.id ? String(jobUpdate.id) : '';
+  state.pendingJobs = state.pendingJobs.map((job) => {
+    const matchesClient = job.clientId === clientId || job.id === clientId;
+    const matchesBackendId = updateId && String(job.id || '') === updateId;
+    if (!matchesClient && !matchesBackendId) return job;
+    didUpdate = true;
+    return mergeJobUpdate(job, jobUpdate, extras);
+  });
+  if (!didUpdate && isPlainObject(jobUpdate)) {
+    state.pendingJobs = [mergeJobUpdate(createPendingJob(jobRequestPayload(jobUpdate)), jobUpdate, extras), ...state.pendingJobs];
+  }
+  renderGallery();
+}
+
+function markPendingJobFailed(clientId, error, jobUpdate = null) {
+  const bodyError = error?.body?.error;
+  const message = bodyError?.message || error?.message || 'Generation failed.';
+  const code = bodyError?.code || (error?.status === 429 ? 'IMAGE_QUEUE_LIMIT_REACHED' : 'IMAGE_GENERATION_FAILED');
+  updatePendingJob(clientId, jobUpdate || {}, {
+    status: 'failed',
+    isClientPending: false,
+    completedAt: new Date().toISOString(),
+    error: { code, message, ...(bodyError?.details === undefined ? {} : { details: bodyError.details }) },
+    metadata: { clientStatus: 'Failed' }
+  });
+  return message;
+}
+
+function pendingJobsById() {
+  const jobs = state.pendingJobs || [];
+  const byId = new Map();
+  for (const job of jobs) {
+    const key = String(job.id || job.clientId || '');
+    if (key && !byId.has(key)) byId.set(key, job);
+  }
+  return byId;
+}
+
 function favoriteForJob(job) {
   const artifact = firstArtifact(job);
   const artifactId = artifact?.id ? String(artifact.id) : '';
@@ -440,12 +623,31 @@ function renderLastResult() {
 }
 
 function currentJobs() {
-  const jobs = state.imageJobs?.jobs || state.imageJobs?.items || [];
-  return [...jobs].sort((a, b) => {
-    const bDate = new Date(b.completedAt || b.updatedAt || b.createdAt || 0).getTime();
-    const aDate = new Date(a.completedAt || a.updatedAt || a.createdAt || 0).getTime();
-    return bDate - aDate;
+  const remoteJobs = state.imageJobs?.jobs || state.imageJobs?.items || [];
+  const jobsById = new Map();
+  for (const job of state.pendingJobs || []) {
+    const key = String(job.id || job.clientId || '');
+    if (key) jobsById.set(key, job);
+  }
+  for (const job of remoteJobs) {
+    const key = String(job?.id || '');
+    if (!key || jobsById.has(key)) continue;
+    jobsById.set(key, job);
+  }
+  return [...jobsById.values()].sort((a, b) => {
+    const bDate = gallerySortTimestamp(b);
+    const aDate = gallerySortTimestamp(a);
+    if (bDate !== aDate) return bDate - aDate;
+    return Number(b.clientSequence || 0) - Number(a.clientSequence || 0);
   });
+}
+
+function gallerySortTimestamp(job) {
+  const timestamp = job?.clientId
+    ? job.createdAt || job.queuedAt || job.updatedAt
+    : job.completedAt || job.updatedAt || job.createdAt || job.queuedAt;
+  const parsed = new Date(timestamp || 0).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function renderGallery() {
@@ -456,15 +658,19 @@ function renderGallery() {
   document.documentElement.style.setProperty('--image-lab-gallery-size', `${state.galleryTileSize}px`);
   const jobs = currentJobs();
   if (count) {
+    const remoteJobs = state.imageJobs?.jobs || state.imageJobs?.items || [];
+    const remoteIds = new Set(remoteJobs.map((job) => String(job?.id || '')).filter(Boolean));
+    const localOnlyCount = (state.pendingJobs || []).filter((job) => !remoteIds.has(String(job.id || ''))).length;
     const total = state.imageJobs?.totalItems;
-    count.textContent = total === undefined ? `${jobs.length} shown` : `${jobs.length} of ${total} shown`;
+    const adjustedTotal = total === undefined ? undefined : Math.max(Number(total) + localOnlyCount, jobs.length);
+    count.textContent = adjustedTotal === undefined ? `${jobs.length} shown` : `${jobs.length} of ${adjustedTotal} shown`;
   }
   if (loadMore) {
     const hasNext = Boolean(state.imageJobs?.hasNextPage) && state.galleryLimit < MAX_GALLERY_LIMIT;
     loadMore.disabled = !hasNext;
     loadMore.hidden = jobs.length === 0;
   }
-  if (!state.imageJobs) {
+  if (!state.imageJobs && jobs.length === 0) {
     target.innerHTML = '<p class="muted">Loading recent image jobs...</p>';
     return;
   }
@@ -477,6 +683,48 @@ function renderGallery() {
   hydrateImages();
 }
 
+function statusTone(status) {
+  if (status === 'succeeded') return 'ok';
+  if (status === 'failed' || status === 'canceled') return 'bad';
+  if (status === 'queued' || status === 'running') return 'warn';
+  return 'warn';
+}
+
+function numericDimension(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function galleryFrameStyle(job, payload) {
+  const width = numericDimension(job.width ?? job.request?.width ?? payload.width);
+  const height = numericDimension(job.height ?? job.request?.height ?? payload.height);
+  return width && height ? ` style="aspect-ratio: ${width} / ${height}"` : '';
+}
+
+function pendingMessage(job) {
+  const clientStatus = job.clientStatus || job.metadata?.clientStatus || '';
+  if (job.status === 'running') return 'Generating...';
+  if (job.status === 'queued') return clientStatus === 'Submitting...' ? 'Submitting...' : 'Queued...';
+  if (job.status === 'failed') return 'Generation failed';
+  if (job.status === 'canceled') return 'Generation canceled';
+  return clientStatus || 'Image loading...';
+}
+
+function renderGalleryImageContent(job, imageUrl, prompt, jobId, dimensions) {
+  const status = job.status || 'unknown';
+  if (imageUrl) {
+    return `<a class="gallery-image-link" href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="gallery-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Generated image: ${escapeHtml(previewText(prompt, 90) || jobId)}" loading="lazy" hidden><div class="thumb-placeholder">Image loading...</div></a>`;
+  }
+  if (status === 'queued' || status === 'running' || job.isClientPending) {
+    return `<div class="thumb-placeholder image-lab-pending-placeholder"><span class="image-lab-placeholder-title">${escapeHtml(pendingMessage(job))}</span><span>${statusPill(status, statusTone(status))}</span><span class="image-lab-placeholder-subtitle">${escapeHtml(dimensions)} preview space reserved for this request.</span></div>`;
+  }
+  if (status === 'failed' || status === 'canceled') {
+    const message = job.error?.message || `Job finished with status ${status}.`;
+    return `<div class="thumb-placeholder image-lab-error-placeholder"><span class="image-lab-placeholder-title">${escapeHtml(pendingMessage(job))}</span><span class="image-lab-placeholder-subtitle">${escapeHtml(message)}</span></div>`;
+  }
+  return '<div class="thumb-placeholder">No image artifact available</div>';
+}
+
 function renderGalleryCard(job, index) {
   const artifact = firstArtifact(job);
   const imageUrl = firstImageUrl(job);
@@ -485,14 +733,30 @@ function renderGalleryCard(job, index) {
   const payload = jobRequestPayload(job);
   const favorite = favoriteForJob(job);
   const jobId = job?.id || `job-${index + 1}`;
-  const tone = job.status === 'succeeded' ? 'ok' : job.status === 'failed' ? 'bad' : 'warn';
+  const status = job.status || 'unknown';
+  const tone = statusTone(status);
   const dimensions = `${job.width ?? job.request?.width ?? payload.width ?? 'n/a'} x ${job.height ?? job.request?.height ?? payload.height ?? 'n/a'}`;
   const seed = job.seed ?? job.request?.seed ?? payload.seed ?? 'n/a';
   const model = job.model || payload.model || 'model n/a';
-  const requestDetails = { requestPayload: payload, request: job.request || {}, metadata: job.metadata || {}, artifacts: jobArtifacts(job) };
-  return `<article class="image-lab-gallery-card" data-job-index="${escapeHtml(index)}" data-job-id="${escapeHtml(jobId)}">
-    <div class="image-lab-image-frame">
-      ${imageUrl ? `<a class="gallery-image-link" href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="gallery-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Generated image: ${escapeHtml(previewText(prompt, 90) || jobId)}" loading="lazy" hidden><div class="thumb-placeholder">Loading image...</div></a>` : '<div class="thumb-placeholder">No image artifact available</div>'}
+  const canSaveFavorite = Boolean(imageUrl) && status === 'succeeded';
+  const saveFavoriteDisabled = favorite || !canSaveFavorite;
+  const favoriteTitle = canSaveFavorite ? '' : ' title="A completed image artifact is required before saving a favorite."';
+  const cardClasses = ['image-lab-gallery-card'];
+  if (status === 'queued' || status === 'running' || job.isClientPending) cardClasses.push('is-pending');
+  if (status === 'failed' || status === 'canceled') cardClasses.push('is-failed');
+  const requestDetails = {
+    jobId,
+    clientId: job.clientId || undefined,
+    resultUrl: job.resultUrl || job.result_url || undefined,
+    statusUrl: job.statusUrl || job.status_url || undefined,
+    requestPayload: payload,
+    request: job.request || {},
+    metadata: job.metadata || {},
+    artifacts: jobArtifacts(job)
+  };
+  return `<article class="${cardClasses.join(' ')}" data-job-index="${escapeHtml(index)}" data-job-id="${escapeHtml(jobId)}" data-job-state="${escapeHtml(status)}">
+    <div class="image-lab-image-frame"${galleryFrameStyle(job, payload)}>
+      ${renderGalleryImageContent(job, imageUrl, prompt, jobId, dimensions)}
     </div>
     <details class="image-lab-card-details">
       <summary>
@@ -503,12 +767,13 @@ function renderGalleryCard(job, index) {
         <div class="button-row image-lab-card-actions">
           <button type="button" class="secondary" data-gallery-action="load-settings" data-job-index="${escapeHtml(index)}">Load settings</button>
           <button type="button" class="secondary" data-gallery-action="copy-payload" data-job-index="${escapeHtml(index)}">Copy payload</button>
-          <button type="button" class="secondary" data-gallery-action="save-favorite" data-job-index="${escapeHtml(index)}" ${favorite ? 'disabled' : ''}>${favorite ? 'Saved favorite' : 'Save Favorite'}</button>
+          <button type="button" class="secondary" data-gallery-action="save-favorite" data-job-index="${escapeHtml(index)}" ${saveFavoriteDisabled ? 'disabled' : ''}${favoriteTitle}>${favorite ? 'Saved favorite' : 'Save Favorite'}</button>
         </div>
         <div class="compact-meta job-meta">
-          <p class="compact-meta-line"><span><strong>Status:</strong> ${statusPill(job.status || 'unknown', tone)}</span><span><strong>Workflow:</strong> ${escapeHtml(job.workflowId || payload.workflow_id || 'n/a')}</span><span><strong>Provider:</strong> ${escapeHtml(job.provider || 'n/a')}</span></p>
+          <p class="compact-meta-line"><span><strong>Status:</strong> ${statusPill(status, tone)}</span><span><strong>Job:</strong> <code>${escapeHtml(jobId)}</code></span>${job.clientId && job.clientId !== jobId ? `<span><strong>Client:</strong> <code>${escapeHtml(job.clientId)}</code></span>` : ''}</p>
+          <p class="compact-meta-line"><span><strong>Workflow:</strong> ${escapeHtml(job.workflowId || payload.workflow_id || 'n/a')}</span><span><strong>Provider:</strong> ${escapeHtml(job.provider || 'n/a')}</span><span><strong>Created:</strong> ${escapeHtml(formatDate(job.createdAt))}</span><span><strong>Completed:</strong> ${escapeHtml(formatDate(job.completedAt))}</span></p>
           <p class="compact-meta-line"><span><strong>Steps:</strong> ${escapeHtml(job.steps ?? payload.steps ?? 'n/a')}</span><span><strong>CFG:</strong> ${escapeHtml(job.cfgScale ?? payload.cfg_scale ?? 'n/a')}</span><span><strong>Sampler:</strong> ${escapeHtml(job.samplerName ?? payload.sampler_name ?? 'n/a')}</span><span><strong>Scheduler:</strong> ${escapeHtml(job.scheduler ?? payload.scheduler ?? 'n/a')}</span></p>
-          <p class="compact-meta-line"><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span><span><strong>Execution:</strong> ${escapeHtml(formatDurationMs(job.executionMs ?? job.timings?.executionMs))}</span><span><strong>Artifact:</strong> ${escapeHtml(artifact?.id || 'n/a')}</span></p>
+          <p class="compact-meta-line"><span><strong>Queue wait:</strong> ${escapeHtml(formatDurationMs(job.queueWaitMs ?? job.timings?.queueWaitMs))}</span><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span><span><strong>Execution:</strong> ${escapeHtml(formatDurationMs(job.executionMs ?? job.timings?.executionMs))}</span><span><strong>Artifact:</strong> ${escapeHtml(artifact?.id || 'n/a')}</span></p>
         </div>
         <div class="job-prompt-grid">
           ${renderPromptBlock('Positive prompt', prompt, 'No prompt recorded')}
@@ -647,9 +912,102 @@ async function prewarmSelectedModel() {
   }
 }
 
+function statusLabelForJob(job) {
+  if (!job?.status) return 'Submitted';
+  if (job.status === 'queued') return 'Queued...';
+  if (job.status === 'running') return 'Generating...';
+  if (job.status === 'succeeded') return 'Completed';
+  if (job.status === 'failed') return 'Failed';
+  if (job.status === 'canceled') return 'Canceled';
+  return String(job.status);
+}
+
+function resultExtras(result, job) {
+  const clientStatus = statusLabelForJob(job);
+  return {
+    clientStatus,
+    resultUrl: result?.result_url || result?.resultUrl || undefined,
+    statusUrl: result?.status_url || result?.statusUrl || undefined,
+    metadata: {
+      clientStatus,
+      resultUrl: result?.result_url || result?.resultUrl || undefined,
+      statusUrl: result?.status_url || result?.statusUrl || undefined
+    }
+  };
+}
+
+function errorJob(error) {
+  return isPlainObject(error?.body?.job) ? error.body.job : null;
+}
+
+function generationSettingsStillMatch(submittedPayload) {
+  const currentPayload = buildGenerationPayload();
+  const keys = ['prompt', 'negative_prompt', 'workflow_id', 'model', 'width', 'height', 'steps', 'cfg_scale', 'seed', 'sampler_name', 'scheduler'];
+  return keys.every((key) => String(submittedPayload[key] ?? '') === String(currentPayload[key] ?? ''));
+}
+
+function maybeApplyCompletedSeed(submittedPayload, job) {
+  const seed = job?.seed ?? job?.request?.seed;
+  if (seed === null || seed === undefined || Number(seed) < 0) return;
+  if (!generationSettingsStillMatch(submittedPayload)) return;
+  const seedInput = $('#image-lab-seed');
+  if (seedInput) seedInput.value = String(seed);
+  updatePayloadPreview();
+}
+
+async function finalizeGenerationResult(clientId, submittedPayload, result) {
+  const job = result?.job || null;
+  if (!job) throw new Error('The generation response did not include a job record.');
+  updatePendingJob(clientId, job, resultExtras(result, job));
+
+  if (job.status && job.status !== 'succeeded') {
+    const error = new Error(job.error?.message || `Generation finished with status ${job.status}.`);
+    error.body = { job, error: job.error };
+    throw error;
+  }
+
+  state.lastResult = result;
+  renderLastResult();
+  maybeApplyCompletedSeed(submittedPayload, job);
+  await Promise.allSettled([refreshGalleryOnly(), refreshModelsOnly()]);
+  const seed = job.seed ?? job.request?.seed ?? 'n/a';
+  setStatus(`Generation complete for job ${job.id || 'n/a'}. Actual seed: ${seed}.`);
+}
+
+async function submitGenerationJob(clientId, payload) {
+  try {
+    let result = await fetchJson('/api/v1/generate', { method: 'POST', body: JSON.stringify(payload) });
+    let job = result.job || null;
+    if (job) {
+      state.activeJobId = job.id || state.activeJobId;
+      updatePendingJob(clientId, job, resultExtras(result, job));
+    }
+
+    if (job?.id && ['queued', 'running'].includes(job.status)) {
+      setStatus(`Generation ${job.status}; job ${job.id} is being tracked in the gallery.`);
+      result = await pollGenerationResult(job.id, clientId);
+      job = result.job || job;
+    }
+
+    await finalizeGenerationResult(clientId, payload, result);
+  } catch (error) {
+    const job = errorJob(error);
+    const message = markPendingJobFailed(clientId, error, job);
+    const target = $('#image-lab-last-result');
+    if (target) target.innerHTML = `<p class="danger-text">${escapeHtml(message)}</p>`;
+    const prefix = error?.status === 429 ? 'Generation queue limit reached' : 'Generation failed';
+    setStatus(`${prefix}: ${message}`, false);
+  } finally {
+    renderControls();
+  }
+}
+
 async function handleGenerate(event) {
   event.preventDefault();
-  if (state.isGenerating || state.prewarmingModel) return;
+  if (state.prewarmingModel) {
+    setStatus('Model prewarming is still running. Submit again once the checkpoint is ready.', false);
+    return;
+  }
   const payload = buildGenerationPayload();
   if (!payload.model) {
     setStatus('Choose a checkpoint before generating.', false);
@@ -659,50 +1017,41 @@ async function handleGenerate(event) {
     setStatus('Positive prompt is required.', false);
     return;
   }
-  state.isGenerating = true;
+
+  const pendingJob = createPendingJob(payload);
+  addPendingJob(pendingJob);
+  setStatus(`Queued generation request ${pendingJob.clientSequence}. A pending gallery card was added.`);
+  void submitGenerationJob(pendingJob.clientId, payload);
   renderControls();
-  setStatus('Submitting generation request...');
-  try {
-    let result = await fetchJson('/api/v1/generate', { method: 'POST', body: JSON.stringify(payload) });
-    if (result.job?.id && ['queued', 'running'].includes(result.job.status)) {
-      state.activeJobId = result.job.id;
-      result = await pollGenerationResult(result.job.id);
-    }
-    state.lastResult = result;
-    const job = result.job || null;
-    if (job?.status && job.status !== 'succeeded') {
-      throw new Error(job.error?.message || `Generation finished with status ${job.status}.`);
-    }
-    if (job) addJobToTop(job);
-    renderLastResult();
-    await refreshGalleryOnly();
-    await refreshModelsOnly();
-    const seed = job?.seed ?? job?.request?.seed ?? 'n/a';
-    if (seed !== 'n/a' && seed !== null && seed !== undefined && Number(seed) >= 0) {
-      const seedInput = $('#image-lab-seed');
-      if (seedInput) seedInput.value = String(seed);
-      updatePayloadPreview();
-    }
-    setStatus(`Generation complete. Actual seed: ${seed}.`);
-  } catch (error) {
-    setStatus(`Generation failed: ${error.message}`, false);
-    const target = $('#image-lab-last-result');
-    if (target) target.innerHTML = `<p class="danger-text">${escapeHtml(error.message)}</p>`;
-  } finally {
-    state.isGenerating = false;
-    renderControls();
-  }
 }
 
-async function pollGenerationResult(jobId) {
+async function pollGenerationResult(jobId, clientId) {
   let last = null;
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    await sleep(1500);
-    const result = await fetchJson(`/api/v1/jobs/${encodeURIComponent(jobId)}/result?format=url`);
-    last = result;
-    const status = result.job?.status;
-    if (status !== 'queued' && status !== 'running') return result;
-    setStatus(`Generation ${status}; polling job ${jobId}...`);
+  let consecutiveFailures = 0;
+  for (let attempt = 0; attempt < GENERATION_POLL_ATTEMPTS; attempt += 1) {
+    await sleep(GENERATION_POLL_INTERVAL_MS);
+    try {
+      const result = await fetchJson(`/api/v1/jobs/${encodeURIComponent(jobId)}/result?format=url`);
+      consecutiveFailures = 0;
+      last = result;
+      const job = result.job || null;
+      if (job) updatePendingJob(clientId, job, resultExtras(result, job));
+      const status = job?.status;
+      if (status !== 'queued' && status !== 'running') return result;
+      setStatus(`Generation ${status}; polling job ${jobId}...`);
+    } catch (error) {
+      const job = errorJob(error);
+      if (job) {
+        updatePendingJob(clientId, job, resultExtras(error.body || {}, job));
+        throw error;
+      }
+      consecutiveFailures += 1;
+      updatePendingJob(clientId, {}, {
+        metadata: { clientStatus: `Status refresh failed; retry ${consecutiveFailures}/${GENERATION_POLL_FAILURE_LIMIT}` }
+      });
+      setStatus(`Status refresh failed for job ${jobId}; retrying...`, false);
+      if (consecutiveFailures >= GENERATION_POLL_FAILURE_LIMIT) throw error;
+    }
   }
   return last || fetchJson(`/api/v1/jobs/${encodeURIComponent(jobId)}/result?format=url`);
 }
@@ -731,6 +1080,10 @@ function defaultFavoriteTitle(job) {
 async function saveFavoriteFromJob(job) {
   const artifact = firstArtifact(job);
   const payload = jobRequestPayload(job);
+  if (!artifact?.url && !firstImageUrl(job)) {
+    setStatus('Wait until the generated image artifact is available before saving a favorite.', false);
+    return;
+  }
   if (!isPlainObject(payload) || !payload.prompt) {
     setStatus('This job does not have a usable prompt payload to save.', false);
     return;
@@ -827,7 +1180,72 @@ async function handleFavoriteClick(event) {
   }
 }
 
+function initResizableControls() {
+  const handle = $('#image-lab-controls-resize');
+  const controls = $('.image-lab-controls');
+  if (!handle || !controls) return;
+  applyControlsHeight();
+
+  let dragStartY = 0;
+  let dragStartHeight = 0;
+  let isDragging = false;
+
+  const finishDrag = (event) => {
+    if (!isDragging) return;
+    isDragging = false;
+    document.body.classList.remove('image-lab-resizing');
+    try {
+      handle.releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may already be released if the drag ended outside the handle.
+    }
+    applyControlsHeight(state.controlsHeight, true);
+  };
+
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    isDragging = true;
+    dragStartY = event.clientY;
+    dragStartHeight = normalizedControlsHeight();
+    document.body.classList.add('image-lab-resizing');
+    handle.setPointerCapture(event.pointerId);
+  });
+
+  handle.addEventListener('pointermove', (event) => {
+    if (!isDragging) return;
+    event.preventDefault();
+    applyControlsHeight(dragStartHeight + event.clientY - dragStartY);
+  });
+
+  handle.addEventListener('pointerup', finishDrag);
+  handle.addEventListener('pointercancel', finishDrag);
+  handle.addEventListener('lostpointercapture', () => {
+    if (!isDragging) return;
+    isDragging = false;
+    document.body.classList.remove('image-lab-resizing');
+    applyControlsHeight(state.controlsHeight, true);
+  });
+
+  handle.addEventListener('keydown', (event) => {
+    const step = event.shiftKey ? 40 : 16;
+    let nextHeight = null;
+    if (event.key === 'ArrowUp') nextHeight = normalizedControlsHeight() - step;
+    if (event.key === 'ArrowDown') nextHeight = normalizedControlsHeight() + step;
+    if (event.key === 'PageUp') nextHeight = normalizedControlsHeight() - 80;
+    if (event.key === 'PageDown') nextHeight = normalizedControlsHeight() + 80;
+    if (event.key === 'Home') nextHeight = controlsHeightBounds().min;
+    if (event.key === 'End') nextHeight = controlsHeightBounds().max;
+    if (nextHeight === null) return;
+    event.preventDefault();
+    applyControlsHeight(nextHeight, true);
+  });
+
+  window.addEventListener('resize', () => applyControlsHeight());
+}
+
 function wireEvents() {
+  initResizableControls();
   $('#image-lab-refresh')?.addEventListener('click', () => refreshAll('Image generator refreshed.'));
   $('#image-lab-form')?.addEventListener('submit', handleGenerate);
   $('#image-lab-refresh-favorites')?.addEventListener('click', () => refreshFavoritesOnly('Image favorites refreshed.'));
@@ -843,7 +1261,7 @@ function wireEvents() {
   });
   $('#image-lab-gallery-size')?.addEventListener('input', (event) => {
     state.galleryTileSize = Number(event.target.value) || DEFAULT_TILE_SIZE;
-    window.localStorage.setItem('local-ai-images-gallery-size', String(state.galleryTileSize));
+    window.localStorage.setItem(GALLERY_SIZE_STORAGE_KEY, String(state.galleryTileSize));
     const label = $('#image-lab-gallery-size-value');
     if (label) label.textContent = `${state.galleryTileSize}px`;
     document.documentElement.style.setProperty('--image-lab-gallery-size', `${state.galleryTileSize}px`);
