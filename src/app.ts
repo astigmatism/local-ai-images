@@ -1996,12 +1996,15 @@ function renderImageGeneratorHtml(): string {
     <section class="card image-lab-controls" aria-label="Image-generation controls">
       <form id="image-lab-form" class="image-lab-form">
         <div class="image-lab-top-row">
-        <!--
           <label class="image-lab-model-field">
-            <span class="field-label">Checkpoint <span class="field-help" tabindex="0" title="Choose an installed checkpoint for the next request. Changing it prewarms the model for this portal only and does not set a global default.">?</span></span>
-            <select id="image-lab-model" required></select>
+            <span class="field-label">Workflow <span class="field-help" tabindex="0" title="Choose the ComfyUI workflow preset for the next request. Some workflows use checkpoint models; others load their own diffusion model, text encoder, and VAE.">?</span></span>
+            <select id="image-lab-workflow" required></select>
           </label>
-          -->
+
+          <label class="image-lab-model-field">
+            <span class="field-label">Checkpoint <span class="field-help" tabindex="0" title="Choose an installed checkpoint for workflows that use checkpoint models. Workflows like Juggernaut Z load their own diffusion model and ignore this field.">?</span></span>
+            <select id="image-lab-model"></select>
+          </label>
           
           <div class="image-lab-top-actions">
             <div id="image-lab-status" class="feedback" aria-live="polite"></div>

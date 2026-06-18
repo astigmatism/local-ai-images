@@ -209,6 +209,11 @@ function defaultWorkflowId() {
 
 function selectedWorkflowId() {
   const workflows = state.imageWorkflows?.workflows || [];
+  const selected = $('#image-lab-workflow')?.value || '';
+  if (selected && workflows.some((workflow) => workflow.id === selected)) {
+    state.selectedWorkflowId = selected;
+    return selected;
+  }
   if (state.selectedWorkflowId && workflows.some((workflow) => workflow.id === state.selectedWorkflowId)) {
     return state.selectedWorkflowId;
   }
@@ -222,10 +227,37 @@ function selectedWorkflow() {
   return (state.imageWorkflows?.workflows || []).find((workflow) => workflow.id === id) || state.imageWorkflows?.workflows?.[0] || null;
 }
 
+function workflowUsesCheckpointModel(workflow = selectedWorkflow()) {
+  return Boolean((workflow?.parameters || []).includes('model'));
+}
+
+function renderWorkflowOptions() {
+  const select = $('#image-lab-workflow');
+  if (!select) return;
+  const workflows = state.imageWorkflows?.workflows || [];
+  const previous = select.value || state.selectedWorkflowId || defaultWorkflowId();
+  select.innerHTML = workflows.map((workflow) => {
+    const label = workflow.name || workflow.id;
+    return `<option value="${escapeHtml(workflow.id)}">${escapeHtml(label)}</option>`;
+  }).join('');
+  const selected = workflows.some((workflow) => workflow.id === previous)
+    ? previous
+    : defaultWorkflowId();
+  select.value = selected || '';
+  state.selectedWorkflowId = select.value || null;
+}
 
 function renderModelOptions() {
   const select = $('#image-lab-model');
   if (!select) return;
+  const checkpointRequired = workflowUsesCheckpointModel();
+  if (!checkpointRequired) {
+    select.innerHTML = '<option value="">No checkpoint required for this workflow</option>';
+    select.value = '';
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
   const previous = select.value;
   const checkpoints = checkpointModels();
   const lastLoaded = checkpoints.find((model) => model.isLastConfirmedLoaded) || null;
@@ -267,6 +299,7 @@ function applyWorkflowDefaults(overwrite = false) {
 }
 
 function renderControls() {
+  renderWorkflowOptions();
   renderModelOptions();
   applyWorkflowDefaults(false);
   const slider = $('#image-lab-gallery-size');
@@ -297,7 +330,7 @@ function buildGenerationPayload() {
     prompt: $('#image-lab-prompt')?.value.trim() || '',
     negative_prompt: $('#image-lab-negative')?.value.trim() || '',
     workflow_id: workflow?.id || basePayload.workflow_id || basePayload.workflowId || undefined,
-    model: selectedModel() || undefined,
+    model: workflowUsesCheckpointModel(workflow) ? selectedModel() || undefined : undefined,
     width: Number($('#image-lab-width')?.value || 0) || undefined,
     height: Number($('#image-lab-height')?.value || 0) || undefined,
     steps: Number($('#image-lab-steps')?.value || 0) || undefined,
@@ -1044,7 +1077,7 @@ async function handleGenerate(event) {
     return;
   }
   const payload = clonePayload(buildGenerationPayload());
-  if (!payload.model) {
+  if (workflowUsesCheckpointModel() && !payload.model) {
     setStatus('Choose a checkpoint before generating.', false);
     return;
   }
@@ -1290,9 +1323,16 @@ function wireEvents() {
     state.galleryLimit = Math.min(MAX_GALLERY_LIMIT, state.galleryLimit + GALLERY_LIMIT_STEP);
     await refreshGalleryOnly(`Showing up to ${state.galleryLimit} newest history items.`);
   });
+  $('#image-lab-workflow')?.addEventListener('change', async (event) => {
+    state.selectedWorkflowId = event.target.value || null;
+    applyWorkflowDefaults(true);
+    renderModelOptions();
+    updatePayloadPreview();
+    if (workflowUsesCheckpointModel() && selectedModel()) await prewarmSelectedModel();
+  });
   $('#image-lab-model')?.addEventListener('change', async () => {
     updatePayloadPreview();
-    if (selectedModel()) await prewarmSelectedModel();
+    if (workflowUsesCheckpointModel() && selectedModel()) await prewarmSelectedModel();
   });
   $('#image-lab-gallery-size')?.addEventListener('input', (event) => {
     state.galleryTileSize = Number(event.target.value) || DEFAULT_TILE_SIZE;
