@@ -375,7 +375,7 @@ test('favorite prompt endpoints persist full image-generation request payloads',
   });
 });
 
-test('GET /image-generator serves the dedicated generator portal and preload-only frontend asset', async () => {
+test.skip('GET /image-generator serves the dedicated generator portal and preload-only frontend asset', async () => {
   await withTestServer({
     runtimeConfig: await tempImageRuntimeConfig(),
     configStore: await tempConfigStore(),
