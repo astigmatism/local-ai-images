@@ -1193,7 +1193,12 @@ summary {
   grid-template-columns: minmax(220px, 1.25fr) minmax(220px, 1.25fr) minmax(170px, 0.7fr) minmax(230px, 0.9fr);
   align-items: stretch;
   gap: 7px;
+  height: 100%;
   min-width: 0;
+  min-height: 0;
+}
+
+.image-lab-main-grid > * {
   min-height: 0;
 }
 
@@ -1424,9 +1429,11 @@ summary {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   align-self: stretch;
+  box-sizing: border-box;
+  height: 100%;
   min-width: 0;
   min-height: 0;
-  max-height: 206px;
+  max-height: 100%;
   overflow: hidden;
   padding: 6px;
   border: 1px solid var(--border);
@@ -1716,10 +1723,6 @@ summary {
   .image-lab-main-grid {
     grid-template-columns: repeat(2, minmax(220px, 1fr));
   }
-
-  .image-lab-favorites-panel {
-    max-height: 178px;
-  }
 }
 
 @media (max-width: 780px) {
@@ -1738,6 +1741,10 @@ summary {
   .image-lab-main-grid,
   .image-lab-advanced-grid {
     grid-template-columns: 1fr;
+  }
+
+  .image-lab-main-grid {
+    height: auto;
   }
 
   .image-lab-top-actions {
@@ -1792,6 +1799,7 @@ summary {
   }
 
   .image-lab-favorites-panel {
+    height: auto;
     max-height: 196px;
   }
 

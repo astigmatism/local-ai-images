@@ -273,6 +273,10 @@ function renderControls() {
   const sliderValue = $('#image-lab-gallery-size-value');
   if (slider) slider.value = String(state.galleryTileSize);
   if (sliderValue) sliderValue.textContent = `${state.galleryTileSize}px`;
+  renderControlChrome();
+}
+
+function renderControlChrome() {
   const generateButton = $('#image-lab-generate');
   if (generateButton) {
     generateButton.disabled = Boolean(state.prewarmingModel);
@@ -393,6 +397,39 @@ function firstImageUrl(job) {
   return job?.thumbnailUrl || firstArtifact(job)?.url || '';
 }
 
+function normalizedSeedValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const seed = Number(value);
+  if (!Number.isFinite(seed) || seed < 0) return null;
+  return Number.isInteger(seed) ? seed : value;
+}
+
+function actualSeedForJob(job, result = null) {
+  const artifact = firstArtifact(job) || (Array.isArray(result?.artifacts) ? result.artifacts.find((item) => item?.url) || result.artifacts[0] : null);
+  const candidates = [
+    job?.seed,
+    job?.metadata?.actualSeed,
+    job?.metadata?.actual_seed,
+    job?.metadata?.seed,
+    job?.request?.seed,
+    result?.seed,
+    result?.actualSeed,
+    result?.actual_seed,
+    result?.metadata?.actualSeed,
+    result?.metadata?.actual_seed,
+    result?.metadata?.seed,
+    artifact?.seed,
+    artifact?.request?.seed,
+    artifact?.requestPayload?.seed,
+    artifact?.request_payload?.seed
+  ];
+  for (const candidate of candidates) {
+    const seed = normalizedSeedValue(candidate);
+    if (seed !== null) return seed;
+  }
+  return null;
+}
+
 function jobPrompt(job) {
   return job?.prompt || job?.request?.prompt || '';
 }
@@ -500,6 +537,15 @@ function addPendingJob(job) {
 
 function mergeJobUpdate(localJob, jobUpdate, extras = {}) {
   const update = isPlainObject(jobUpdate) ? jobUpdate : {};
+  const requestPayload = isPlainObject(localJob.requestPayload)
+    ? clonePayload(localJob.requestPayload)
+    : isPlainObject(extras.requestPayload)
+      ? clonePayload(extras.requestPayload)
+      : isPlainObject(update.requestPayload)
+        ? clonePayload(update.requestPayload)
+        : isPlainObject(update.request_payload)
+          ? clonePayload(update.request_payload)
+          : {};
   const nextMetadata = {
     ...(isPlainObject(localJob.metadata) ? localJob.metadata : {}),
     ...(isPlainObject(update.metadata) ? update.metadata : {}),
@@ -513,7 +559,7 @@ function mergeJobUpdate(localJob, jobUpdate, extras = {}) {
     clientId: localJob.clientId,
     clientSequence: localJob.clientSequence,
     isClientPending: localJob.isClientPending && !['succeeded', 'failed', 'canceled'].includes(update.status || extras.status || ''),
-    requestPayload: localJob.requestPayload || update.requestPayload || update.request_payload || {},
+    requestPayload,
     request: update.request || localJob.request || {},
     metadata: nextMetadata,
     updatedAt: update.updatedAt || extras.updatedAt || new Date().toISOString()
@@ -617,7 +663,7 @@ function renderLastResult() {
   target.innerHTML = `<div class="generation-result image-lab-result">
     <p>${statusPill(job.status || 'submitted', tone)} Job <code>${escapeHtml(job.id || 'n/a')}</code></p>
     ${imageUrl ? `<a href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="result-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Last generated image" loading="lazy" hidden><div class="thumb-placeholder">Loading result image...</div></a>` : '<div class="thumb-placeholder">No image artifact available</div>'}
-    <p class="compact-meta-line"><span><strong>Seed:</strong> ${escapeHtml(job.seed ?? job.request?.seed ?? 'n/a')}</span><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span></p>
+    <p class="compact-meta-line"><span><strong>Seed:</strong> ${escapeHtml(actualSeedForJob(job, result) ?? job.requestPayload?.seed ?? 'n/a')}</span><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span></p>
   </div>`;
   hydrateImages();
 }
@@ -736,7 +782,7 @@ function renderGalleryCard(job, index) {
   const status = job.status || 'unknown';
   const tone = statusTone(status);
   const dimensions = `${job.width ?? job.request?.width ?? payload.width ?? 'n/a'} x ${job.height ?? job.request?.height ?? payload.height ?? 'n/a'}`;
-  const seed = job.seed ?? job.request?.seed ?? payload.seed ?? 'n/a';
+  const seed = actualSeedForJob(job) ?? payload.seed ?? 'n/a';
   const model = job.model || payload.model || 'model n/a';
   const canSaveFavorite = Boolean(imageUrl) && status === 'succeeded';
   const saveFavoriteDisabled = favorite || !canSaveFavorite;
@@ -884,9 +930,10 @@ async function refreshFavoritesOnly(message = '') {
   if (message) setStatus(message);
 }
 
-async function refreshModelsOnly(message = '') {
+async function refreshModelsOnly(message = '', options = {}) {
   state.imageModels = await fetchJson('/api/v1/models/refresh', { method: 'POST' });
-  renderControls();
+  if (options.renderControls === false) renderControlChrome();
+  else renderControls();
   if (message) setStatus(message);
 }
 
@@ -922,14 +969,18 @@ function statusLabelForJob(job) {
   return String(job.status);
 }
 
-function resultExtras(result, job) {
+function resultExtras(result, job, submittedPayload = null) {
   const clientStatus = statusLabelForJob(job);
+  const actualSeed = actualSeedForJob(job, result);
   return {
     clientStatus,
+    ...(actualSeed !== null ? { seed: actualSeed } : {}),
     resultUrl: result?.result_url || result?.resultUrl || undefined,
     statusUrl: result?.status_url || result?.statusUrl || undefined,
+    ...(isPlainObject(submittedPayload) ? { requestPayload: clonePayload(submittedPayload) } : {}),
     metadata: {
       clientStatus,
+      ...(actualSeed !== null ? { actualSeed } : {}),
       resultUrl: result?.result_url || result?.resultUrl || undefined,
       statusUrl: result?.status_url || result?.statusUrl || undefined
     }
@@ -940,25 +991,10 @@ function errorJob(error) {
   return isPlainObject(error?.body?.job) ? error.body.job : null;
 }
 
-function generationSettingsStillMatch(submittedPayload) {
-  const currentPayload = buildGenerationPayload();
-  const keys = ['prompt', 'negative_prompt', 'workflow_id', 'model', 'width', 'height', 'steps', 'cfg_scale', 'seed', 'sampler_name', 'scheduler'];
-  return keys.every((key) => String(submittedPayload[key] ?? '') === String(currentPayload[key] ?? ''));
-}
-
-function maybeApplyCompletedSeed(submittedPayload, job) {
-  const seed = job?.seed ?? job?.request?.seed;
-  if (seed === null || seed === undefined || Number(seed) < 0) return;
-  if (!generationSettingsStillMatch(submittedPayload)) return;
-  const seedInput = $('#image-lab-seed');
-  if (seedInput) seedInput.value = String(seed);
-  updatePayloadPreview();
-}
-
 async function finalizeGenerationResult(clientId, submittedPayload, result) {
   const job = result?.job || null;
   if (!job) throw new Error('The generation response did not include a job record.');
-  updatePendingJob(clientId, job, resultExtras(result, job));
+  updatePendingJob(clientId, job, resultExtras(result, job, submittedPayload));
 
   if (job.status && job.status !== 'succeeded') {
     const error = new Error(job.error?.message || `Generation finished with status ${job.status}.`);
@@ -968,9 +1004,8 @@ async function finalizeGenerationResult(clientId, submittedPayload, result) {
 
   state.lastResult = result;
   renderLastResult();
-  maybeApplyCompletedSeed(submittedPayload, job);
-  await Promise.allSettled([refreshGalleryOnly(), refreshModelsOnly()]);
-  const seed = job.seed ?? job.request?.seed ?? 'n/a';
+  await Promise.allSettled([refreshGalleryOnly(), refreshModelsOnly('', { renderControls: false })]);
+  const seed = actualSeedForJob(job, result) ?? 'n/a';
   setStatus(`Generation complete for job ${job.id || 'n/a'}. Actual seed: ${seed}.`);
 }
 
@@ -998,7 +1033,7 @@ async function submitGenerationJob(clientId, payload) {
     const prefix = error?.status === 429 ? 'Generation queue limit reached' : 'Generation failed';
     setStatus(`${prefix}: ${message}`, false);
   } finally {
-    renderControls();
+    renderControlChrome();
   }
 }
 
@@ -1008,7 +1043,7 @@ async function handleGenerate(event) {
     setStatus('Model prewarming is still running. Submit again once the checkpoint is ready.', false);
     return;
   }
-  const payload = buildGenerationPayload();
+  const payload = clonePayload(buildGenerationPayload());
   if (!payload.model) {
     setStatus('Choose a checkpoint before generating.', false);
     return;
@@ -1022,7 +1057,7 @@ async function handleGenerate(event) {
   addPendingJob(pendingJob);
   setStatus(`Queued generation request ${pendingJob.clientSequence}. A pending gallery card was added.`);
   void submitGenerationJob(pendingJob.clientId, payload);
-  renderControls();
+  renderControlChrome();
 }
 
 async function pollGenerationResult(jobId, clientId) {
