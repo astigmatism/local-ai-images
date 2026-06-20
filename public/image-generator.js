@@ -430,34 +430,57 @@ function firstImageUrl(job) {
   return job?.thumbnailUrl || firstArtifact(job)?.url || '';
 }
 
+const ACTUAL_SEED_KEYS = ['actualSeed', 'actual_seed', 'seedUsed', 'seed_used', 'resolvedSeed', 'resolved_seed'];
+
 function normalizedSeedValue(value) {
-  if (value === null || value === undefined || value === '') return null;
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
   const seed = Number(value);
-  if (!Number.isFinite(seed) || seed < 0) return null;
-  return Number.isInteger(seed) ? seed : value;
+  if (!Number.isSafeInteger(seed) || seed < 0) return null;
+  return seed;
+}
+
+function seedFromRecord(record, keys) {
+  if (!isPlainObject(record)) return null;
+  for (const key of keys) {
+    const seed = normalizedSeedValue(record[key]);
+    if (seed !== null) return seed;
+  }
+  return null;
+}
+
+function nestedRecord(record, key) {
+  const value = isPlainObject(record) ? record[key] : null;
+  return isPlainObject(value) ? value : null;
 }
 
 function actualSeedForJob(job, result = null) {
-  const artifact = firstArtifact(job) || (Array.isArray(result?.artifacts) ? result.artifacts.find((item) => item?.url) || result.artifacts[0] : null);
-  const candidates = [
-    job?.seed,
-    job?.metadata?.actualSeed,
-    job?.metadata?.actual_seed,
-    job?.metadata?.seed,
-    job?.request?.seed,
-    result?.seed,
-    result?.actualSeed,
-    result?.actual_seed,
-    result?.metadata?.actualSeed,
-    result?.metadata?.actual_seed,
-    result?.metadata?.seed,
-    artifact?.seed,
-    artifact?.request?.seed,
-    artifact?.requestPayload?.seed,
-    artifact?.request_payload?.seed
-  ];
-  for (const candidate of candidates) {
-    const seed = normalizedSeedValue(candidate);
+  const resultJob = isPlainObject(result?.job) ? result.job : null;
+  const artifact = firstArtifact(job)
+    || (Array.isArray(result?.artifacts) ? result.artifacts.find((item) => item?.url) || result.artifacts[0] : null)
+    || firstArtifact(resultJob);
+  const records = [job, resultJob, result, artifact].filter(isPlainObject);
+  const metadataRecords = records.flatMap((record) => [
+    nestedRecord(record, 'metadata'),
+    nestedRecord(record, 'generation'),
+    nestedRecord(record, 'details'),
+    nestedRecord(record, 'info'),
+    nestedRecord(record, 'providerMetadata'),
+    nestedRecord(record, 'provider_metadata')
+  ]).filter(isPlainObject);
+
+  for (const record of [...records, ...metadataRecords]) {
+    const seed = seedFromRecord(record, ACTUAL_SEED_KEYS);
+    if (seed !== null) return seed;
+  }
+
+  const requestRecords = records.flatMap((record) => [
+    nestedRecord(record, 'request'),
+    nestedRecord(record, 'requestPayload'),
+    nestedRecord(record, 'request_payload')
+  ]).filter(isPlainObject);
+  for (const record of [...records, ...metadataRecords, ...requestRecords]) {
+    const seed = seedFromRecord(record, ['seed']);
     if (seed !== null) return seed;
   }
   return null;
@@ -495,6 +518,31 @@ function jobRequestPayload(job) {
     if (payload[key] === undefined || payload[key] === '') delete payload[key];
   }
   return payload;
+}
+
+function requestPayloadWithSeed(payload, seed) {
+  const resolved = clonePayload(payload);
+  const normalized = normalizedSeedValue(seed);
+  if (normalized !== null) resolved.seed = normalized;
+  return resolved;
+}
+
+function regenerationPayloadForJob(job, result = null) {
+  const payload = jobRequestPayload(job);
+  const actualSeed = actualSeedForJob(job, result);
+  return actualSeed === null ? payload : requestPayloadWithSeed(payload, actualSeed);
+}
+
+function jobForFavoritePayload(job, payload, actualSeed) {
+  const favoriteJob = clonePayload(job);
+  if (actualSeed !== null) {
+    favoriteJob.seed = actualSeed;
+    favoriteJob.requestPayload = clonePayload(payload);
+    favoriteJob.request_payload = clonePayload(payload);
+    if (isPlainObject(favoriteJob.request)) favoriteJob.request = { ...favoriteJob.request, seed: actualSeed };
+    favoriteJob.metadata = { ...(isPlainObject(favoriteJob.metadata) ? favoriteJob.metadata : {}), actualSeed };
+  }
+  return favoriteJob;
 }
 
 function makeClientJobId() {
@@ -557,6 +605,7 @@ function createPendingJob(payload) {
     thumbnailUrl: null,
     request,
     requestPayload,
+    originalRequestPayload: clonePayload(requestPayload),
     metadata: { clientStatus: 'Submitting...' },
     timings: {},
     error: null
@@ -568,23 +617,33 @@ function addPendingJob(job) {
   renderGallery();
 }
 
+function firstPayloadCandidate(candidates) {
+  for (const candidate of candidates) {
+    if (isPlainObject(candidate)) return clonePayload(candidate);
+  }
+  return {};
+}
+
 function mergeJobUpdate(localJob, jobUpdate, extras = {}) {
   const update = isPlainObject(jobUpdate) ? jobUpdate : {};
-  const requestPayload = isPlainObject(localJob.requestPayload)
-    ? clonePayload(localJob.requestPayload)
-    : isPlainObject(extras.requestPayload)
-      ? clonePayload(extras.requestPayload)
-      : isPlainObject(update.requestPayload)
-        ? clonePayload(update.requestPayload)
-        : isPlainObject(update.request_payload)
-          ? clonePayload(update.request_payload)
-          : {};
+  const originalRequestPayload = isPlainObject(localJob.originalRequestPayload)
+    ? clonePayload(localJob.originalRequestPayload)
+    : isPlainObject(localJob.requestPayload)
+      ? clonePayload(localJob.requestPayload)
+      : {};
+  const requestPayload = firstPayloadCandidate([
+    extras.requestPayload,
+    update.requestPayload,
+    update.request_payload,
+    localJob.requestPayload,
+    localJob.request_payload
+  ]);
   const nextMetadata = {
     ...(isPlainObject(localJob.metadata) ? localJob.metadata : {}),
     ...(isPlainObject(update.metadata) ? update.metadata : {}),
     ...(isPlainObject(extras.metadata) ? extras.metadata : {})
   };
-  return {
+  const merged = {
     ...localJob,
     ...update,
     ...extras,
@@ -592,11 +651,20 @@ function mergeJobUpdate(localJob, jobUpdate, extras = {}) {
     clientId: localJob.clientId,
     clientSequence: localJob.clientSequence,
     isClientPending: localJob.isClientPending && !['succeeded', 'failed', 'canceled'].includes(update.status || extras.status || ''),
+    originalRequestPayload,
     requestPayload,
     request: update.request || localJob.request || {},
     metadata: nextMetadata,
     updatedAt: update.updatedAt || extras.updatedAt || new Date().toISOString()
   };
+  const actualSeed = actualSeedForJob(merged);
+  if (actualSeed !== null) {
+    merged.seed = actualSeed;
+    merged.requestPayload = requestPayloadWithSeed(merged.requestPayload, actualSeed);
+    merged.metadata = { ...merged.metadata, actualSeed };
+    if (isPlainObject(merged.request)) merged.request = { ...merged.request, seed: actualSeed };
+  }
+  return merged;
 }
 
 function updatePendingJob(clientId, jobUpdate, extras = {}) {
@@ -809,7 +877,7 @@ function renderGalleryCard(job, index) {
   const imageUrl = firstImageUrl(job);
   const prompt = jobPrompt(job);
   const negative = jobNegativePrompt(job);
-  const payload = jobRequestPayload(job);
+  const payload = regenerationPayloadForJob(job);
   const favorite = favoriteForJob(job);
   const jobId = job?.id || `job-${index + 1}`;
   const status = job.status || 'unknown';
@@ -817,9 +885,12 @@ function renderGalleryCard(job, index) {
   const dimensions = `${job.width ?? job.request?.width ?? payload.width ?? 'n/a'} x ${job.height ?? job.request?.height ?? payload.height ?? 'n/a'}`;
   const seed = actualSeedForJob(job) ?? payload.seed ?? 'n/a';
   const model = job.model || payload.model || 'model n/a';
-  const canSaveFavorite = Boolean(imageUrl) && status === 'succeeded';
+  const hasDeterministicSeed = actualSeedForJob(job) !== null;
+  const canSaveFavorite = Boolean(imageUrl) && status === 'succeeded' && hasDeterministicSeed;
   const saveFavoriteDisabled = favorite || !canSaveFavorite;
-  const favoriteTitle = canSaveFavorite ? '' : ' title="A completed image artifact is required before saving a favorite."';
+  const favoriteTitle = canSaveFavorite
+    ? ''
+    : ` title="${escapeHtml(status === 'succeeded' && !hasDeterministicSeed ? 'This completed image did not expose the actual seed needed for deterministic favorite regeneration.' : 'A completed image artifact is required before saving a favorite.')}"`;
   const cardClasses = ['image-lab-gallery-card'];
   if (status === 'queued' || status === 'running' || job.isClientPending) cardClasses.push('is-pending');
   if (status === 'failed' || status === 'canceled') cardClasses.push('is-failed');
@@ -1005,12 +1076,14 @@ function statusLabelForJob(job) {
 function resultExtras(result, job, submittedPayload = null) {
   const clientStatus = statusLabelForJob(job);
   const actualSeed = actualSeedForJob(job, result);
+  const requestPayload = regenerationPayloadForJob(job, result);
   return {
     clientStatus,
+    requestPayload,
+    ...(isPlainObject(submittedPayload) ? { originalRequestPayload: clonePayload(submittedPayload) } : {}),
     ...(actualSeed !== null ? { seed: actualSeed } : {}),
     resultUrl: result?.result_url || result?.resultUrl || undefined,
     statusUrl: result?.status_url || result?.statusUrl || undefined,
-    ...(isPlainObject(submittedPayload) ? { requestPayload: clonePayload(submittedPayload) } : {}),
     metadata: {
       clientStatus,
       ...(actualSeed !== null ? { actualSeed } : {}),
@@ -1147,13 +1220,18 @@ function defaultFavoriteTitle(job) {
 
 async function saveFavoriteFromJob(job) {
   const artifact = firstArtifact(job);
-  const payload = jobRequestPayload(job);
+  const actualSeed = actualSeedForJob(job);
+  const payload = regenerationPayloadForJob(job);
   if (!artifact?.url && !firstImageUrl(job)) {
     setStatus('Wait until the generated image artifact is available before saving a favorite.', false);
     return;
   }
   if (!isPlainObject(payload) || !payload.prompt) {
     setStatus('This job does not have a usable prompt payload to save.', false);
+    return;
+  }
+  if (actualSeed === null) {
+    setStatus('Cannot save a deterministic favorite because this completed job did not expose the actual seed used. Refresh the gallery and try again, or regenerate with an explicit seed.', false);
     return;
   }
   const title = window.prompt('Save image favorite as:', defaultFavoriteTitle(job));
@@ -1168,10 +1246,10 @@ async function saveFavoriteFromJob(job) {
     artifact_id: artifact?.id || undefined,
     job_id: job?.id || undefined,
     artifact: artifact || undefined,
-    job
+    job: jobForFavoritePayload(job, payload, actualSeed)
   };
   await fetchJson('/api/v1/image-favorites', { method: 'POST', body: JSON.stringify(body) });
-  await refreshFavoritesOnly('Saved image favorite with artifact reference and full request payload.');
+  await refreshFavoritesOnly('Saved image favorite with the actual seed in its regeneration payload.');
 }
 
 function findGalleryJob(button) {
@@ -1198,14 +1276,14 @@ async function handleGalleryClick(event) {
       return;
     }
     if (action === 'load-settings') {
-      const warnings = applyGenerationPayloadToControls(jobRequestPayload(job));
+      const warnings = applyGenerationPayloadToControls(regenerationPayloadForJob(job));
       const warningText = warnings.length ? ` Some fields need attention: ${warnings.join(', ')}.` : '';
       setStatus(`Loaded job settings into the controls.${warningText}`, warnings.length === 0);
       return;
     }
     if (action === 'copy-payload') {
-      await navigator.clipboard.writeText(JSON.stringify(jobRequestPayload(job), null, 2));
-      setStatus('Copied full request payload to clipboard.');
+      await navigator.clipboard.writeText(JSON.stringify(regenerationPayloadForJob(job), null, 2));
+      setStatus('Copied deterministic regeneration payload to clipboard.');
     }
   } catch (error) {
     setStatus(error.message, false);

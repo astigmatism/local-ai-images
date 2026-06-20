@@ -256,7 +256,11 @@ export class ImageJobQueue {
     const now = completedAt ?? new Date().toISOString();
     job.status = 'succeeded';
     job.artifacts = artifacts;
-    job.metadata = metadata;
+    job.metadata = {
+      ...metadata,
+      actualSeed: job.request.seed,
+      seed: job.request.seed
+    };
     job.completedAt = now;
     job.updatedAt = now;
     this.onJobCompleted?.(cloneJob(job));

@@ -43,7 +43,7 @@ export class ImageFavoriteStore {
       throw new AppError('IMAGE_FAVORITE_INVALID_REQUEST', 'Image favorite request must be a JSON object.', 422);
     }
 
-    const requestPayload = readRequestPayload(body);
+    const requestPayload = readResolvedRequestPayload(body, true);
     const derived = deriveFields(requestPayload, this.maxPromptChars);
     const artifact = readArtifact(body);
     const job = readJob(body);
@@ -102,7 +102,7 @@ export class ImageFavoriteStore {
     }
 
     if (hasRequestPayload(body)) {
-      const requestPayload = readRequestPayload(body);
+      const requestPayload = readResolvedRequestPayload(body, true);
       next = {
         ...next,
         requestPayload,
@@ -195,6 +195,30 @@ interface DerivedFields {
   seed: string | number | null;
 }
 
+function readResolvedRequestPayload(body: Record<string, unknown>, requireDeterministicSeed: boolean): Record<string, unknown> {
+  const requestPayload = readRequestPayload(body);
+  const actualSeed = actualSeedFromFavoriteInput(body, requestPayload);
+  if (actualSeed !== null) {
+    return { ...requestPayload, seed: actualSeed };
+  }
+
+  const requestSeed = normalizedSeedValue(requestPayload.seed);
+  if (requestSeed !== null) {
+    return { ...requestPayload, seed: requestSeed };
+  }
+
+  if (requireDeterministicSeed) {
+    throw new AppError(
+      'IMAGE_FAVORITE_ACTUAL_SEED_REQUIRED',
+      'Cannot save a deterministic image favorite because the completed job or artifact did not expose the actual seed used. Wait for completion, refresh the gallery, or regenerate with an explicit seed before saving.',
+      422,
+      { seed: requestPayload.seed ?? null }
+    );
+  }
+
+  return requestPayload;
+}
+
 function readRequestPayload(body: Record<string, unknown>): Record<string, unknown> {
   const candidate = body.request_payload ?? body.requestPayload ?? body.payload ?? body.request;
   if (isRecord(candidate)) return cloneRecord(candidate);
@@ -208,6 +232,77 @@ function readRequestPayload(body: Record<string, unknown>): Record<string, unkno
   if (isRecord(artifactPayload)) return cloneRecord(artifactPayload);
 
   throw new AppError('IMAGE_FAVORITE_PAYLOAD_REQUIRED', 'request_payload/requestPayload must be a JSON object, or a job/artifact with a request payload must be provided.', 422);
+}
+
+const ACTUAL_SEED_KEYS = ['actualSeed', 'actual_seed', 'seedUsed', 'seed_used', 'resolvedSeed', 'resolved_seed'];
+
+function actualSeedFromFavoriteInput(body: Record<string, unknown>, requestPayload: Record<string, unknown>): number | null {
+  const job = isRecord(body.job) ? body.job : null;
+  const bodyMetadata = isRecord(body.metadata) ? body.metadata : null;
+  const artifacts = favoriteArtifactRecords(body, job);
+  const directRecords = [body, bodyMetadata, job, ...artifacts].filter(isRecord);
+  const nestedRecords = directRecords.flatMap((record) => [
+    nestedRecord(record, 'metadata'),
+    nestedRecord(record, 'generation'),
+    nestedRecord(record, 'details'),
+    nestedRecord(record, 'info'),
+    nestedRecord(record, 'providerMetadata'),
+    nestedRecord(record, 'provider_metadata')
+  ]).filter(isRecord);
+
+  for (const record of [...directRecords, ...nestedRecords]) {
+    const seed = firstNormalizedSeed(record, ACTUAL_SEED_KEYS);
+    if (seed !== null) return seed;
+  }
+
+  const requestRecords = directRecords.flatMap((record) => [
+    nestedRecord(record, 'request'),
+    nestedRecord(record, 'requestPayload'),
+    nestedRecord(record, 'request_payload')
+  ]).filter(isRecord);
+  for (const record of [...directRecords, ...nestedRecords, ...requestRecords, requestPayload]) {
+    const seed = firstNormalizedSeed(record, ['seed']);
+    if (seed !== null) return seed;
+  }
+
+  return null;
+}
+
+function favoriteArtifactRecords(body: Record<string, unknown>, job: Record<string, unknown> | null): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  const direct = body.artifact ?? body.artifact_metadata ?? body.artifactMetadata;
+  if (isRecord(direct)) records.push(direct);
+  if (Array.isArray(body.artifacts)) records.push(...body.artifacts.filter(isRecord));
+  if (Array.isArray(job?.artifacts)) records.push(...job.artifacts.filter(isRecord));
+  return records;
+}
+
+function requestPayloadWithStoredActualSeed(requestPayload: Record<string, unknown>, favorite: Record<string, unknown>): Record<string, unknown> {
+  const actualSeed = actualSeedFromFavoriteInput(favorite, requestPayload);
+  if (actualSeed !== null) return { ...requestPayload, seed: actualSeed };
+  const requestSeed = normalizedSeedValue(requestPayload.seed);
+  return requestSeed === null ? requestPayload : { ...requestPayload, seed: requestSeed };
+}
+
+function nestedRecord(record: Record<string, unknown> | null | undefined, key: string): Record<string, unknown> | null {
+  const value = record?.[key];
+  return isRecord(value) ? value : null;
+}
+
+function firstNormalizedSeed(record: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const seed = normalizedSeedValue(record[key]);
+    if (seed !== null) return seed;
+  }
+  return null;
+}
+
+function normalizedSeedValue(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  const seed = Number(value);
+  if (!Number.isSafeInteger(seed) || seed < 0) return null;
+  return seed;
 }
 
 function hasRequestPayload(body: Record<string, unknown>): boolean {
@@ -260,9 +355,10 @@ function normalizeStoredFavorite(value: unknown, maxPromptChars: number): ImageF
   if (!isRecord(value) || typeof value.id !== 'string' || !isRecord(value.requestPayload)) return null;
   const createdAt = typeof value.createdAt === 'string' ? value.createdAt : new Date().toISOString();
   const updatedAt = typeof value.updatedAt === 'string' ? value.updatedAt : createdAt;
+  const requestPayload = requestPayloadWithStoredActualSeed(cloneRecord(value.requestPayload), value);
   let derived: DerivedFields;
   try {
-    derived = deriveFields(value.requestPayload, maxPromptChars);
+    derived = deriveFields(requestPayload, maxPromptChars);
   } catch {
     derived = {
       prompt: typeof value.prompt === 'string' ? value.prompt : '',
@@ -286,7 +382,7 @@ function normalizeStoredFavorite(value: unknown, maxPromptChars: number): ImageF
     id: value.id,
     title: typeof value.title === 'string' && value.title.trim() ? value.title : normalizeTitle(null, derived.prompt, stringField(value, 'jobId')),
     ...(hasOwn(value, 'description') ? { description: typeof value.description === 'string' || value.description === null ? value.description : null } : {}),
-    requestPayload: cloneRecord(value.requestPayload),
+    requestPayload,
     ...derived,
     ...(readOptionalStoredString(value, 'imageUrl') !== undefined ? { imageUrl: readOptionalStoredString(value, 'imageUrl') } : {}),
     ...(readOptionalStoredString(value, 'artifactId') !== undefined ? { artifactId: readOptionalStoredString(value, 'artifactId') } : {}),

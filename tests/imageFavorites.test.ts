@@ -127,6 +127,128 @@ test('image favorite endpoints persist generated artifacts and full request payl
   });
 });
 
+test('image favorites resolve stale random request payload seeds from completed job metadata', async () => {
+  const runtimeConfig = await tempGeneratorRuntimeConfig();
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    const generated = await (await fetch(`${baseUrl}/api/v1/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        prompt: 'a favorite with a resolved random seed',
+        negative_prompt: 'low detail',
+        model: 'demo.safetensors',
+        workflow_id: 'sdxl-text-to-image',
+        width: 768,
+        height: 768,
+        steps: 18,
+        cfg_scale: 6.5,
+        seed: -1,
+        sampler_name: 'euler',
+        scheduler: 'normal',
+        output: 'url',
+        sync_timeout_ms: 1000
+      })
+    })).json();
+
+    assert.equal(generated.ok, true);
+    const actualSeed = generated.job.seed;
+    assert.equal(Number.isSafeInteger(actualSeed), true);
+    assert.notEqual(actualSeed, -1);
+
+    const staleRandomPayload = { ...generated.job.requestPayload, seed: -1 };
+    const created = await (await fetch(`${baseUrl}/api/v1/image-favorites`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Resolved random seed favorite',
+        request_payload: staleRandomPayload,
+        image_url: generated.artifacts[0].url,
+        artifact_id: generated.artifacts[0].id,
+        artifact: generated.artifacts[0],
+        job_id: generated.job.id,
+        job: generated.job
+      })
+    })).json();
+
+    assert.equal(created.ok, true);
+    assert.equal(created.favorite.seed, actualSeed);
+    assert.equal(created.favorite.requestPayload.seed, actualSeed);
+    assert.notEqual(created.favorite.requestPayload.seed, -1);
+
+    const regenerated = await (await fetch(`${baseUrl}/api/v1/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(created.favorite.requestPayload)
+    })).json();
+    assert.equal(regenerated.ok, true);
+    assert.equal(regenerated.job.seed, actualSeed);
+
+    const nestedSeed = 246813579;
+    const nested = await (await fetch(`${baseUrl}/api/v1/image-favorites`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Nested string seed favorite',
+        request_payload: {
+          prompt: 'nested string seed favorite',
+          negative_prompt: 'noise',
+          model: 'demo.safetensors',
+          workflow_id: 'sdxl-text-to-image',
+          width: 512,
+          height: 512,
+          steps: 10,
+          cfg_scale: 5,
+          seed: -1,
+          sampler_name: 'euler',
+          scheduler: 'normal',
+          output: 'url',
+          sync_timeout_ms: 0
+        },
+        image_url: '/api/v1/artifacts/nested-string-seed',
+        artifact_id: 'nested-string-seed',
+        job: {
+          id: 'nested-string-seed-job',
+          metadata: { seedUsed: String(nestedSeed) }
+        }
+      })
+    })).json();
+    assert.equal(nested.ok, true);
+    assert.equal(nested.favorite.seed, nestedSeed);
+    assert.equal(nested.favorite.requestPayload.seed, nestedSeed);
+
+    const missingSeed = await fetch(`${baseUrl}/api/v1/image-favorites`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        request_payload: {
+          prompt: 'missing actual seed favorite',
+          model: 'demo.safetensors',
+          workflow_id: 'sdxl-text-to-image',
+          width: 512,
+          height: 512,
+          steps: 8,
+          cfg_scale: 5,
+          seed: -1,
+          sampler_name: 'euler',
+          scheduler: 'normal',
+          output: 'url',
+          sync_timeout_ms: 0
+        },
+        image_url: '/api/v1/artifacts/missing-actual-seed'
+      })
+    });
+    assert.equal(missingSeed.status, 422);
+    const missingSeedBody = await missingSeed.json();
+    assert.equal(missingSeedBody.error.code, 'IMAGE_FAVORITE_ACTUAL_SEED_REQUIRED');
+  });
+});
+
 test('image generator portal route, asset, and persisted favorites survive runtime recreation', async () => {
   const runtimeConfig = await tempGeneratorRuntimeConfig();
   let favoriteId = '';
