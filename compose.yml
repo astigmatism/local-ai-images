@@ -1,0 +1,100 @@
+name: local-ai-images
+
+x-nvidia-all-gpus: &nvidia_all_gpus
+  driver: nvidia
+  count: all
+  capabilities: [gpu]
+
+services:
+  app:
+    container_name: local-ai-images
+    image: ${LOCAL_AI_IMAGES_IMAGE:-local-ai-images:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+
+    env_file:
+      - path: ./.env
+        required: false
+
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8000
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+      IMAGE_GENERATION_ENABLED: ${IMAGE_GENERATION_ENABLED:-true}
+      IMAGE_BACKEND: ${IMAGE_BACKEND:-comfyui}
+
+      # Default assumes ComfyUI is reachable from this container through the Docker host.
+      # If ComfyUI is later added as a service in this same Compose project, change to:
+      # COMFYUI_BASE_URL=http://comfyui:8188
+      COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://host.docker.internal:8188}
+
+      CONFIG_PATH: /app/config/local-ai-images.json
+      IMAGE_WORKFLOW_PATH: /app/config/workflows
+      IMAGE_ARTIFACT_PATH: /app/data/artifacts
+      IMAGE_ARTIFACT_PUBLIC_BASE_URL: /api/v1/artifacts
+
+      # Shared host model root mounted into the container.
+      # Host default: /home/astigmatism/ai/models
+      # Container path: /models
+      IMAGE_MODEL_PATHS: /models
+
+      # These are conventional ComfyUI-compatible install/delete destinations inside
+      # the same mounted /models tree. They do not require the folders to exist up front.
+      COMFYUI_CHECKPOINT_PATH: /models/checkpoints
+      COMFYUI_LORA_PATH: /models/loras
+      COMFYUI_VAE_PATH: /models/vae
+      COMFYUI_CONTROLNET_PATH: /models/controlnet
+      COMFYUI_UPSCALER_PATH: /models/upscale_models
+      COMFYUI_OTHER_MODEL_PATH: /models
+
+      IMAGE_DEFAULT_WORKFLOW_ID: ${IMAGE_DEFAULT_WORKFLOW_ID:-sdxl-text-to-image}
+      IMAGE_DEFAULT_MODEL: ${IMAGE_DEFAULT_MODEL:-}
+      IMAGE_PRELOAD_DEFAULT_ON_STARTUP: ${IMAGE_PRELOAD_DEFAULT_ON_STARTUP:-false}
+      IMAGE_PRELOAD_TIMEOUT_MS: ${IMAGE_PRELOAD_TIMEOUT_MS:-120000}
+      IMAGE_PRELOAD_WORKFLOW_ID: ${IMAGE_PRELOAD_WORKFLOW_ID:-sdxl-text-to-image}
+      IMAGE_PRELOAD_WIDTH: ${IMAGE_PRELOAD_WIDTH:-512}
+      IMAGE_PRELOAD_HEIGHT: ${IMAGE_PRELOAD_HEIGHT:-512}
+      IMAGE_PRELOAD_STEPS: ${IMAGE_PRELOAD_STEPS:-1}
+      IMAGE_PRELOAD_KEEP_ARTIFACT: ${IMAGE_PRELOAD_KEEP_ARTIFACT:-false}
+      IMAGE_QUEUE_CONCURRENCY: ${IMAGE_QUEUE_CONCURRENCY:-1}
+      IMAGE_MAX_QUEUED_JOBS: ${IMAGE_MAX_QUEUED_JOBS:-32}
+
+      REQUIRE_IMAGE_API_AUTH: ${REQUIRE_IMAGE_API_AUTH:-true}
+      IMAGE_API_KEYS: ${IMAGE_API_KEYS:-replace-with-a-long-random-secret}
+
+      MODEL_INSTALLS_ENABLED: ${MODEL_INSTALLS_ENABLED:-false}
+      MODEL_INSTALL_MAX_BYTES: ${MODEL_INSTALL_MAX_BYTES:-21474836480}
+      MODEL_INSTALL_ALLOW_CKPT: ${MODEL_INSTALL_ALLOW_CKPT:-false}
+      MODEL_CATALOG_PATH: /app/config/model-catalog.json
+      MODEL_DOWNLOAD_METADATA_PATH: /app/config/model-downloads.json
+
+      LEGACY_OLLAMA_ENABLED: ${LEGACY_OLLAMA_ENABLED:-false}
+
+    ports:
+      - "${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-8000}:8000"
+
+    volumes:
+      - ./config:/app/config
+      - ${AI_ROOT:-/home/astigmatism/ai}/models:/models
+      - ${AI_ROOT:-/home/astigmatism/ai}/outputs/${PROJECT_SLUG:-local-ai-images}:/app/data/artifacts
+      - ${AI_ROOT:-/home/astigmatism/ai}/cache:/cache
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - *nvidia_all_gpus
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
