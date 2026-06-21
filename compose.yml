@@ -7,6 +7,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        COMFYUI_REF: ${COMFYUI_REF:-master}
+        PYTORCH_INDEX_URL: ${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}
     restart: unless-stopped
 
     env_file:
@@ -19,13 +22,13 @@ services:
       PORT: 8000
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
 
+      COMFYUI_HOST: 127.0.0.1
+      COMFYUI_PORT: 8188
+      COMFYUI_OUTPUT_DIR: /app/data/artifacts/comfyui-output
+
       IMAGE_GENERATION_ENABLED: ${IMAGE_GENERATION_ENABLED:-true}
       IMAGE_BACKEND: ${IMAGE_BACKEND:-comfyui}
-
-      # Default assumes ComfyUI is reachable from this container through the Docker host.
-      # If ComfyUI is later added as a service in this same Compose project, change to:
-      # COMFYUI_BASE_URL=http://comfyui:8188
-      COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://host.docker.internal:8188}
+      COMFYUI_BASE_URL: http://127.0.0.1:8188
 
       CONFIG_PATH: /app/config/local-ai-images.json
       IMAGE_WORKFLOW_PATH: /app/config/workflows
@@ -37,8 +40,7 @@ services:
       # Container path: /models
       IMAGE_MODEL_PATHS: /models
 
-      # These are conventional ComfyUI-compatible install/delete destinations inside
-      # the same mounted /models tree. They do not require the folders to exist up front.
+      # ComfyUI model destinations inside the shared mounted /models tree.
       COMFYUI_CHECKPOINT_PATH: /models/checkpoints
       COMFYUI_LORA_PATH: /models/loras
       COMFYUI_VAE_PATH: /models/vae
@@ -78,9 +80,6 @@ services:
       - ${AI_ROOT:-/home/astigmatism/ai}/outputs/${PROJECT_SLUG:-local-ai-images-legacy}:/app/data/artifacts
       - ${AI_ROOT:-/home/astigmatism/ai}/cache:/cache
 
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
     deploy:
       resources:
         reservations:
@@ -94,5 +93,5 @@ services:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 5s
-      start_period: 20s
-      retries: 3
+      start_period: 90s
+      retries: 5
