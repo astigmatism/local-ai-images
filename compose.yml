@@ -1,4 +1,4 @@
-name: local-ai-images
+name: ${PROJECT_SLUG:-local-ai-images-legacy}
 
 x-nvidia-all-gpus: &nvidia_all_gpus
   driver: nvidia
@@ -7,8 +7,8 @@ x-nvidia-all-gpus: &nvidia_all_gpus
 
 services:
   app:
-    container_name: local-ai-images
-    image: ${LOCAL_AI_IMAGES_IMAGE:-local-ai-images:local}
+    container_name: ${PROJECT_SLUG:-local-ai-images-legacy}
+    image: ${LOCAL_AI_IMAGES_IMAGE:-local-ai-images-legacy:local}
     build:
       context: .
       dockerfile: Dockerfile
@@ -80,7 +80,7 @@ services:
     volumes:
       - ./config:/app/config
       - ${AI_ROOT:-/home/astigmatism/ai}/models:/models
-      - ${AI_ROOT:-/home/astigmatism/ai}/outputs/${PROJECT_SLUG:-local-ai-images}:/app/data/artifacts
+      - ${AI_ROOT:-/home/astigmatism/ai}/outputs/${PROJECT_SLUG:-local-ai-images-legacy}:/app/data/artifacts
       - ${AI_ROOT:-/home/astigmatism/ai}/cache:/cache
 
     extra_hosts:
