@@ -1,10 +1,5 @@
 name: ${PROJECT_SLUG:-local-ai-images-legacy}
 
-x-nvidia-all-gpus: &nvidia_all_gpus
-  driver: nvidia
-  count: all
-  capabilities: [gpu]
-
 services:
   app:
     container_name: ${PROJECT_SLUG:-local-ai-images-legacy}
@@ -90,7 +85,10 @@ services:
       resources:
         reservations:
           devices:
-            - *nvidia_all_gpus
+            - driver: nvidia
+              device_ids:
+                - "${GPU_DEVICE_ID:?set GPU_DEVICE_ID to the NVIDIA GPU UUID assigned to this container}"
+              capabilities: [gpu]
 
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
