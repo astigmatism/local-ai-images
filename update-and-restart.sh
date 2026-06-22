@@ -84,6 +84,46 @@ build_health_url() {
   printf 'http://%s:%s/health\n' "$host" "$web_port"
 }
 
+image_name() {
+  read_env_value LOCAL_AI_IMAGES_IMAGE .env 2>/dev/null || printf 'local-ai-images-legacy:local\n'
+}
+
+ensure_artifacts_volume() {
+  local volume_name
+
+  volume_name="$(read_env_value LOCAL_AI_IMAGES_ARTIFACTS_VOLUME_NAME .env || true)"
+  volume_name="${volume_name:-local-ai-images-legacy_artifacts}"
+
+  if docker volume inspect "$volume_name" >/dev/null 2>&1; then
+    log "Artifacts volume exists: $volume_name"
+  else
+    log "Creating artifacts volume: $volume_name"
+    docker volume create "$volume_name" >/dev/null
+  fi
+}
+
+should_rebuild_for_changed_files() {
+  local changed_file
+
+  if [ "${FULL_REBUILD:-false}" = "true" ]; then
+    return 0
+  fi
+
+  if [ "${SKIP_REBUILD:-false}" = "true" ]; then
+    return 1
+  fi
+
+  while IFS= read -r changed_file; do
+    case "$changed_file" in
+      Dockerfile|docker-entrypoint.sh|package.json|package-lock.json)
+        return 0
+        ;;
+    esac
+  done < /tmp/local-ai-images-changed-files.txt
+
+  return 1
+}
+
 cd "$APP_DIR"
 
 log "Using application directory: $APP_DIR"
@@ -95,10 +135,15 @@ require_command curl
 
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required: docker compose"
 
+before_rev=""
+after_rev=""
+
 if [ -d .git ]; then
   if ! git diff --quiet || ! git diff --cached --quiet; then
     fail "Tracked working tree changes are present. Commit, stash, or revert them before deploying."
   fi
+
+  before_rev="$(git rev-parse HEAD)"
 
   if [ -z "${GIT_SSH_COMMAND:-}" ] && [ -f "$DEPLOY_KEY_PATH" ]; then
     export GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY_PATH -o IdentitiesOnly=yes"
@@ -108,8 +153,17 @@ if [ -d .git ]; then
   log "Pulling latest git changes"
   git fetch --all --prune
   git pull --ff-only
+
+  after_rev="$(git rev-parse HEAD)"
+
+  if [ "$before_rev" != "$after_rev" ]; then
+    git diff --name-only "$before_rev" "$after_rev" > /tmp/local-ai-images-changed-files.txt
+  else
+    : > /tmp/local-ai-images-changed-files.txt
+  fi
 else
   log "No .git directory found; skipping git pull for this source package"
+  : > /tmp/local-ai-images-changed-files.txt
 fi
 
 if [ -n "${GPU_PROFILE:-}" ]; then
@@ -130,15 +184,32 @@ fi
 log "Active runtime settings"
 grep -E '^(LOCAL_AI_IMAGES_PROJECT_NAME|LOCAL_AI_IMAGES_CONTAINER_NAME|LOCAL_AI_IMAGES_ARTIFACTS_VOLUME_NAME|WEB_BIND_IP|WEB_PORT|GPU_DEVICE_ID)=' .env || true
 
+ensure_artifacts_volume
+
 log "Rendering Compose configuration"
 compose config >/tmp/local-ai-images-compose.yml
 
-log "Building Docker image"
-build_args=()
-if [ "${NO_CACHE:-false}" = "true" ]; then
-  build_args+=(--no-cache)
+selected_image="$(image_name)"
+
+if ! docker image inspect "$selected_image" >/dev/null 2>&1; then
+  log "Docker image is missing and must be built: $selected_image"
+  FULL_REBUILD=true
 fi
-compose build "${build_args[@]}" "$COMPOSE_SERVICE"
+
+if should_rebuild_for_changed_files; then
+  log "Building Docker image"
+  build_args=()
+  if [ "${NO_CACHE:-false}" = "true" ]; then
+    build_args+=(--no-cache)
+  fi
+  compose build "${build_args[@]}" "$COMPOSE_SERVICE"
+else
+  log "Skipping Docker image build; app source is bind-mounted into the container"
+  if [ -s /tmp/local-ai-images-changed-files.txt ]; then
+    log "Changed files since previous deploy:"
+    sed 's/^/[local-ai-images]   /' /tmp/local-ai-images-changed-files.txt
+  fi
+fi
 
 log "Recreating Docker container"
 compose up -d --force-recreate "$COMPOSE_SERVICE"

@@ -35,12 +35,8 @@ services:
       IMAGE_ARTIFACT_PATH: /app/data/artifacts
       IMAGE_ARTIFACT_PUBLIC_BASE_URL: /api/v1/artifacts
 
-      # Shared host model root mounted into the container.
-      # Host default: /home/astigmatism/ai/models
-      # Container path: /models
       IMAGE_MODEL_PATHS: /models
 
-      # ComfyUI model destinations inside the shared mounted /models tree.
       COMFYUI_CHECKPOINT_PATH: /models/checkpoints
       COMFYUI_LORA_PATH: /models/loras
       COMFYUI_VAE_PATH: /models/vae
@@ -75,6 +71,17 @@ services:
       - "${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-8000}:8000"
 
     volumes:
+      # Live-mounted app source. Normal app updates no longer require rebuilding the image.
+      - ./src:/app/src:ro
+      - ./public:/app/public:ro
+      - ./docs:/app/docs:ro
+      - ./deploy:/app/deploy:ro
+      - ./package.json:/app/package.json:ro
+      - ./package-lock.json:/app/package-lock.json:ro
+      - ./tsconfig.json:/app/tsconfig.json:ro
+      - ./README.md:/app/README.md:ro
+
+      # Runtime/local state and external model/cache/artifact storage.
       - ./config:/app/config
       - ${AI_ROOT:-/home/astigmatism/ai}/models:/models
       - ${AI_ROOT:-/home/astigmatism/ai}/cache:/cache
@@ -99,3 +106,4 @@ services:
 volumes:
   artifacts:
     name: ${LOCAL_AI_IMAGES_ARTIFACTS_VOLUME_NAME:-local-ai-images-legacy_artifacts}
+    external: true
