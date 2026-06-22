@@ -52,7 +52,7 @@ What this does:
   4. Recreates the Docker Compose app container without rebuilding the image.
   5. Waits for health.
   6. Sets the selected checkpoint as the app default through the local API.
-  7. Optionally preloads the selected checkpoint.
+  7. Optionally ensures the selected checkpoint is loaded.
 
 Environment overrides:
   APP_DIR=/path/to/repo
@@ -65,6 +65,7 @@ Environment overrides:
   PRELOAD_WIDTH=512
   PRELOAD_HEIGHT=512
   PRELOAD_STEPS=1
+  PRELOAD_WAIT_TIMEOUT_SECONDS=240
 EOF
 }
 
@@ -395,25 +396,128 @@ PY
     "$base_url/api/v1/models/default" >/tmp/local-ai-images-set-default-response.json
 }
 
-preload_model_via_api() {
+ensure_model_loaded_via_api() {
   local base_url="$1"
+  local checkpoint_file="$2"
+  local timeout_seconds="${PRELOAD_WAIT_TIMEOUT_SECONDS:-240}"
 
-  python3 - >/tmp/local-ai-images-preload.json <<'PY'
+  python3 - "$base_url" "$checkpoint_file" "$timeout_seconds" <<'PY'
 import json
+import sys
+import time
+import urllib.error
+import urllib.request
 
-print(json.dumps({
+base_url = sys.argv[1].rstrip("/")
+checkpoint_file = sys.argv[2]
+timeout_seconds = int(sys.argv[3])
+
+preload_payload = json.dumps({
     "workflow_id": "sdxl-text-to-image",
     "width": 512,
     "height": 512,
     "steps": 1,
-    "keep_artifact": False
-}))
-PY
+    "keep_artifact": False,
+}).encode("utf-8")
 
-  curl -fsS -X POST \
-    -H "content-type: application/json" \
-    -d @/tmp/local-ai-images-preload.json \
-    "$base_url/api/v1/models/preload" >/tmp/local-ai-images-preload-response.json
+
+def request_json(method, path, payload=None):
+    req = urllib.request.Request(
+        f"{base_url}{path}",
+        data=payload,
+        method=method,
+        headers={"content-type": "application/json"},
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            body = response.read().decode("utf-8")
+            return response.status, json.loads(body) if body else {}
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            parsed = {"raw": body}
+        return exc.code, parsed
+
+
+def health_preload_state():
+    status, data = request_json("GET", "/health")
+    if status < 200 or status >= 300:
+        raise RuntimeError(f"health returned HTTP {status}: {data}")
+
+    models = data.get("models", {})
+    preload = models.get("preload", {}) or {}
+
+    return {
+        "default_model": models.get("default_model"),
+        "current_default": preload.get("currentDefaultCheckpoint") or preload.get("current_default_checkpoint"),
+        "active": bool(preload.get("active")),
+        "last_result": preload.get("lastPreloadResult") or preload.get("last_preload_result"),
+        "last_error": preload.get("lastPreloadError") or preload.get("last_preload_error"),
+        "last_model": preload.get("lastPreloadModel") or preload.get("last_preload_model"),
+        "confirmed": preload.get("lastConfirmedLoadedModel") or preload.get("last_confirmed_loaded_model"),
+    }
+
+
+def is_loaded(state):
+    return state.get("confirmed") == checkpoint_file and not state.get("active")
+
+
+def print_state(prefix, state):
+    print(
+        f"[local-ai-images] {prefix}: "
+        f"default={state.get('default_model')} "
+        f"current={state.get('current_default')} "
+        f"confirmed={state.get('confirmed')} "
+        f"active={state.get('active')} "
+        f"last_result={state.get('last_result')}"
+    )
+
+
+deadline = time.time() + timeout_seconds
+
+state = health_preload_state()
+print_state("preload state before request", state)
+
+if is_loaded(state):
+    print(f"[local-ai-images] Selected checkpoint is already loaded: {checkpoint_file}")
+    sys.exit(0)
+
+while state.get("active") and time.time() < deadline:
+    print("[local-ai-images] Preload is already active; waiting before making another preload request")
+    time.sleep(2)
+    state = health_preload_state()
+    print_state("preload state while waiting", state)
+
+    if is_loaded(state):
+        print(f"[local-ai-images] Selected checkpoint is loaded: {checkpoint_file}")
+        sys.exit(0)
+
+status, response = request_json("POST", "/api/v1/models/preload", preload_payload)
+
+if status == 409:
+    print(f"[local-ai-images] Preload endpoint returned 409; treating as busy and polling health: {response}")
+elif status < 200 or status >= 300:
+    raise RuntimeError(f"preload returned HTTP {status}: {response}")
+else:
+    print("[local-ai-images] Preload request accepted")
+
+while time.time() < deadline:
+    time.sleep(2)
+    state = health_preload_state()
+    print_state("preload state after request", state)
+
+    if is_loaded(state):
+        print(f"[local-ai-images] Selected checkpoint is loaded: {checkpoint_file}")
+        sys.exit(0)
+
+    if not state.get("active") and state.get("last_result") == "failed":
+        raise RuntimeError(f"preload failed: {state.get('last_error')}")
+
+raise RuntimeError(f"Timed out waiting for checkpoint to load: {checkpoint_file}")
+PY
 }
 
 if [ "${1:-}" = "help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
@@ -489,8 +593,8 @@ log "Setting selected checkpoint as app default"
 set_default_model_via_api "$base_url" "$checkpoint_file"
 
 if [ "$preload_model" = "true" ]; then
-  log "Preloading selected checkpoint"
-  preload_model_via_api "$base_url"
+  log "Ensuring selected checkpoint is loaded"
+  ensure_model_loaded_via_api "$base_url" "$checkpoint_file"
 else
   log "Skipping preload because PRELOAD_MODEL=$preload_model"
 fi
