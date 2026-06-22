@@ -1,8 +1,8 @@
-name: ${PROJECT_SLUG:-local-ai-images-legacy}
+name: ${LOCAL_AI_IMAGES_PROJECT_NAME:-local-ai-images-legacy}
 
 services:
   app:
-    container_name: ${PROJECT_SLUG:-local-ai-images-legacy}
+    container_name: ${LOCAL_AI_IMAGES_CONTAINER_NAME:-local-ai-images-legacy}
     image: ${LOCAL_AI_IMAGES_IMAGE:-local-ai-images-legacy:local}
     build:
       context: .
@@ -98,3 +98,4 @@ services:
 
 volumes:
   artifacts:
+    name: ${LOCAL_AI_IMAGES_ARTIFACTS_VOLUME_NAME:-local-ai-images-legacy_artifacts}
