@@ -16,43 +16,51 @@ fail() {
 }
 
 usage() {
-  cat <<'EOF'
+  cat <<'EOF_USAGE'
 Usage:
-  ./deploy-runtime.sh <gpu> <checkpoint>
   ./deploy-runtime.sh list
+  ./deploy-runtime.sh plan --gpu-device-ids <GPU-UUID> --model <checkpoint>
+  ./deploy-runtime.sh deploy --gpu-device-ids <GPU-UUID> --model <checkpoint>
+  ./deploy-runtime.sh <GPU-UUID> <checkpoint>
   ./deploy-runtime.sh help
 
-GPU argument:
-  The first argument is resolved against GPUs detected on the host with nvidia-smi.
+GPU assignment:
+  local-ai-images has exactly one schedulable GPU slot.
 
-  Accepted forms include:
-    0
-    1
-    3090
-    4080
-    4080-super
-    RTX 3090
-    NVIDIA GeForce RTX 3090
+  Deployment accepts full NVIDIA GPU UUIDs only, for example:
     GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+  Do not pass GPU numeric indexes, GPU model names, friendly aliases, or "all".
+  A scheduler or operator should run list/discovery first, select an installed GPU
+  UUID, and then pass that UUID to plan or deploy.
 
 Checkpoint argument:
   Pass a checkpoint filename from the checkpoints directory.
   The .safetensors suffix may be omitted when the name resolves uniquely.
 
 Examples:
-  ./deploy-runtime.sh 0 waiIllustriousSDXL_v170.safetensors
-  ./deploy-runtime.sh 3090 waiIllustriousSDXL_v170.safetensors
-  ./deploy-runtime.sh 4080-super Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors
-  ./deploy-runtime.sh "RTX 3090" RealVisXL_V5.0_fp16
+  ./deploy-runtime.sh list
+  ./deploy-runtime.sh plan --gpu-device-ids GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx --model waiIllustriousSDXL_v170.safetensors
+  ./deploy-runtime.sh deploy --gpu-device-ids GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx --model waiIllustriousSDXL_v170.safetensors
+  ./deploy-runtime.sh GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx waiIllustriousSDXL_v170.safetensors
 
-What this does:
-  1. Resolves the GPU argument from the host's current nvidia-smi inventory.
+What deploy does:
+  1. Validates the requested GPU UUID against live host nvidia-smi inventory.
   2. Resolves the checkpoint argument from the checkpoints directory.
   3. Generates the active .env file.
-  4. Recreates the Docker Compose app container without rebuilding the image.
-  5. Waits for health.
-  6. Sets the selected checkpoint as the app default through the local API.
-  7. Optionally ensures the selected checkpoint is loaded.
+  4. Ensures the persistent artifact volume exists.
+  5. Renders and validates Docker Compose configuration.
+  6. Recreates the Docker Compose app container without rebuilding the image.
+  7. Waits for health.
+  8. Sets the selected checkpoint as the app default through the local API.
+  9. Optionally ensures the selected checkpoint is loaded.
+  10. Prints the container status and visible GPU inside the container.
+
+What plan does:
+  1. Validates the requested GPU UUID against live host nvidia-smi inventory.
+  2. Resolves the checkpoint argument from the checkpoints directory.
+  3. Prints the generated runtime values that would be used.
+  4. Makes no filesystem, Docker, Compose, or API changes.
 
 Environment overrides:
   APP_DIR=/path/to/repo
@@ -66,7 +74,7 @@ Environment overrides:
   PRELOAD_HEIGHT=512
   PRELOAD_STEPS=1
   PRELOAD_WAIT_TIMEOUT_SECONDS=240
-EOF
+EOF_USAGE
 }
 
 require_command() {
@@ -109,28 +117,52 @@ list_gpus() {
   fi
 
   echo "Detected host GPUs:"
-  nvidia-smi --query-gpu=index,uuid,name,memory.total --format=csv
+  nvidia-smi --query-gpu=index,uuid,name,memory.total,memory.free --format=csv
+  echo
+  echo "Deploy inputs must use the uuid value exactly. Do not use index or name values as deploy arguments."
 }
 
-resolve_gpu_uuid() {
+validate_single_gpu_device_id() {
   local requested="$1"
+
+  if [ -z "$requested" ]; then
+    fail "GPU device ID is required."
+  fi
+
+  if [ "$requested" = "all" ] || [ "$requested" = "ALL" ]; then
+    fail "local-ai-images requires exactly one GPU UUID. The value 'all' is not allowed."
+  fi
+
+  if [[ "$requested" == *,* ]]; then
+    fail "local-ai-images requires exactly one GPU UUID, but received a comma-separated value: $requested"
+  fi
+
+  case "$requested" in
+    GPU-*)
+      ;;
+    *)
+      fail "GPU assignment must be a full NVIDIA GPU UUID beginning with GPU-. Received: $requested"
+      ;;
+  esac
+
+  case "$requested" in
+    *[[:space:]]*)
+      fail "GPU UUID must not contain whitespace. Received: $requested"
+      ;;
+  esac
 
   python3 - "$requested" <<'PY'
 import csv
-import re
 import subprocess
 import sys
 
 requested = sys.argv[1].strip()
 
-def normalize(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", value.lower())
-
 try:
     raw = subprocess.check_output(
         [
             "nvidia-smi",
-            "--query-gpu=index,uuid,name,memory.total",
+            "--query-gpu=index,uuid,name,memory.total,memory.free",
             "--format=csv,noheader",
         ],
         text=True,
@@ -144,22 +176,21 @@ except subprocess.CalledProcessError as exc:
 
 gpus = []
 for row in csv.reader(raw.splitlines()):
-    if len(row) < 4:
+    if len(row) < 5:
         continue
 
     index = row[0].strip()
     uuid = row[1].strip()
     name = row[2].strip()
     memory_total = row[3].strip()
-
+    memory_free = row[4].strip()
     gpus.append(
         {
             "index": index,
             "uuid": uuid,
             "name": name,
             "memory_total": memory_total,
-            "normalized_name": normalize(name),
-            "normalized_uuid": normalize(uuid),
+            "memory_free": memory_free,
         }
     )
 
@@ -167,35 +198,19 @@ if not gpus:
     print("No GPUs were returned by nvidia-smi", file=sys.stderr)
     sys.exit(2)
 
-requested_normalized = normalize(requested)
-matches = []
+for gpu in gpus:
+    if gpu["uuid"].lower() == requested.lower():
+        print(gpu["uuid"])
+        sys.exit(0)
 
-if requested.upper().startswith("GPU-"):
-    matches = [gpu for gpu in gpus if gpu["uuid"].lower() == requested.lower()]
-elif requested.isdigit():
-    matches = [gpu for gpu in gpus if gpu["index"] == requested]
-else:
-    matches = [
-        gpu for gpu in gpus
-        if requested_normalized in gpu["normalized_name"]
-        or requested_normalized in gpu["normalized_uuid"]
-    ]
-
-if len(matches) == 1:
-    print(matches[0]["uuid"])
-    sys.exit(0)
-
-print("Available GPUs:", file=sys.stderr)
+print(f"GPU UUID is not installed on this host: {requested}", file=sys.stderr)
+print("Available GPU UUIDs:", file=sys.stderr)
 for gpu in gpus:
     print(
-        f"  {gpu['index']} | {gpu['uuid']} | {gpu['name']} | {gpu['memory_total']}",
+        f"  {gpu['uuid']} | index={gpu['index']} | {gpu['name']} | "
+        f"total={gpu['memory_total']} | free={gpu['memory_free']}",
         file=sys.stderr,
     )
-
-if len(matches) > 1:
-    print(f"GPU selector is ambiguous: {requested}", file=sys.stderr)
-else:
-    print(f"GPU selector did not match any detected GPU: {requested}", file=sys.stderr)
 
 sys.exit(1)
 PY
@@ -263,7 +278,6 @@ write_env_file() {
   local gpu_uuid="$1"
   local checkpoint_file="$2"
   local ai_root="$3"
-  local preload_model="$4"
   local tmp_file
 
   tmp_file="$(mktemp)"
@@ -317,6 +331,30 @@ write_env_file() {
   mv "$tmp_file" .env
 }
 
+print_runtime_plan() {
+  local gpu_uuid="$1"
+  local checkpoint_file="$2"
+  local ai_root="$3"
+
+  log "Runtime deployment plan"
+  printf '[local-ai-images]   APP_DIR=%s\n' "$APP_DIR"
+  printf '[local-ai-images]   COMPOSE_SERVICE=%s\n' "$COMPOSE_SERVICE"
+  printf '[local-ai-images]   AI_ROOT=%s\n' "$ai_root"
+  printf '[local-ai-images]   WEB_BIND_IP=%s\n' "${WEB_BIND_IP:-$(read_env_or_default WEB_BIND_IP 192.168.1.21)}"
+  printf '[local-ai-images]   WEB_PORT=%s\n' "${WEB_PORT:-$(read_env_or_default WEB_PORT 8000)}"
+  printf '[local-ai-images]   GPU_DEVICE_ID=%s\n' "$gpu_uuid"
+  printf '[local-ai-images]   IMAGE_DEFAULT_MODEL=%s\n' "$checkpoint_file"
+  printf '[local-ai-images]   PRELOAD_MODEL=%s\n' "${PRELOAD_MODEL:-true}"
+  printf '[local-ai-images]   IMAGE_PRELOAD_WIDTH=%s\n' "${PRELOAD_WIDTH:-$(read_env_or_default IMAGE_PRELOAD_WIDTH 512)}"
+  printf '[local-ai-images]   IMAGE_PRELOAD_HEIGHT=%s\n' "${PRELOAD_HEIGHT:-$(read_env_or_default IMAGE_PRELOAD_HEIGHT 512)}"
+  printf '[local-ai-images]   IMAGE_PRELOAD_STEPS=%s\n' "${PRELOAD_STEPS:-$(read_env_or_default IMAGE_PRELOAD_STEPS 1)}"
+
+  echo
+  echo "Selected GPU detail:"
+  nvidia-smi --query-gpu=uuid,name,memory.total,memory.free --format=csv,noheader \
+    | awk -F ', ' -v uuid="$gpu_uuid" '$1 == uuid { printf "  %s | %s | total=%s | free=%s\n", $1, $2, $3, $4 }'
+}
+
 ensure_artifacts_volume() {
   local volume_name
 
@@ -342,8 +380,7 @@ wait_for_container_health() {
     status="$(
       docker inspect "$container_id" \
         --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
-        2>/dev/null || true
-    )"
+        2>/dev/null || true)"
 
     log "Container health: ${status:-unknown}"
 
@@ -400,8 +437,15 @@ ensure_model_loaded_via_api() {
   local base_url="$1"
   local checkpoint_file="$2"
   local timeout_seconds="${PRELOAD_WAIT_TIMEOUT_SECONDS:-240}"
+  local preload_width
+  local preload_height
+  local preload_steps
 
-  python3 - "$base_url" "$checkpoint_file" "$timeout_seconds" <<'PY'
+  preload_width="${PRELOAD_WIDTH:-$(read_env_or_default IMAGE_PRELOAD_WIDTH 512)}"
+  preload_height="${PRELOAD_HEIGHT:-$(read_env_or_default IMAGE_PRELOAD_HEIGHT 512)}"
+  preload_steps="${PRELOAD_STEPS:-$(read_env_or_default IMAGE_PRELOAD_STEPS 1)}"
+
+  python3 - "$base_url" "$checkpoint_file" "$timeout_seconds" "$preload_width" "$preload_height" "$preload_steps" <<'PY'
 import json
 import sys
 import time
@@ -411,12 +455,15 @@ import urllib.request
 base_url = sys.argv[1].rstrip("/")
 checkpoint_file = sys.argv[2]
 timeout_seconds = int(sys.argv[3])
+preload_width = int(sys.argv[4])
+preload_height = int(sys.argv[5])
+preload_steps = int(sys.argv[6])
 
 preload_payload = json.dumps({
     "workflow_id": "sdxl-text-to-image",
-    "width": 512,
-    "height": 512,
-    "steps": 1,
+    "width": preload_width,
+    "height": preload_height,
+    "steps": preload_steps,
     "keep_artifact": False,
 }).encode("utf-8")
 
@@ -520,6 +567,39 @@ raise RuntimeError(f"Timed out waiting for checkpoint to load: {checkpoint_file}
 PY
 }
 
+parse_plan_or_deploy_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --gpu-device-ids)
+        shift
+        [ "$#" -gt 0 ] || fail "--gpu-device-ids requires a value"
+        REQUESTED_GPU_DEVICE_IDS="$1"
+        ;;
+      --gpu-device-id)
+        shift
+        [ "$#" -gt 0 ] || fail "--gpu-device-id requires a value"
+        REQUESTED_GPU_DEVICE_IDS="$1"
+        ;;
+      --model|--checkpoint)
+        shift
+        [ "$#" -gt 0 ] || fail "--model requires a value"
+        REQUESTED_MODEL="$1"
+        ;;
+      -h|--help|help)
+        usage
+        exit 0
+        ;;
+      *)
+        fail "Unknown argument: $1"
+        ;;
+    esac
+    shift
+  done
+
+  [ -n "${REQUESTED_GPU_DEVICE_IDS:-}" ] || fail "Missing required --gpu-device-ids value"
+  [ -n "${REQUESTED_MODEL:-}" ] || fail "Missing required --model value"
+}
+
 if [ "${1:-}" = "help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   usage
   exit 0
@@ -536,30 +616,50 @@ if [ "${1:-}" = "list" ]; then
   exit 0
 fi
 
-if [ "$#" -lt 2 ]; then
-  usage
-  exit 1
-fi
+ACTION="deploy"
+REQUESTED_GPU_DEVICE_IDS=""
+REQUESTED_MODEL=""
 
-requested_gpu="$1"
-requested_checkpoint="$2"
-preload_model="${PRELOAD_MODEL:-true}"
+case "${1:-}" in
+  plan|deploy)
+    ACTION="$1"
+    shift
+    parse_plan_or_deploy_args "$@"
+    ;;
+  *)
+    if [ "$#" -ne 2 ]; then
+      usage
+      exit 1
+    fi
+    ACTION="deploy"
+    REQUESTED_GPU_DEVICE_IDS="$1"
+    REQUESTED_MODEL="$2"
+    ;;
+esac
 
-require_command docker
-require_command curl
 require_command python3
 require_command nvidia-smi
 
-docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required: docker compose"
-
-gpu_uuid="$(resolve_gpu_uuid "$requested_gpu")"
-checkpoint_file="$(resolve_checkpoint "$requested_checkpoint" "$checkpoint_dir")"
+gpu_uuid="$(validate_single_gpu_device_id "$REQUESTED_GPU_DEVICE_IDS")"
+checkpoint_file="$(resolve_checkpoint "$REQUESTED_MODEL" "$checkpoint_dir")"
+preload_model="${PRELOAD_MODEL:-true}"
 
 log "Using application directory: $APP_DIR"
-log "Selected GPU: $requested_gpu -> $gpu_uuid"
+log "Selected GPU UUID: $gpu_uuid"
 log "Selected checkpoint: $checkpoint_file"
 
-write_env_file "$gpu_uuid" "$checkpoint_file" "$ai_root" "$preload_model"
+if [ "$ACTION" = "plan" ]; then
+  print_runtime_plan "$gpu_uuid" "$checkpoint_file" "$ai_root"
+  log "Plan complete; no files, containers, volumes, or API state were changed"
+  exit 0
+fi
+
+require_command docker
+require_command curl
+
+docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required: docker compose"
+
+write_env_file "$gpu_uuid" "$checkpoint_file" "$ai_root"
 
 log "Generated .env"
 grep -E '^(LOCAL_AI_IMAGES_PROJECT_NAME|LOCAL_AI_IMAGES_CONTAINER_NAME|LOCAL_AI_IMAGES_ARTIFACTS_VOLUME_NAME|WEB_BIND_IP|WEB_PORT|GPU_DEVICE_ID|IMAGE_DEFAULT_MODEL|IMAGE_PRELOAD_DEFAULT_ON_STARTUP)=' .env
