@@ -1,3 +1,12 @@
 .env
 .env.*
 !.env.example
+!.env.3090
+!.env.4080-super
+
+# Runtime app state written by the local deployment.
+config/image-favorites.json
+config/local-ai-images.json
+
+# Accidental root-level version tag/download artifacts.
+v[0-9]*.[0-9]*.[0-9]*
