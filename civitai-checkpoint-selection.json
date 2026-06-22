@@ -12,7 +12,7 @@
       "file_name": "waiIllustriousSDXL_v170.safetensors",
       "size_gib": 6.46,
       "sha256": "F116B0C78FF441467B0CDC8F1936E1ED18EA31E9997C7B132B1B8DB533F0BD04",
-      "download_url": "https://civitai.com/api/download/models/2883731?type=Model&format=SafeTensor",
+      "download_url": "https://civitai.com/api/download/models/2883731",
       "model_url": "https://civitai.com/models/827184"
     },
     {
@@ -24,7 +24,7 @@
       "file_name": "chilloutmix_NiPrunedFp32Fix.safetensors",
       "size_gib": 3.97,
       "sha256": "FC2511737A54C5E80B89AB03E0AB4B98D051AB187F92860F3CD664DC9D08B271",
-      "download_url": "https://civitai.com/api/download/models/11745?type=Model&format=SafeTensor",
+      "download_url": "https://civitai.com/api/download/models/11745",
       "model_url": "https://civitai.com/models/6424"
     },
     {
@@ -36,7 +36,7 @@
       "file_name": "uberRealisticPornMerge_v23Final.safetensors",
       "size_gib": 1.99,
       "sha256": "ABA5B77A1682417A2483F086022D6E07403355A4922AA70C83B34E6A9B56BB89",
-      "download_url": "https://civitai.com/api/download/models/915814?type=Model&format=SafeTensor",
+      "download_url": "https://civitai.com/api/download/models/915814",
       "model_url": "https://civitai.com/models/2661"
     },
     {
@@ -48,7 +48,7 @@
       "file_name": "hassakuXLIllustrious_v34.safetensors",
       "size_gib": 6.46,
       "sha256": "1618EDB443D9C641FB01C4961F5875D5F01B1A851FD9F2EA64623CEAC82257E0",
-      "download_url": "https://civitai.com/api/download/models/2615702?type=Model&format=SafeTensor",
+      "download_url": "https://civitai.com/api/download/models/2615702",
       "model_url": "https://civitai.com/models/140272"
     },
     {
@@ -60,7 +60,7 @@
       "file_name": "perfectWorld_v6Baked.safetensors",
       "size_gib": 5.28,
       "sha256": "CA5BEFC0991ADDAFFC619562F003D2E63260ECD7ED276192DF5BDEDF173316CA",
-      "download_url": "https://civitai.com/api/download/models/179446?type=Model&format=SafeTensor",
+      "download_url": "https://civitai.com/api/download/models/179446",
       "model_url": "https://civitai.com/models/8281"
     },
     {
@@ -72,7 +72,7 @@
       "file_name": "hassakuSD15_v13.safetensors",
       "size_gib": 1.99,
       "sha256": "7EB674963A0D93FCEAD95905B4D658D1E94E9A36230C0C732F65C3F53D8888AA",
-      "download_url": "https://civitai.com/api/download/models/106922?type=Model&format=SafeTensor",
+      "download_url": "https://civitai.com/api/download/models/106922",
       "model_url": "https://civitai.com/models/2583"
     },
     {
@@ -83,8 +83,8 @@
       "base_model": "SDXL 1.0",
       "file_name": "pornmaster_proSDXLV8.safetensors",
       "size_gib": 6.62,
-      "sha256": "35B0E04532394303C0C9E4D780E2080426187CCB47EFD3AE148D9F3675F093E9",
-      "download_url": "https://civitai.com/api/download/models/2551619?type=Model&format=SafeTensor",
+      "sha256": "31FFA9F94DBEBDC7619ECE90181726497F02E447D0A5F6FF328BE836BB65A362",
+      "download_url": "https://civitai.com/api/download/models/2551619",
       "model_url": "https://civitai.com/models/82543"
     },
     {
@@ -107,8 +107,8 @@
       "base_model": "SDXL 1.0",
       "file_name": "lustifySDXLNSFW_zenithV9.safetensors",
       "size_gib": 6.46,
-      "sha256": "72FEC72C13F27F5AC70DFD349557D4AD6BDB4C034985BB2845A2127B9D95EED7",
-      "download_url": "https://civitai.com/api/download/models/3045803?type=Model&format=SafeTensor",
+      "sha256": "1A3ABF0BF48113EB5E17D2F8AE012C5B60CB97D81D79C4D9E47CD5AF56C162F1",
+      "download_url": "https://civitai.com/api/download/models/3045803",
       "model_url": "https://civitai.com/models/573152"
     },
     {
@@ -131,8 +131,8 @@
       "base_model": "SD 1.5",
       "file_name": "meinahentai_v5Final.safetensors",
       "size_gib": 1.99,
-      "sha256": "FF1F28C77A5E95773E63C0BFA6D75BA841DA73B349384964BE2D63CDD8A7FE1B",
-      "download_url": "https://civitai.com/api/download/models/948699?type=Model&format=SafeTensor",
+      "sha256": "F22BB5699DB59ADD67995D3FA8B92B5AAFCE12397C69A1BE7A1CB310ACC41184",
+      "download_url": "https://civitai.com/api/download/models/948699",
       "model_url": "https://civitai.com/models/12606"
     },
     {
@@ -143,8 +143,8 @@
       "base_model": "Pony",
       "file_name": "waiANIPONYXL_v140.safetensors",
       "size_gib": 6.46,
-      "sha256": "3694444580BF8EAE77250CFA60BD5F2981AE80BB049B64236A48135B64FD6D52",
-      "download_url": "https://civitai.com/api/download/models/1767402?type=Model&format=SafeTensor",
+      "sha256": "4817AE464399155D9FCF25F7C2B7FAFF778146BC7F21B81747C2FB0DCD520DFC",
+      "download_url": "https://civitai.com/api/download/models/1767402",
       "model_url": "https://civitai.com/models/404154"
     }
   ]
