@@ -95,8 +95,8 @@
       "base_model": "SD 1.5",
       "file_name": "abyssorangemix3AOM3_aom3a1b.safetensors",
       "size_gib": 1.99,
-      "sha256": "EF49FBB25F8E17DFA9DA3CE603C948BE3E70F3B121251C200D0AF362CE973976",
-      "download_url": "https://civitai.com/api/download/models/17233?type=Model&format=SafeTensor",
+      "sha256": "5493A0EC491F5961DBDC1C861404088A6AE9BD4007F6A3A7C5DEE8789CDC1361",
+      "download_url": "https://civitai.com/api/download/models/17233",
       "model_url": "https://civitai.com/models/9942"
     },
     {
