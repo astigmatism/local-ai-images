@@ -2037,8 +2037,12 @@ function renderImageGeneratorHtml(): string {
                 <input id="image-lab-height" type="number" min="64" max="4096" step="64" required>
               </label>
               <label class="image-lab-resolution-preset-label">
-                <span class="field-label">Size preset <span class="field-help" tabindex="0" title="Optional 64-aligned width/height suggestions for fast drafts, SDXL aspect-ladder renders, higher-detail passes, and high-VRAM experiments. Width and height stay editable for custom sizes.">?</span></span>
-                <select id="image-lab-size-preset" aria-label="Image size preset"></select>
+                <span class="field-label">Portrait preset <span class="field-help" tabindex="0" title="Height-greater-than-width 64-aligned size suggestions, grouped by the same tier ladder. Width and height stay editable for custom sizes.">?</span></span>
+                <select id="image-lab-portrait-size-preset" aria-label="Portrait image size preset"></select>
+              </label>
+              <label class="image-lab-resolution-preset-label">
+                <span class="field-label">Landscape preset <span class="field-help" tabindex="0" title="Width-greater-than-height 64-aligned size suggestions, grouped by the same tier ladder. Width and height stay editable for custom sizes.">?</span></span>
+                <select id="image-lab-landscape-size-preset" aria-label="Landscape image size preset"></select>
               </label>
               <label>
                 <span class="field-label">Steps <span class="field-help" tabindex="0" title="More steps can refine detail but increase generation time. Lower steps are useful for fast exploration.">?</span></span>
@@ -2293,7 +2297,8 @@ function renderPortalHtml(): string {
           <div class="form-grid three">
             <label>Width <input id="playground-width" type="number" min="64" max="4096" step="64"></label>
             <label>Height <input id="playground-height" type="number" min="64" max="4096" step="64"></label>
-            <label>Size preset <select id="playground-size-preset" aria-label="Image size preset"></select></label>
+            <label>Portrait preset <select id="playground-portrait-size-preset" aria-label="Portrait image size preset"></select></label>
+            <label>Landscape preset <select id="playground-landscape-size-preset" aria-label="Landscape image size preset"></select></label>
             <label>Steps <input id="playground-steps" type="number" min="1" max="150" step="1"></label>
             <label>CFG scale <input id="playground-cfg-scale" type="number" min="0" max="30" step="0.5"></label>
             <label>Seed <input id="playground-seed" type="number" step="1" value="-1"></label>

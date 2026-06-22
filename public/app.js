@@ -246,8 +246,18 @@ function resolutionPresetOptionValue(preset) {
   return resolutionPresetValue(preset.width, preset.height);
 }
 
-function resolutionPresetFromValue(value) {
-  return RESOLUTION_PRESETS.find((preset) => resolutionPresetOptionValue(preset) === value) || null;
+function resolutionPresetOrientation(preset) {
+  if (preset.height > preset.width) return 'portrait';
+  if (preset.width > preset.height) return 'landscape';
+  return 'square';
+}
+
+function resolutionPresetMatchesOrientation(preset, orientation) {
+  return resolutionPresetOrientation(preset) === orientation;
+}
+
+function resolutionPresetFromValue(value, orientation) {
+  return RESOLUTION_PRESETS.find((preset) => resolutionPresetOptionValue(preset) === value && resolutionPresetMatchesOrientation(preset, orientation)) || null;
 }
 
 function formatMegapixels(width, height) {
@@ -280,26 +290,33 @@ function numericInputValue(selector) {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function matchedResolutionPresetValue(widthSelector, heightSelector) {
+function matchedResolutionPresetValue(widthSelector, heightSelector, orientation) {
   const width = numericInputValue(widthSelector);
   const height = numericInputValue(heightSelector);
   if (!width || !height) return '';
-  const match = RESOLUTION_PRESETS.find((preset) => preset.width === width && preset.height === height);
+  const match = RESOLUTION_PRESETS.find((preset) => preset.width === width && preset.height === height && resolutionPresetMatchesOrientation(preset, orientation));
   return match ? resolutionPresetOptionValue(match) : '';
 }
 
-function syncResolutionPresetToDimensions(selectSelector, widthSelector, heightSelector) {
+function syncResolutionPresetToDimensions(selectSelector, widthSelector, heightSelector, orientation) {
   const select = $(selectSelector);
   if (!select) return;
-  select.value = matchedResolutionPresetValue(widthSelector, heightSelector);
+  select.value = matchedResolutionPresetValue(widthSelector, heightSelector, orientation);
 }
 
-function renderResolutionPresetOptions(selectSelector, widthSelector, heightSelector) {
+function syncResolutionPresetGroup(selectConfigs, widthSelector, heightSelector) {
+  for (const config of selectConfigs) {
+    syncResolutionPresetToDimensions(config.selector, widthSelector, heightSelector, config.orientation);
+  }
+}
+
+function renderResolutionPresetOptions(selectSelector, widthSelector, heightSelector, orientation, customLabel = 'Custom/manual size') {
   const select = $(selectSelector);
   if (!select) return;
   let activeCategory = '';
-  let html = '<option value="">Custom/manual size</option>';
+  let html = `<option value="">${escapeHtml(customLabel)}</option>`;
   for (const preset of RESOLUTION_PRESETS) {
+    if (!resolutionPresetMatchesOrientation(preset, orientation)) continue;
     if (preset.category !== activeCategory) {
       if (activeCategory) html += '</optgroup>';
       activeCategory = preset.category;
@@ -309,20 +326,42 @@ function renderResolutionPresetOptions(selectSelector, widthSelector, heightSele
   }
   if (activeCategory) html += '</optgroup>';
   select.innerHTML = html;
-  syncResolutionPresetToDimensions(selectSelector, widthSelector, heightSelector);
+  syncResolutionPresetToDimensions(selectSelector, widthSelector, heightSelector, orientation);
 }
 
-function applyResolutionPreset(selectSelector, widthSelector, heightSelector) {
+function renderResolutionPresetGroup(selectConfigs, widthSelector, heightSelector) {
+  for (const config of selectConfigs) {
+    renderResolutionPresetOptions(config.selector, widthSelector, heightSelector, config.orientation, config.customLabel);
+  }
+  syncResolutionPresetGroup(selectConfigs, widthSelector, heightSelector);
+}
+
+function applyResolutionPreset(selectSelector, widthSelector, heightSelector, orientation, selectConfigs = []) {
   const select = $(selectSelector);
-  const preset = select ? resolutionPresetFromValue(select.value) : null;
+  const preset = select ? resolutionPresetFromValue(select.value, orientation) : null;
   if (!preset) return false;
   const widthInput = $(widthSelector);
   const heightInput = $(heightSelector);
   if (widthInput) widthInput.value = String(preset.width);
   if (heightInput) heightInput.value = String(preset.height);
-  syncResolutionPresetToDimensions(selectSelector, widthSelector, heightSelector);
+  if (selectConfigs.length) {
+    syncResolutionPresetGroup(selectConfigs, widthSelector, heightSelector);
+  } else {
+    syncResolutionPresetToDimensions(selectSelector, widthSelector, heightSelector, orientation);
+  }
   return true;
 }
+
+const RESOLUTION_PRESET_SELECTS = {
+  imageLab: [
+    { selector: '#image-lab-portrait-size-preset', orientation: 'portrait', customLabel: 'Custom/manual portrait size' },
+    { selector: '#image-lab-landscape-size-preset', orientation: 'landscape', customLabel: 'Custom/manual landscape size' }
+  ],
+  playground: [
+    { selector: '#playground-portrait-size-preset', orientation: 'portrait', customLabel: 'Custom/manual portrait size' },
+    { selector: '#playground-landscape-size-preset', orientation: 'landscape', customLabel: 'Custom/manual landscape size' }
+  ]
+};
 
 function currentPreloadStatus() {
   return state.imageModels?.defaultStatus || state.imageModels?.preload || state.imageHealth?.models?.preload || null;
@@ -1007,7 +1046,7 @@ function renderPlaygroundOptions() {
   }
   if (!workflowSelect.value && workflows[0]) workflowSelect.value = workflows[0].id;
   applyWorkflowDefaults(false);
-  renderResolutionPresetOptions('#playground-size-preset', '#playground-width', '#playground-height');
+  renderResolutionPresetGroup(RESOLUTION_PRESET_SELECTS.playground, '#playground-width', '#playground-height');
   updatePlaygroundPreview();
   renderPlaygroundStatus();
 }
@@ -1051,7 +1090,7 @@ function applyWorkflowDefaults(overwrite = true) {
     if (!input || value === undefined || value === null) continue;
     if (overwrite || input.value === '') input.value = value;
   }
-  syncResolutionPresetToDimensions('#playground-size-preset', '#playground-width', '#playground-height');
+  syncResolutionPresetGroup(RESOLUTION_PRESET_SELECTS.playground, '#playground-width', '#playground-height');
 }
 
 function buildPlaygroundPayload() {
@@ -1368,7 +1407,7 @@ function applyGenerationPayloadToPlayground(payload) {
 
   setInputValue('#playground-width', payloadNumber(requestPayload, ['width']));
   setInputValue('#playground-height', payloadNumber(requestPayload, ['height']));
-  syncResolutionPresetToDimensions('#playground-size-preset', '#playground-width', '#playground-height');
+  syncResolutionPresetGroup(RESOLUTION_PRESET_SELECTS.playground, '#playground-width', '#playground-height');
   setInputValue('#playground-steps', payloadNumber(requestPayload, ['steps']));
   setInputValue('#playground-cfg-scale', payloadNumber(requestPayload, ['cfg_scale', 'cfgScale', 'guidance_scale', 'guidanceScale']));
   setInputValue('#playground-sampler', payloadString(requestPayload, ['sampler_name', 'samplerName', 'sampler']));
@@ -1656,10 +1695,12 @@ function wireEvents() {
     applyWorkflowDefaults(true);
     updatePlaygroundPreview();
   });
-  $('#playground-size-preset')?.addEventListener('change', () => {
-    applyResolutionPreset('#playground-size-preset', '#playground-width', '#playground-height');
-    updatePlaygroundPreview();
-  });
+  for (const config of RESOLUTION_PRESET_SELECTS.playground) {
+    $(config.selector)?.addEventListener('change', () => {
+      applyResolutionPreset(config.selector, '#playground-width', '#playground-height', config.orientation, RESOLUTION_PRESET_SELECTS.playground);
+      updatePlaygroundPreview();
+    });
+  }
   $('#playground-load-selected').addEventListener('click', () => handlePlaygroundModelButton('load'));
   $('#playground-set-selected-default').addEventListener('click', () => handlePlaygroundModelButton('default'));
   $('#playground-preload-selected-startup').addEventListener('click', () => handlePlaygroundModelButton('startup'));
@@ -1687,7 +1728,7 @@ function wireEvents() {
     const element = $(selector);
     const handlePlaygroundControlChange = () => {
       if (selector === '#playground-width' || selector === '#playground-height') {
-        syncResolutionPresetToDimensions('#playground-size-preset', '#playground-width', '#playground-height');
+        syncResolutionPresetGroup(RESOLUTION_PRESET_SELECTS.playground, '#playground-width', '#playground-height');
       }
       updatePlaygroundPreview();
     };
