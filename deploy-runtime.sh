@@ -297,7 +297,7 @@ write_env_file() {
 
     echo "IMAGE_DEFAULT_WORKFLOW_ID=sdxl-text-to-image"
     printf 'IMAGE_DEFAULT_MODEL=%s\n' "$checkpoint_file"
-    printf 'IMAGE_PRELOAD_DEFAULT_ON_STARTUP=%s\n' "$preload_model"
+    echo "IMAGE_PRELOAD_DEFAULT_ON_STARTUP=false"
     echo "IMAGE_PRELOAD_TIMEOUT_MS=120000"
     echo "IMAGE_PRELOAD_WORKFLOW_ID=sdxl-text-to-image"
     printf 'IMAGE_PRELOAD_WIDTH=%s\n' "${PRELOAD_WIDTH:-$(read_env_or_default IMAGE_PRELOAD_WIDTH 512)}"
