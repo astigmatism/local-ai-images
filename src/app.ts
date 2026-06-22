@@ -2037,7 +2037,7 @@ function renderImageGeneratorHtml(): string {
                 <input id="image-lab-height" type="number" min="64" max="4096" step="64" required>
               </label>
               <label class="image-lab-resolution-preset-label">
-                <span class="field-label">Size preset <span class="field-help" tabindex="0" title="Optional width/height suggestions for fast drafts, SDXL-style finished images, and high-VRAM experiments. Width and height stay editable for custom sizes.">?</span></span>
+                <span class="field-label">Size preset <span class="field-help" tabindex="0" title="Optional 64-aligned width/height suggestions for fast drafts, SDXL aspect-ladder renders, higher-detail passes, and high-VRAM experiments. Width and height stay editable for custom sizes.">?</span></span>
                 <select id="image-lab-size-preset" aria-label="Image size preset"></select>
               </label>
               <label>

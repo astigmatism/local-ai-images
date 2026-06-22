@@ -170,23 +170,73 @@ function payloadSeed(payload) {
 
 const RESOLUTION_PRESETS = [
   { category: 'Prototype / fast iteration', width: 512, height: 512, label: 'small square draft' },
-  { category: 'Prototype / fast iteration', width: 768, height: 512, label: 'landscape draft' },
-  { category: 'Prototype / fast iteration', width: 512, height: 768, label: 'portrait draft' },
+  { category: 'Prototype / fast iteration', width: 768, height: 512, label: '3:2 landscape draft' },
+  { category: 'Prototype / fast iteration', width: 512, height: 768, label: '2:3 portrait draft' },
+  { category: 'Prototype / fast iteration', width: 896, height: 640, label: '7:5 wide draft' },
+  { category: 'Prototype / fast iteration', width: 640, height: 896, label: '5:7 tall draft' },
   { category: 'Prototype / fast iteration', width: 768, height: 768, label: 'larger square draft' },
-  { category: 'Finished / SDXL-friendly', width: 1024, height: 1024, label: 'square baseline' },
-  { category: 'Finished / SDXL-friendly', width: 1152, height: 896, label: 'landscape' },
-  { category: 'Finished / SDXL-friendly', width: 896, height: 1152, label: 'portrait' },
-  { category: 'Finished / SDXL-friendly', width: 1216, height: 832, label: 'wide landscape' },
-  { category: 'Finished / SDXL-friendly', width: 832, height: 1216, label: 'tall portrait' },
-  { category: 'High detail / slower', width: 1536, height: 1024, label: '3:2 landscape' },
-  { category: 'High detail / slower', width: 1024, height: 1536, label: '2:3 portrait' },
-  { category: 'High detail / slower', width: 1536, height: 1536, label: 'large square' },
+
+  { category: 'SDXL tuned ladder / about 1 MP', width: 704, height: 1408, label: 'very tall poster' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 704, height: 1344, label: 'tall portrait' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 768, height: 1344, label: 'tall mobile portrait' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 768, height: 1280, label: 'classic tall portrait' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 832, height: 1216, label: 'mobile portrait' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 832, height: 1152, label: 'soft portrait' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 896, height: 1152, label: 'known-good portrait' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 896, height: 1088, label: 'near portrait' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 960, height: 1088, label: 'slight portrait' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 960, height: 1024, label: 'near square portrait' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1024, height: 1024, label: 'square baseline' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1024, height: 960, label: 'near square landscape' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1088, height: 960, label: 'slight landscape' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1088, height: 896, label: 'near landscape' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1152, height: 896, label: 'known-good landscape' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1152, height: 832, label: 'soft landscape' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1216, height: 832, label: 'wide landscape' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1280, height: 768, label: 'classic wide landscape' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1344, height: 768, label: 'cinematic landscape' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1344, height: 704, label: 'ultrawide' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1408, height: 704, label: 'wide poster' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1472, height: 704, label: 'ultrawide landscape' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1536, height: 640, label: 'cinematic ultrawide' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1600, height: 640, label: 'wide banner' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1664, height: 576, label: 'panorama' },
+  { category: 'SDXL tuned ladder / about 1 MP', width: 1728, height: 576, label: 'extra-wide panorama' },
+
+  { category: 'High detail / SDXL aspect families', width: 1152, height: 1472, label: 'portrait step-up' },
+  { category: 'High detail / SDXL aspect families', width: 1344, height: 1728, label: '7:9 portrait step-up' },
+  { category: 'High detail / SDXL aspect families', width: 1216, height: 1664, label: 'tall portrait step-up' },
+  { category: 'High detail / SDXL aspect families', width: 1152, height: 1728, label: '2:3 portrait step-up' },
+  { category: 'High detail / SDXL aspect families', width: 1088, height: 1920, label: 'near 9:16 portrait' },
+  { category: 'High detail / SDXL aspect families', width: 1408, height: 1408, label: 'large square' },
+  { category: 'High detail / SDXL aspect families', width: 1536, height: 1536, label: 'extra square' },
+  { category: 'High detail / SDXL aspect families', width: 1472, height: 1152, label: 'landscape step-up' },
+  { category: 'High detail / SDXL aspect families', width: 1728, height: 1344, label: '9:7 landscape step-up' },
+  { category: 'High detail / SDXL aspect families', width: 1664, height: 1216, label: 'wide landscape step-up' },
+  { category: 'High detail / SDXL aspect families', width: 1728, height: 1152, label: '3:2 landscape step-up' },
+  { category: 'High detail / SDXL aspect families', width: 1920, height: 1088, label: 'near 16:9 landscape' },
+  { category: 'High detail / SDXL aspect families', width: 2048, height: 1024, label: '2:1 wide landscape' },
+
+  { category: 'RTX 3090 / 24 GB experiments', width: 1536, height: 2048, label: '3:4 portrait' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 1792, height: 2304, label: '7:9 portrait upscale' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 1536, height: 2304, label: '2:3 portrait' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 1536, height: 2560, label: '3:5 tall portrait' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 1664, height: 2560, label: 'tall portrait' },
   { category: 'RTX 3090 / 24 GB experiments', width: 2048, height: 2048, label: 'very large square' },
-  { category: 'RTX 3090 / 24 GB experiments', width: 2560, height: 1440, label: 'QHD landscape' },
-  { category: 'RTX 3090 / 24 GB experiments', width: 1440, height: 2560, label: 'QHD portrait' },
-  { category: 'RTX 3090 / 24 GB experiments', width: 3072, height: 1728, label: 'super-high landscape' },
-  { category: 'Extreme / may require tiling or offload', width: 3840, height: 2160, label: '4K landscape' },
-  { category: 'Extreme / may require tiling or offload', width: 2160, height: 3840, label: '4K portrait' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 2048, height: 1536, label: '4:3 landscape' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 2304, height: 1792, label: '9:7 landscape upscale' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 2304, height: 1536, label: '3:2 landscape' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 2560, height: 1536, label: '5:3 wide landscape' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 2560, height: 1664, label: 'wide landscape' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 2688, height: 1536, label: 'cinematic landscape' },
+
+  { category: 'Extreme / may require tiling or offload', width: 2304, height: 3072, label: '3:4 portrait' },
+  { category: 'Extreme / may require tiling or offload', width: 2688, height: 3456, label: '7:9 portrait max' },
+  { category: 'Extreme / may require tiling or offload', width: 2176, height: 3840, label: 'near 9:16 portrait' },
+  { category: 'Extreme / may require tiling or offload', width: 3072, height: 2304, label: '4:3 landscape' },
+  { category: 'Extreme / may require tiling or offload', width: 3456, height: 2688, label: '9:7 landscape max' },
+  { category: 'Extreme / may require tiling or offload', width: 3840, height: 2176, label: 'near 16:9 landscape' },
+  { category: 'Extreme / may require tiling or offload', width: 3072, height: 3072, label: 'huge square' },
   { category: 'Extreme / may require tiling or offload', width: 4096, height: 4096, label: 'max square' }
 ];
 
@@ -207,8 +257,24 @@ function formatMegapixels(width, height) {
   return `${megapixels < 1 ? megapixels.toFixed(2) : megapixels.toFixed(1)} MP`;
 }
 
+function greatestCommonDivisor(a, b) {
+  let x = Math.abs(Number(a));
+  let y = Math.abs(Number(b));
+  while (y) {
+    const remainder = x % y;
+    x = y;
+    y = remainder;
+  }
+  return x || 1;
+}
+
+function aspectRatioLabel(width, height) {
+  const divisor = greatestCommonDivisor(width, height);
+  return `${Number(width) / divisor}:${Number(height) / divisor}`;
+}
+
 function resolutionPresetLabel(preset) {
-  return `${preset.width} x ${preset.height} - ${preset.label} (${formatMegapixels(preset.width, preset.height)})`;
+  return `${preset.width} x ${preset.height} - ${preset.label} (${aspectRatioLabel(preset.width, preset.height)}; ${formatMegapixels(preset.width, preset.height)})`;
 }
 
 function numericInputValue(selector) {
