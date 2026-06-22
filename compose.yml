@@ -77,8 +77,8 @@ services:
     volumes:
       - ./config:/app/config
       - ${AI_ROOT:-/home/astigmatism/ai}/models:/models
-      - ${AI_ROOT:-/home/astigmatism/ai}/outputs/${PROJECT_SLUG:-local-ai-images-legacy}:/app/data/artifacts
       - ${AI_ROOT:-/home/astigmatism/ai}/cache:/cache
+      - artifacts:/app/data/artifacts
 
     deploy:
       resources:
@@ -95,3 +95,6 @@ services:
       timeout: 5s
       start_period: 90s
       retries: 5
+
+volumes:
+  artifacts:
