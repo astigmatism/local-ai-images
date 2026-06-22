@@ -119,8 +119,8 @@
       "base_model": "SD 1.5",
       "file_name": "lazymixRealAmateur_v40.safetensors",
       "size_gib": 3.95,
-      "sha256": "97C5AEBA20AB49057EF225483151358B22084DDA4F58F1F7420744AC37F99FCD",
-      "download_url": "https://civitai.com/api/download/models/300972?type=Model&format=SafeTensor",
+      "sha256": "D5FD15BF727BE286564ED6AF5C9A612348F328EADD9067784CD57FCB34891546",
+      "download_url": "https://civitai.com/api/download/models/300972",
       "model_url": "https://civitai.com/models/10961"
     },
     {
