@@ -12,6 +12,19 @@ services:
         PYTORCH_INDEX_URL: ${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}
     restart: unless-stopped
 
+    labels:
+      local-ai.managed: "true"
+      local-ai.service.name: "local-ai-images"
+      local-ai.gpu.slots: "1"
+      local-ai.gpu.slot.0.assignment.env: "GPU_DEVICE_ID"
+      local-ai.gpu.slot.0.assignment.kind: "nvidia-gpu-uuid"
+      local-ai.model.default.env: "IMAGE_DEFAULT_MODEL"
+      local-ai.model.preload.env: "IMAGE_PRELOAD_DEFAULT_ON_STARTUP"
+      local-ai.model.workflow.env: "IMAGE_DEFAULT_WORKFLOW_ID"
+      local-ai.model.checkpoints.container_path: "/models/checkpoints"
+      local-ai.model.checkpoints.host_path: "${AI_ROOT:-/home/astigmatism/ai}/models/checkpoints"
+      local-ai.runtime.env_file: ".env"
+
     env_file:
       - path: ./.env
         required: false
