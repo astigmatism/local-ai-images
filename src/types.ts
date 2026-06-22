@@ -125,6 +125,7 @@ export interface OllamaImageGenerateRequest extends OllamaImageGenerateOptions {
   prompt: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onProviderJobId?: (providerJobId: string) => void;
 }
 
 export interface OllamaImageGenerateResult {
@@ -342,9 +343,6 @@ export interface ArtifactMetadata {
     queuedAt: string;
     startedAt: string | null;
     completedAt: string | null;
-    cancelRequestedAt?: string | null;
-    canceledAt?: string | null;
-    cancellationReason?: string | null;
     timings: JobTimingMetrics;
   };
 }
@@ -370,13 +368,6 @@ export interface ProviderGenerationRequest extends NormalizedGenerationRequest {
   onProviderJobId?: (providerJobId: string) => void;
 }
 
-export interface ProviderCancellationResult {
-  requested: boolean;
-  reason?: string;
-  interruptRequested?: boolean;
-  queueDeleteRequested?: boolean;
-}
-
 export interface ProviderGenerationResult {
   provider: string;
   providerJobId?: string;
@@ -388,7 +379,7 @@ export interface ImageGenerationProvider {
   readonly name: string;
   health(): Promise<ImageProviderHealth>;
   generate(request: ProviderGenerationRequest): Promise<ProviderGenerationResult>;
-  cancel?(providerJobId?: string): Promise<ProviderCancellationResult | void>;
+  cancel?(providerJobId?: string | null): Promise<void>;
 }
 
 export interface ImageJob {
@@ -396,14 +387,16 @@ export interface ImageJob {
   status: JobStatus;
   request: NormalizedGenerationRequest;
   requestPayload?: Record<string, unknown>;
+  clientId: string | null;
   createdAt: string;
+  submittedAt: string;
   updatedAt: string;
   startedAt: string | null;
   queuedAt: string;
   completedAt: string | null;
-  cancelRequestedAt?: string | null;
-  canceledAt?: string | null;
-  cancellationReason?: string | null;
+  cancelRequestedAt: string | null;
+  canceledAt: string | null;
+  cancellationReason: string | null;
   provider: string;
   providerJobId: string | null;
   workflowId: string;
@@ -418,14 +411,16 @@ export interface PublicArtifactMetadata extends Omit<ArtifactMetadata, 'filePath
 export interface ImageJobSummary {
   id: string;
   status: JobStatus;
+  clientId: string | null;
   createdAt: string;
+  submittedAt: string;
   updatedAt: string;
   queuedAt: string;
   startedAt: string | null;
   completedAt: string | null;
-  cancelRequestedAt?: string | null;
-  canceledAt?: string | null;
-  cancellationReason?: string | null;
+  cancelRequestedAt: string | null;
+  canceledAt: string | null;
+  cancellationReason: string | null;
   provider: string;
   providerJobId: string | null;
   workflowId: string;

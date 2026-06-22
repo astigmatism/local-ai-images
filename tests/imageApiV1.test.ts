@@ -151,7 +151,7 @@ test('POST /api/v1/generate can complete synchronously and return URL/base64/bin
 
 test('POST /api/v1/generate supports async jobs, job result polling, and cancellation', async () => {
   await withTestServer({
-    runtimeConfig: await tempImageRuntimeConfig({ imageMockDelayMs: 250 }),
+    runtimeConfig: await tempImageRuntimeConfig({ imageMockDelayMs: 75 }),
     configStore: await tempConfigStore(),
     ollamaClient: mockOllama(),
     gpuService: { async queryGpus() { return []; } }
@@ -176,42 +176,49 @@ test('POST /api/v1/generate supports async jobs, job result polling, and cancell
     assert.equal(result.ok, true);
     assert.equal(result.job.status, 'succeeded');
 
-    const cancelCreate = await (await fetch(`${baseUrl}/api/v1/generate`, {
+    const blocker = await (await fetch(`${baseUrl}/api/v1/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: 'cancel me', negative_prompt: 'blurry', seed: 77, sync_timeout_ms: 0 })
+      body: JSON.stringify({ prompt: 'blocker', sync_timeout_ms: 0 })
     })).json();
-    assert.equal(cancelCreate.job.status, 'queued');
-    let cancelJob = cancelCreate.job;
-    for (let attempt = 0; attempt < 20 && cancelJob.status !== 'running'; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      const statusBody = await (await fetch(`${baseUrl}/api/v1/jobs/${cancelCreate.job.id}`)).json();
-      cancelJob = statusBody.job;
-    }
-    const canceled = await (await fetch(`${baseUrl}/api/v1/jobs/${cancelCreate.job.id}/cancel`, { method: 'POST' })).json();
+    assert.equal(blocker.ok, true);
+
+    const clientJobId = 'client-cancel-test';
+    const cancelCreate = await (await fetch(`${baseUrl}/api/v1/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-client-job-id': clientJobId },
+      body: JSON.stringify({ prompt: 'cancel me', sync_timeout_ms: 0 })
+    })).json();
+    assert.equal(cancelCreate.ok, true);
+    assert.equal(cancelCreate.job.clientId, clientJobId);
+
+    const cancelResponse = await fetch(`${baseUrl}/api/v1/jobs/${clientJobId}/cancel`, { method: 'POST' });
+    assert.equal(cancelResponse.status, 200);
+    const canceled = await cancelResponse.json();
     assert.equal(canceled.ok, true);
     assert.equal(canceled.job.status, 'canceled');
-    assert.equal(canceled.job.error, null);
-    assert.ok(canceled.job.cancelRequestedAt);
+    assert.equal(canceled.job.clientId, clientJobId);
     assert.ok(canceled.job.canceledAt);
+    assert.ok(canceled.job.cancelRequestedAt);
     assert.equal(canceled.job.cancellationReason, 'User requested cancellation.');
-    assert.equal(canceled.job.request.prompt, 'cancel me');
-    assert.equal(canceled.job.request.negativePrompt, 'blurry');
-    assert.equal(canceled.job.requestPayload.seed, 77);
+    assert.notEqual(canceled.job.status, 'failed');
 
-    const canceledResult = await fetch(`${baseUrl}/api/v1/jobs/${cancelCreate.job.id}/result?format=metadata`);
-    assert.equal(canceledResult.status, 409);
-    const canceledResultBody = await canceledResult.json();
-    assert.equal(canceledResultBody.error.code, 'IMAGE_JOB_CANCELED');
-    assert.equal(canceledResultBody.job.status, 'canceled');
+    const canceledResultResponse = await fetch(`${baseUrl}/api/v1/jobs/${cancelCreate.job.id}/result?format=metadata`);
+    assert.equal(canceledResultResponse.status, 409);
+    const canceledResult = await canceledResultResponse.json();
+    assert.equal(canceledResult.job.status, 'canceled');
+    assert.equal(canceledResult.error.code, 'IMAGE_JOB_CANCELED');
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const blockerResult = await (await fetch(`${baseUrl}/api/v1/jobs/${blocker.job.id}/result?format=metadata`)).json();
+      if (blockerResult.job.status === 'succeeded') break;
+    }
 
     const list = await (await fetch(`${baseUrl}/api/v1/jobs`)).json();
     assert.equal(list.ok, true);
-    assert.ok(list.jobs.length >= 2);
-    const listedCanceled = list.jobs.find((listedJob: { id?: string }) => listedJob.id === cancelCreate.job.id);
-    assert.ok(listedCanceled);
-    assert.equal(listedCanceled.status, 'canceled');
-    assert.equal(listedCanceled.error, null);
+    assert.ok(list.jobs.length >= 3);
+    assert.ok(list.jobs.some((job: any) => job.id === cancelCreate.job.id && job.status === 'canceled'));
   });
 });
 

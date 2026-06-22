@@ -983,7 +983,8 @@ async function handleImageApiGenerate(request: IncomingMessage, response: Server
 
   try {
     const requestPayload = generationRequestToApiPayload(parsed.value, isRecord(body) ? body : {});
-    const job = imageRuntime.jobQueue.submit(parsed.value, parsed.workflow, requestPayload);
+    const clientId = readClientJobIdHeader(request);
+    const job = imageRuntime.jobQueue.submit(parsed.value, parsed.workflow, requestPayload, { clientId });
     const completedJob = await imageRuntime.jobQueue.waitForCompletion(job.id, parsed.value.syncTimeoutMs);
 
     if (!completedJob) {
@@ -1052,7 +1053,7 @@ function compareImageHistoryJobsNewestFirst(left: unknown, right: unknown): numb
 
 function imageHistoryTimestamp(job: unknown): number {
   if (!isRecord(job)) return 0;
-  for (const field of ['completedAt', 'canceledAt', 'cancelRequestedAt', 'createdAt', 'submittedAt', 'startedAt', 'updatedAt', 'queuedAt']) {
+  for (const field of ['completedAt', 'canceledAt', 'submittedAt', 'createdAt', 'startedAt', 'updatedAt', 'queuedAt', 'cancelRequestedAt']) {
     const value = job[field];
     const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN;
     if (Number.isFinite(parsed)) return parsed;
@@ -1069,6 +1070,16 @@ function readImageHistoryPageSize(url: URL): number {
     ?? readOptionalQueryInteger(url, 'page_size', 1, IMAGE_HISTORY_MAX_PAGE_SIZE)
     ?? readOptionalQueryInteger(url, 'limit', 1, IMAGE_HISTORY_MAX_PAGE_SIZE);
   return explicitPageSize ?? IMAGE_HISTORY_DEFAULT_PAGE_SIZE;
+}
+
+
+function readClientJobIdHeader(request: IncomingMessage): string | null {
+  const value = request.headers['x-client-job-id'];
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 200) return null;
+  return /^[a-zA-Z0-9._:-]+$/u.test(trimmed) ? trimmed : null;
 }
 
 async function handleImageApiJob(response: ServerResponse, dependencies: ResolvedAppDependencies, jobId: string): Promise<void> {
@@ -1104,6 +1115,34 @@ async function handleImageApiJobCancel(response: ServerResponse, dependencies: R
     const job = await dependencies.imageRuntime.jobQueue.cancel(jobId);
     sendJson(response, 200, { ok: true, job: publicJob(job) });
   } catch (error: unknown) {
+    if (error instanceof AppError && error.code === 'JOB_NOT_FOUND') {
+      const durableJob = await dependencies.imageRuntime.artifactStore.getRecentCompletedJob(jobId).catch(() => null);
+      if (durableJob) {
+        sendJson(response, 409, {
+          ok: false,
+          job: durableJob,
+          error: {
+            code: 'IMAGE_JOB_ALREADY_COMPLETED',
+            message: `Job ${jobId} has already completed and cannot be canceled.`
+          }
+        });
+        return;
+      }
+    }
+    if (error instanceof AppError && (error.code === 'IMAGE_JOB_CANCEL_FAILED' || error.code === 'IMAGE_JOB_CANCEL_UNSUPPORTED')) {
+      const currentJob = (() => {
+        try {
+          return dependencies.imageRuntime.jobQueue.getJob(jobId);
+        } catch {
+          return null;
+        }
+      })();
+      sendJson(response, statusCodeForError(error), {
+        ...toErrorPayload(error),
+        ...(currentJob ? { job: publicJob(currentJob) } : {})
+      });
+      return;
+    }
     sendJson(response, statusCodeForError(error), toErrorPayload(error));
   }
 }
@@ -1163,13 +1202,10 @@ async function sendJobResult(
   }
 
   if (job.status !== 'succeeded') {
-    const isCanceled = job.status === 'canceled';
-    sendJson(response, isCanceled ? 409 : 502, {
+    sendJson(response, job.status === 'canceled' ? 409 : 502, {
       ok: false,
       job: publicJob(job),
-      error: isCanceled
-        ? { code: 'IMAGE_JOB_CANCELED', message: job.cancellationReason ?? 'Image generation was canceled.' }
-        : job.error ?? { code: 'IMAGE_JOB_FAILED', message: `Job ${job.id} finished with status ${job.status}.` }
+      error: job.error ?? { code: 'IMAGE_JOB_FAILED', message: `Job ${job.id} finished with status ${job.status}.` }
     });
     return;
   }

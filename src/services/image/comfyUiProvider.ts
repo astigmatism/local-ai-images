@@ -4,7 +4,6 @@ import type {
   ImageArtifactData,
   ImageGenerationProvider,
   ImageProviderHealth,
-  ProviderCancellationResult,
   ProviderGenerationRequest,
   ProviderGenerationResult,
   WorkflowPreset
@@ -107,45 +106,29 @@ export class ComfyUiProvider implements ImageGenerationProvider {
     };
   }
 
-  async cancel(providerJobId?: string): Promise<ProviderCancellationResult> {
-    const promptId = providerJobId?.trim();
+  async cancel(providerJobId?: string | null): Promise<void> {
+    const promptId = typeof providerJobId === 'string' && providerJobId.trim() ? providerJobId.trim() : null;
     if (!promptId) {
-      return {
-        requested: false,
-        reason: 'No ComfyUI prompt_id was available for targeted cancellation.'
-      };
+      throw new AppError('COMFYUI_PROMPT_ID_REQUIRED', 'ComfyUI cancellation requires the provider prompt_id so another running prompt is not interrupted by mistake.', 409);
     }
 
-    const queue = await this.fetchJson('/queue', { method: 'GET' }, 5000);
-    const isPending = queueContainsPromptId(queue, 'queue_pending', promptId);
-    const isRunning = queueContainsPromptId(queue, 'queue_running', promptId);
-
-    if (isPending) {
+    const queue = await this.fetchJson('/queue', { method: 'GET' }, 5000).catch(() => null);
+    const location = promptLocationInComfyQueue(queue, promptId);
+    if (location === 'pending') {
       await this.fetchJson('/queue', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ delete: [promptId] })
       }, 5000);
-      return {
-        requested: true,
-        queueDeleteRequested: true,
-        reason: `Requested deletion of queued ComfyUI prompt ${promptId}.`
-      };
+      return;
+    }
+    if (location === 'missing') {
+      throw new AppError('COMFYUI_PROMPT_NOT_CANCELABLE', `ComfyUI prompt ${promptId} is no longer queued or running.`, 409, {
+        prompt_id: promptId
+      });
     }
 
-    if (isRunning) {
-      await this.fetchJson('/interrupt', { method: 'POST' }, 5000);
-      return {
-        requested: true,
-        interruptRequested: true,
-        reason: `Requested interruption of running ComfyUI prompt ${promptId}.`
-      };
-    }
-
-    return {
-      requested: false,
-      reason: `ComfyUI prompt ${promptId} was not found in the pending or running queue.`
-    };
+    await this.fetchJson('/interrupt', { method: 'POST' }, 5000);
   }
 
   private async waitForHistory(promptId: string, signal?: AbortSignal): Promise<unknown> {
@@ -246,6 +229,24 @@ export class ComfyUiProvider implements ImageGenerationProvider {
   }
 }
 
+
+function promptLocationInComfyQueue(queue: unknown, promptId: string): 'pending' | 'running' | 'unknown' | 'missing' {
+  if (!isRecord(queue)) return 'unknown';
+  const running = queue.queue_running;
+  const pending = queue.queue_pending;
+  if (queueEntriesContainPromptId(pending, promptId)) return 'pending';
+  if (queueEntriesContainPromptId(running, promptId)) return 'running';
+  if (Array.isArray(pending) || Array.isArray(running)) return 'missing';
+  return 'unknown';
+}
+
+function queueEntriesContainPromptId(value: unknown, promptId: string): boolean {
+  if (typeof value === 'string') return value === promptId;
+  if (Array.isArray(value)) return value.some((item) => queueEntriesContainPromptId(item, promptId));
+  if (isRecord(value)) return Object.values(value).some((item) => queueEntriesContainPromptId(item, promptId));
+  return false;
+}
+
 export function materializeComfyPrompt(workflow: WorkflowPreset, request: ProviderGenerationRequest): Record<string, unknown> {
   const prompt = deepCloneRecord(workflow.comfyui.prompt);
   const mappings = workflow.comfyui.mappings;
@@ -332,18 +333,6 @@ function extractImageReferences(history: unknown, promptId: string): ComfyUiImag
     }
   }
   return references;
-}
-
-function queueContainsPromptId(queue: unknown, sectionName: 'queue_pending' | 'queue_running', promptId: string): boolean {
-  if (!isRecord(queue)) return false;
-  return containsPromptId(queue[sectionName], promptId);
-}
-
-function containsPromptId(value: unknown, promptId: string): boolean {
-  if (typeof value === 'string') return value === promptId;
-  if (Array.isArray(value)) return value.some((item) => containsPromptId(item, promptId));
-  if (isRecord(value)) return Object.values(value).some((item) => containsPromptId(item, promptId));
-  return false;
 }
 
 function mimeTypeFromFileName(fileName: string): string {

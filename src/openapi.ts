@@ -280,6 +280,7 @@ const jobSchema = {
   properties: {
     id: { type: 'string' },
     status: { enum: ['queued', 'running', 'succeeded', 'failed', 'canceled'] },
+    clientId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     provider: { type: 'string' },
     providerJobId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     workflowId: { type: 'string' },
@@ -295,6 +296,7 @@ const jobSchema = {
     scheduler: { type: 'string' },
     output: { enum: ['metadata', 'url', 'base64', 'binary'] },
     createdAt: { type: 'string' },
+    submittedAt: { type: 'string' },
     queuedAt: { type: 'string' },
     startedAt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     completedAt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
@@ -718,7 +720,7 @@ export function buildOpenApiDocument() {
           summary: 'Cancel an image job',
           security: bearerSecurity,
           parameters: [{ name: 'jobId', in: 'path', required: true, schema: { type: 'string' } }],
-          responses: { '200': { description: 'Canceled or current job state' }, ...authErrorResponses }
+          responses: { '200': { description: 'Canceled or current job state. The path parameter may be the backend job id or the client temporary id supplied through X-Client-Job-Id.' }, '409': { description: 'Job already completed or cancellation is unsupported/failed' }, ...authErrorResponses }
         }
       },
       '/api/v1/jobs/{jobId}/replay': {

@@ -118,20 +118,31 @@ test('ComfyUiProvider submits a prompt, polls history, and downloads image outpu
   });
 });
 
-test('ComfyUiProvider cancellation targets pending and running prompt IDs', async () => {
-  let deleted: Record<string, unknown> | null = null;
+test('ComfyUiProvider maps submit failures to application errors', async () => {
+  await withServer((request, response) => {
+    if (request.method === 'POST' && request.url === '/prompt') {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'boom' }));
+      return;
+    }
+    response.writeHead(404).end();
+  }, async (baseUrl) => {
+    const provider = new ComfyUiProvider(baseUrl, 1000, 1);
+    await assert.rejects(() => provider.generate(providerRequest()), /HTTP 500/);
+  });
+});
+
+test('ComfyUiProvider cancels a pending prompt without interrupting unrelated running work', async () => {
+  let deleteBody: any = null;
   let interrupted = false;
   await withServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/queue') {
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({
-        queue_pending: [['pending-prompt', 1]],
-        queue_running: [['running-prompt', 2]]
-      }));
+      response.end(JSON.stringify({ queue_running: [['other-prompt']], queue_pending: [['p1', 0, {}]] }));
       return;
     }
     if (request.method === 'POST' && request.url === '/queue') {
-      deleted = await readBody(request);
+      deleteBody = await readBody(request);
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ ok: true }));
       return;
@@ -145,28 +156,30 @@ test('ComfyUiProvider cancellation targets pending and running prompt IDs', asyn
     response.writeHead(404).end();
   }, async (baseUrl) => {
     const provider = new ComfyUiProvider(baseUrl, 1000, 1);
-    const pendingCancel = await provider.cancel('pending-prompt');
-    assert.equal(pendingCancel.requested, true);
-    assert.equal(pendingCancel.queueDeleteRequested, true);
-    assert.deepEqual(deleted?.delete, ['pending-prompt']);
-
-    const runningCancel = await provider.cancel('running-prompt');
-    assert.equal(runningCancel.requested, true);
-    assert.equal(runningCancel.interruptRequested, true);
-    assert.equal(interrupted, true);
+    await provider.cancel('p1');
+    assert.deepEqual(deleteBody, { delete: ['p1'] });
+    assert.equal(interrupted, false);
   });
 });
 
-test('ComfyUiProvider maps submit failures to application errors', async () => {
+test('ComfyUiProvider interrupts only after matching a running prompt id', async () => {
+  let interrupted = false;
   await withServer((request, response) => {
-    if (request.method === 'POST' && request.url === '/prompt') {
-      response.writeHead(500, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ error: 'boom' }));
+    if (request.method === 'GET' && request.url === '/queue') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ queue_running: [['p2', 0, {}]], queue_pending: [] }));
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/interrupt') {
+      interrupted = true;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
       return;
     }
     response.writeHead(404).end();
   }, async (baseUrl) => {
     const provider = new ComfyUiProvider(baseUrl, 1000, 1);
-    await assert.rejects(() => provider.generate(providerRequest()), /HTTP 500/);
+    await provider.cancel('p2');
+    assert.equal(interrupted, true);
   });
 });

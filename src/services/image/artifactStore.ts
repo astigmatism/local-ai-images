@@ -161,14 +161,16 @@ function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
   return {
     id: jobId,
     status: job?.status ?? 'succeeded',
+    clientId: null,
     createdAt: job?.createdAt ?? first.createdAt,
+    submittedAt: job?.createdAt ?? first.createdAt,
     updatedAt: job?.completedAt ?? first.createdAt,
     queuedAt: job?.queuedAt ?? job?.createdAt ?? first.createdAt,
     startedAt: job?.startedAt ?? null,
     completedAt: job?.completedAt ?? first.createdAt,
-    cancelRequestedAt: job?.cancelRequestedAt ?? null,
-    canceledAt: job?.canceledAt ?? null,
-    cancellationReason: job?.cancellationReason ?? null,
+    cancelRequestedAt: null,
+    canceledAt: null,
+    cancellationReason: null,
     provider: first.provider,
     providerJobId: null,
     workflowId: first.workflowId,
@@ -189,11 +191,7 @@ function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
     thumbnailUrl: sortedArtifacts[0]?.url ?? null,
     request,
     requestPayload,
-    metadata: {
-      ...(job?.cancelRequestedAt ? { cancelRequestedAt: job.cancelRequestedAt } : {}),
-      ...(job?.canceledAt ? { canceledAt: job.canceledAt } : {}),
-      ...(job?.cancellationReason ? { cancellationReason: job.cancellationReason } : {})
-    },
+    metadata: {},
     timings: job?.timings ?? {
       queueWaitMs: null,
       executionMs: null,
@@ -224,7 +222,7 @@ function compareDurableJobsNewestFirst(left: unknown, right: unknown): number {
 
 function durableJobTimestamp(job: unknown): number {
   if (!isRecord(job)) return 0;
-  for (const field of ['completedAt', 'createdAt', 'submittedAt', 'startedAt', 'updatedAt', 'queuedAt']) {
+  for (const field of ['completedAt', 'canceledAt', 'submittedAt', 'createdAt', 'startedAt', 'updatedAt', 'queuedAt', 'cancelRequestedAt']) {
     const value = job[field];
     const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN;
     if (Number.isFinite(parsed)) return parsed;
