@@ -1,0 +1,72 @@
+{
+  "destination": "/home/astigmatism/ai/models/checkpoints",
+  "source": "huggingface",
+  "selection_reason": "Extra SDXL/Pony checkpoint models explicitly requested by the user. These fit the current checkpoint-based image-generation workflow and should appear in the existing model dropdown after download and app refresh.",
+  "items": [
+    {
+      "model_id": "JCTN/SDXL",
+      "version_id": "main",
+      "file_id": "ZavyChromaXL/zavychromaxl_v10.safetensors",
+      "model_name": "ZavyChromaXL v10",
+      "base_model": "SDXL 1.0",
+      "file_name": "zavychromaxl_v10.safetensors",
+      "size_gib": 6.94,
+      "sha256": "DE12B4938D04730CDC13983EB63CD8B3B9F8963FD491DD8A10A6374ADC33BD0D",
+      "download_url": "https://huggingface.co/JCTN/SDXL/resolve/main/ZavyChromaXL/zavychromaxl_v10.safetensors",
+      "model_url": "https://huggingface.co/JCTN/SDXL/blob/main/ZavyChromaXL/zavychromaxl_v10.safetensors",
+      "notes": "SDXL checkpoint requested by the user. Useful with the current sdxl-text-to-image workflow."
+    },
+    {
+      "model_id": "SG161222/RealVisXL_V5.0",
+      "version_id": "main",
+      "file_id": "RealVisXL_V5.0_fp16.safetensors",
+      "model_name": "RealVisXL V5.0 fp16",
+      "base_model": "SDXL 1.0",
+      "file_name": "RealVisXL_V5.0_fp16.safetensors",
+      "size_gib": 6.94,
+      "sha256": "6A35A7855770AE9820A3C931D4964C3817B6D9E3C6F9C4DABB5B3A94E5643B80",
+      "download_url": "https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/main/RealVisXL_V5.0_fp16.safetensors",
+      "model_url": "https://huggingface.co/SG161222/RealVisXL_V5.0/blob/main/RealVisXL_V5.0_fp16.safetensors",
+      "notes": "Photoreal SDXL checkpoint requested by the user."
+    },
+    {
+      "model_id": "Lykon/dreamshaper-xl-lightning",
+      "version_id": "main",
+      "file_id": "DreamShaperXL_Lightning.safetensors",
+      "model_name": "DreamShaperXL Lightning",
+      "base_model": "SDXL 1.0 Lightning",
+      "file_name": "DreamShaperXL_Lightning.safetensors",
+      "size_gib": 6.94,
+      "sha256": "FDBE56354B8F876B736F24D3AD867ECD4140C019F57642EC8DDD878088D44F64",
+      "download_url": "https://huggingface.co/Lykon/dreamshaper-xl-lightning/resolve/main/DreamShaperXL_Lightning.safetensors",
+      "model_url": "https://huggingface.co/Lykon/dreamshaper-xl-lightning/blob/main/DreamShaperXL_Lightning.safetensors",
+      "notes": "Lightning SDXL checkpoint requested by the user. May prefer fewer steps than normal SDXL checkpoints."
+    },
+    {
+      "model_id": "RunDiffusion/Juggernaut-XL-v9",
+      "version_id": "main",
+      "file_id": "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
+      "model_name": "Juggernaut XL v9 RunDiffusion Photo v2",
+      "base_model": "SDXL 1.0",
+      "file_name": "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
+      "size_gib": 7.11,
+      "sha256": "C9E3E68F89B8E38689E1097D4BE4573CF308DE4E3FD044C64CA697BDB4AA8BCA",
+      "download_url": "https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
+      "model_url": "https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/blob/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
+      "notes": "Photoreal SDXL checkpoint requested by the user. Model card says VAE is baked in."
+    },
+    {
+      "model_id": "cyberdelia/CyberRealisticPony",
+      "version_id": "main",
+      "file_id": "CyberRealisticPony_V14.0.safetensors",
+      "model_name": "CyberRealisticPony V14.0",
+      "base_model": "Pony / SDXL",
+      "file_name": "CyberRealisticPony_V14.0.safetensors",
+      "size_gib": 6.94,
+      "sha256": "1129717B95C28BF951E0CF7F08952EE570D80980D1181B05BE9A466623983CAF",
+      "download_url": "https://huggingface.co/cyberdelia/CyberRealisticPony/resolve/main/CyberRealisticPony_V14.0.safetensors",
+      "model_url": "https://huggingface.co/cyberdelia/CyberRealisticPony/blob/main/CyberRealisticPony_V14.0.safetensors",
+      "notes": "Pony/realism checkpoint requested by the user."
+    }
+  ]
+}
