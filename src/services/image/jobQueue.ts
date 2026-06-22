@@ -8,6 +8,7 @@ import type {
   ImageJobSummary,
   JobStatus,
   NormalizedGenerationRequest,
+  ProviderCancellationResult,
   ProviderGenerationRequest,
   QueueStats,
   WorkflowPreset
@@ -71,6 +72,9 @@ export class ImageJobQueue {
       startedAt: null,
       queuedAt: now,
       completedAt: null,
+      cancelRequestedAt: null,
+      canceledAt: null,
+      cancellationReason: null,
       provider: this.provider.name,
       providerJobId: null,
       workflowId: workflow.id,
@@ -109,21 +113,43 @@ export class ImageJobQueue {
       return cloneJob(job);
     }
 
+    const reason = 'User requested cancellation.';
+    this.markCancelRequested(job, reason);
+
     const queuedIndex = this.queue.findIndex((item) => item.jobId === jobId);
     if (queuedIndex >= 0) {
       this.queue.splice(queuedIndex, 1);
+      this.markCanceled(job, reason);
+      return cloneJob(job);
+    }
+
+    if (job.status !== 'running') {
+      this.markCanceled(job, reason);
+      return cloneJob(job);
     }
 
     const controller = this.controllers.get(jobId);
-    controller?.abort();
-    if (job.status === 'running' && this.provider.cancel) {
-      await this.provider.cancel(job.providerJobId ?? undefined).catch((error: unknown) => {
-        this.logger.warn({ err: error, jobId }, 'Provider cancel failed');
-      });
-    }
+    try {
+      if (this.provider.cancel && job.providerJobId) {
+        const providerResult = await this.provider.cancel(job.providerJobId);
+        if (isProviderCancellationResult(providerResult) && providerResult.requested === false) {
+          throw new AppError('IMAGE_JOB_CANCEL_NOT_SUPPORTED', providerResult.reason ?? 'The image backend did not accept the cancellation request.', 409, providerResult);
+        }
+        if (providerResult !== undefined) {
+          job.metadata = {
+            ...job.metadata,
+            cancellationProviderResult: providerResult
+          };
+        }
+      }
 
-    this.markCanceled(job);
-    return cloneJob(job);
+      controller?.abort();
+      this.markCanceled(job, reason);
+      return cloneJob(job);
+    } catch (error: unknown) {
+      this.markCancelFailed(job, error);
+      return cloneJob(job);
+    }
   }
 
   waitForCompletion(jobId: string, timeoutMs: number): Promise<ImageJob | null> {
@@ -200,7 +226,8 @@ export class ImageJobQueue {
         jobId: job.id,
         workflow: item.workflow,
         filenamePrefix: safeFilenamePrefix(job.id),
-        signal: controller.signal
+        signal: controller.signal,
+        onProviderJobId: (providerJobId: string) => this.recordProviderJobId(job.id, providerJobId)
       };
 
       const providerResult = await this.provider.generate(providerRequest);
@@ -208,7 +235,7 @@ export class ImageJobQueue {
         throw new AppError('IMAGE_JOB_CANCELED', 'Image generation was canceled.', 499);
       }
 
-      job.providerJobId = providerResult.providerJobId ?? null;
+      job.providerJobId = providerResult.providerJobId ?? job.providerJobId ?? null;
       const completedAt = new Date().toISOString();
       const artifacts = await this.artifactStore.saveArtifacts({
         jobId: job.id,
@@ -224,6 +251,9 @@ export class ImageJobQueue {
           queuedAt: job.queuedAt,
           startedAt: job.startedAt,
           completedAt,
+          cancelRequestedAt: job.cancelRequestedAt ?? null,
+          canceledAt: job.canceledAt ?? null,
+          cancellationReason: job.cancellationReason ?? null,
           timings: calculateJobTimings({ ...job, completedAt })
         }
       });
@@ -252,11 +282,23 @@ export class ImageJobQueue {
     job.updatedAt = now;
   }
 
+  private recordProviderJobId(jobId: string, providerJobId: string): void {
+    const job = this.jobs.get(jobId);
+    if (!job || !providerJobId.trim()) return;
+    job.providerJobId = providerJobId;
+    job.updatedAt = new Date().toISOString();
+    job.metadata = {
+      ...job.metadata,
+      providerJobId
+    };
+  }
+
   private markSucceeded(job: ImageJob, artifacts: ArtifactMetadata[], metadata: Record<string, unknown>, completedAt?: string): void {
     const now = completedAt ?? new Date().toISOString();
     job.status = 'succeeded';
     job.artifacts = artifacts;
     job.metadata = {
+      ...job.metadata,
       ...metadata,
       actualSeed: job.request.seed,
       seed: job.request.seed
@@ -277,12 +319,44 @@ export class ImageJobQueue {
     this.notify(job);
   }
 
-  private markCanceled(job: ImageJob): void {
+  private markCancelRequested(job: ImageJob, reason: string): void {
+    const now = new Date().toISOString();
+    job.cancelRequestedAt = job.cancelRequestedAt ?? now;
+    job.cancellationReason = reason;
+    job.updatedAt = now;
+    job.metadata = {
+      ...job.metadata,
+      cancelRequestedAt: job.cancelRequestedAt,
+      cancellationReason: reason
+    };
+  }
+
+  private markCancelFailed(job: ImageJob, error: unknown): void {
+    const now = new Date().toISOString();
+    job.updatedAt = now;
+    job.metadata = {
+      ...job.metadata,
+      cancelFailedAt: now,
+      cancelError: errorToJobError(error)
+    };
+    this.logger.warn({ err: error, jobId: job.id }, 'Image generation job cancellation failed');
+  }
+
+  private markCanceled(job: ImageJob, reason = job.cancellationReason ?? 'Image generation was canceled.'): void {
     const now = new Date().toISOString();
     job.status = 'canceled';
+    job.cancelRequestedAt = job.cancelRequestedAt ?? now;
+    job.canceledAt = now;
+    job.cancellationReason = reason;
     job.completedAt = now;
     job.updatedAt = now;
-    job.error = { code: 'IMAGE_JOB_CANCELED', message: 'Image generation was canceled.' };
+    job.error = null;
+    job.metadata = {
+      ...job.metadata,
+      cancelRequestedAt: job.cancelRequestedAt,
+      canceledAt: now,
+      cancellationReason: reason
+    };
     this.notify(job);
   }
 
@@ -300,6 +374,14 @@ export class ImageJobQueue {
     if (next.length === 0) this.waiters.delete(jobId);
     else this.waiters.set(jobId, next);
   }
+}
+
+function isProviderCancellationResult(value: ProviderCancellationResult | void): value is ProviderCancellationResult {
+  return value !== undefined
+    && value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && typeof (value as { requested?: unknown }).requested === 'boolean';
 }
 
 function errorToJobError(error: unknown): ImageJob['error'] {

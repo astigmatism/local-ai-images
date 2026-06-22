@@ -4,6 +4,7 @@ import type {
   ImageArtifactData,
   ImageGenerationProvider,
   ImageProviderHealth,
+  ProviderCancellationResult,
   ProviderGenerationRequest,
   ProviderGenerationResult,
   WorkflowPreset
@@ -72,6 +73,7 @@ export class ComfyUiProvider implements ImageGenerationProvider {
     if (!providerJobId) {
       throw new AppError('COMFYUI_SUBMIT_INVALID_RESPONSE', 'ComfyUI did not return a prompt_id for the submitted workflow.', 502, submitResponse);
     }
+    request.onProviderJobId?.(providerJobId);
 
     const history = await this.waitForHistory(providerJobId, request.signal);
     const imageReferences = extractImageReferences(history, providerJobId);
@@ -105,8 +107,45 @@ export class ComfyUiProvider implements ImageGenerationProvider {
     };
   }
 
-  async cancel(): Promise<void> {
-    await this.fetchJson('/interrupt', { method: 'POST' }, 5000).catch(() => undefined);
+  async cancel(providerJobId?: string): Promise<ProviderCancellationResult> {
+    const promptId = providerJobId?.trim();
+    if (!promptId) {
+      return {
+        requested: false,
+        reason: 'No ComfyUI prompt_id was available for targeted cancellation.'
+      };
+    }
+
+    const queue = await this.fetchJson('/queue', { method: 'GET' }, 5000);
+    const isPending = queueContainsPromptId(queue, 'queue_pending', promptId);
+    const isRunning = queueContainsPromptId(queue, 'queue_running', promptId);
+
+    if (isPending) {
+      await this.fetchJson('/queue', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ delete: [promptId] })
+      }, 5000);
+      return {
+        requested: true,
+        queueDeleteRequested: true,
+        reason: `Requested deletion of queued ComfyUI prompt ${promptId}.`
+      };
+    }
+
+    if (isRunning) {
+      await this.fetchJson('/interrupt', { method: 'POST' }, 5000);
+      return {
+        requested: true,
+        interruptRequested: true,
+        reason: `Requested interruption of running ComfyUI prompt ${promptId}.`
+      };
+    }
+
+    return {
+      requested: false,
+      reason: `ComfyUI prompt ${promptId} was not found in the pending or running queue.`
+    };
   }
 
   private async waitForHistory(promptId: string, signal?: AbortSignal): Promise<unknown> {
@@ -293,6 +332,18 @@ function extractImageReferences(history: unknown, promptId: string): ComfyUiImag
     }
   }
   return references;
+}
+
+function queueContainsPromptId(queue: unknown, sectionName: 'queue_pending' | 'queue_running', promptId: string): boolean {
+  if (!isRecord(queue)) return false;
+  return containsPromptId(queue[sectionName], promptId);
+}
+
+function containsPromptId(value: unknown, promptId: string): boolean {
+  if (typeof value === 'string') return value === promptId;
+  if (Array.isArray(value)) return value.some((item) => containsPromptId(item, promptId));
+  if (isRecord(value)) return Object.values(value).some((item) => containsPromptId(item, promptId));
+  return false;
 }
 
 function mimeTypeFromFileName(fileName: string): string {

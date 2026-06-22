@@ -166,6 +166,9 @@ function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
     queuedAt: job?.queuedAt ?? job?.createdAt ?? first.createdAt,
     startedAt: job?.startedAt ?? null,
     completedAt: job?.completedAt ?? first.createdAt,
+    cancelRequestedAt: job?.cancelRequestedAt ?? null,
+    canceledAt: job?.canceledAt ?? null,
+    cancellationReason: job?.cancellationReason ?? null,
     provider: first.provider,
     providerJobId: null,
     workflowId: first.workflowId,
@@ -186,7 +189,11 @@ function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
     thumbnailUrl: sortedArtifacts[0]?.url ?? null,
     request,
     requestPayload,
-    metadata: {},
+    metadata: {
+      ...(job?.cancelRequestedAt ? { cancelRequestedAt: job.cancelRequestedAt } : {}),
+      ...(job?.canceledAt ? { canceledAt: job.canceledAt } : {}),
+      ...(job?.cancellationReason ? { cancellationReason: job.cancellationReason } : {})
+    },
     timings: job?.timings ?? {
       queueWaitMs: null,
       executionMs: null,

@@ -151,7 +151,7 @@ test('POST /api/v1/generate can complete synchronously and return URL/base64/bin
 
 test('POST /api/v1/generate supports async jobs, job result polling, and cancellation', async () => {
   await withTestServer({
-    runtimeConfig: await tempImageRuntimeConfig({ imageMockDelayMs: 25 }),
+    runtimeConfig: await tempImageRuntimeConfig({ imageMockDelayMs: 250 }),
     configStore: await tempConfigStore(),
     ollamaClient: mockOllama(),
     gpuService: { async queryGpus() { return []; } }
@@ -179,15 +179,39 @@ test('POST /api/v1/generate supports async jobs, job result polling, and cancell
     const cancelCreate = await (await fetch(`${baseUrl}/api/v1/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: 'cancel me', sync_timeout_ms: 0 })
+      body: JSON.stringify({ prompt: 'cancel me', negative_prompt: 'blurry', seed: 77, sync_timeout_ms: 0 })
     })).json();
+    assert.equal(cancelCreate.job.status, 'queued');
+    let cancelJob = cancelCreate.job;
+    for (let attempt = 0; attempt < 20 && cancelJob.status !== 'running'; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const statusBody = await (await fetch(`${baseUrl}/api/v1/jobs/${cancelCreate.job.id}`)).json();
+      cancelJob = statusBody.job;
+    }
     const canceled = await (await fetch(`${baseUrl}/api/v1/jobs/${cancelCreate.job.id}/cancel`, { method: 'POST' })).json();
     assert.equal(canceled.ok, true);
-    assert.ok(['canceled', 'succeeded'].includes(canceled.job.status));
+    assert.equal(canceled.job.status, 'canceled');
+    assert.equal(canceled.job.error, null);
+    assert.ok(canceled.job.cancelRequestedAt);
+    assert.ok(canceled.job.canceledAt);
+    assert.equal(canceled.job.cancellationReason, 'User requested cancellation.');
+    assert.equal(canceled.job.request.prompt, 'cancel me');
+    assert.equal(canceled.job.request.negativePrompt, 'blurry');
+    assert.equal(canceled.job.requestPayload.seed, 77);
+
+    const canceledResult = await fetch(`${baseUrl}/api/v1/jobs/${cancelCreate.job.id}/result?format=metadata`);
+    assert.equal(canceledResult.status, 409);
+    const canceledResultBody = await canceledResult.json();
+    assert.equal(canceledResultBody.error.code, 'IMAGE_JOB_CANCELED');
+    assert.equal(canceledResultBody.job.status, 'canceled');
 
     const list = await (await fetch(`${baseUrl}/api/v1/jobs`)).json();
     assert.equal(list.ok, true);
     assert.ok(list.jobs.length >= 2);
+    const listedCanceled = list.jobs.find((listedJob: { id?: string }) => listedJob.id === cancelCreate.job.id);
+    assert.ok(listedCanceled);
+    assert.equal(listedCanceled.status, 'canceled');
+    assert.equal(listedCanceled.error, null);
   });
 });
 

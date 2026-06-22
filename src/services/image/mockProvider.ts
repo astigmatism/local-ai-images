@@ -23,10 +23,12 @@ export class MockImageProvider implements ImageGenerationProvider {
   }
 
   async generate(request: ProviderGenerationRequest): Promise<ProviderGenerationResult> {
+    const providerJobId = `mock-${request.jobId}`;
+    request.onProviderJobId?.(providerJobId);
     await sleep(this.delayMs, request.signal);
     return {
       provider: this.name,
-      providerJobId: `mock-${request.jobId}`,
+      providerJobId,
       images: [{
         mimeType: 'image/png',
         buffer: Buffer.from(tinyPngBase64, 'base64'),

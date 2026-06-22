@@ -1052,7 +1052,7 @@ function compareImageHistoryJobsNewestFirst(left: unknown, right: unknown): numb
 
 function imageHistoryTimestamp(job: unknown): number {
   if (!isRecord(job)) return 0;
-  for (const field of ['completedAt', 'createdAt', 'submittedAt', 'startedAt', 'updatedAt', 'queuedAt']) {
+  for (const field of ['completedAt', 'canceledAt', 'cancelRequestedAt', 'createdAt', 'submittedAt', 'startedAt', 'updatedAt', 'queuedAt']) {
     const value = job[field];
     const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN;
     if (Number.isFinite(parsed)) return parsed;
@@ -1163,10 +1163,13 @@ async function sendJobResult(
   }
 
   if (job.status !== 'succeeded') {
-    sendJson(response, job.status === 'canceled' ? 409 : 502, {
+    const isCanceled = job.status === 'canceled';
+    sendJson(response, isCanceled ? 409 : 502, {
       ok: false,
       job: publicJob(job),
-      error: job.error ?? { code: 'IMAGE_JOB_FAILED', message: `Job ${job.id} finished with status ${job.status}.` }
+      error: isCanceled
+        ? { code: 'IMAGE_JOB_CANCELED', message: job.cancellationReason ?? 'Image generation was canceled.' }
+        : job.error ?? { code: 'IMAGE_JOB_FAILED', message: `Job ${job.id} finished with status ${job.status}.` }
     });
     return;
   }

@@ -342,6 +342,9 @@ export interface ArtifactMetadata {
     queuedAt: string;
     startedAt: string | null;
     completedAt: string | null;
+    cancelRequestedAt?: string | null;
+    canceledAt?: string | null;
+    cancellationReason?: string | null;
     timings: JobTimingMetrics;
   };
 }
@@ -364,6 +367,14 @@ export interface ProviderGenerationRequest extends NormalizedGenerationRequest {
   workflow: WorkflowPreset;
   filenamePrefix: string;
   signal?: AbortSignal;
+  onProviderJobId?: (providerJobId: string) => void;
+}
+
+export interface ProviderCancellationResult {
+  requested: boolean;
+  reason?: string;
+  interruptRequested?: boolean;
+  queueDeleteRequested?: boolean;
 }
 
 export interface ProviderGenerationResult {
@@ -377,7 +388,7 @@ export interface ImageGenerationProvider {
   readonly name: string;
   health(): Promise<ImageProviderHealth>;
   generate(request: ProviderGenerationRequest): Promise<ProviderGenerationResult>;
-  cancel?(providerJobId?: string): Promise<void>;
+  cancel?(providerJobId?: string): Promise<ProviderCancellationResult | void>;
 }
 
 export interface ImageJob {
@@ -390,6 +401,9 @@ export interface ImageJob {
   startedAt: string | null;
   queuedAt: string;
   completedAt: string | null;
+  cancelRequestedAt?: string | null;
+  canceledAt?: string | null;
+  cancellationReason?: string | null;
   provider: string;
   providerJobId: string | null;
   workflowId: string;
@@ -409,6 +423,9 @@ export interface ImageJobSummary {
   queuedAt: string;
   startedAt: string | null;
   completedAt: string | null;
+  cancelRequestedAt?: string | null;
+  canceledAt?: string | null;
+  cancellationReason?: string | null;
   provider: string;
   providerJobId: string | null;
   workflowId: string;

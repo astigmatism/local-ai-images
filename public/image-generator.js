@@ -12,6 +12,8 @@ const CONTROLS_MAX_VIEWPORT_RATIO = 0.58;
 const GENERATION_POLL_INTERVAL_MS = 1500;
 const GENERATION_POLL_ATTEMPTS = 1200;
 const GENERATION_POLL_FAILURE_LIMIT = 5;
+const CANCELABLE_JOB_STATES = new Set(['queued', 'pending', 'submitting', 'running', 'generating', 'loading']);
+const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'canceled']);
 
 const state = {
   imageHealth: null,
@@ -23,6 +25,7 @@ const state = {
   imageError: null,
   activeJobId: null,
   pendingJobs: [],
+  cancelRequests: new Map(),
   nextClientJobSequence: 0,
   prewarmingModel: null,
   loadedFavoritePayloadBase: null,
@@ -114,6 +117,71 @@ function isPlainObject(value) {
 function clonePayload(value) {
   return isPlainObject(value) ? JSON.parse(JSON.stringify(value)) : {};
 }
+
+function firstDefinedValue(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return null;
+}
+
+function isTerminalJobStatus(status) {
+  return TERMINAL_JOB_STATES.has(String(status || '').toLowerCase());
+}
+
+function isActiveJobStatus(status) {
+  return CANCELABLE_JOB_STATES.has(String(status || '').toLowerCase());
+}
+
+function isClientOnlyJobId(id) {
+  return String(id || '').startsWith('pending-');
+}
+
+function backendJobIdForCancel(job) {
+  const id = String(job?.id || '').trim();
+  if (!id || isClientOnlyJobId(id)) return null;
+  return id;
+}
+
+function cancelRequestKeyForJob(job) {
+  return String(job?.clientId || job?.id || '').trim();
+}
+
+function cancelRequestForJob(job) {
+  const key = cancelRequestKeyForJob(job);
+  return key ? state.cancelRequests.get(key) || null : null;
+}
+
+function hasCancelRequested(job) {
+  return Boolean(
+    job?.cancelRequestedAt
+    || job?.metadata?.cancelRequestedAt
+    || cancelRequestForJob(job)?.requestedAt
+  );
+}
+
+function hasCancelFailed(job) {
+  return Boolean(
+    job?.cancelFailedAt
+    || job?.metadata?.cancelFailedAt
+    || cancelRequestForJob(job)?.failedAt
+  );
+}
+
+function hasActiveCancelFailure(job) {
+  return hasCancelFailed(job) && !isTerminalJobStatus(job?.status);
+}
+
+function isCancelableJob(job) {
+  const status = String(job?.status || '').toLowerCase();
+  if (!job || isTerminalJobStatus(status) || hasCancelRequested(job)) return false;
+  return Boolean(job.isClientPending || isActiveJobStatus(status));
+}
+
+function pendingJobForClient(clientId) {
+  return (state.pendingJobs || []).find((job) => job.clientId === clientId || job.id === clientId) || null;
+}
+
 
 function formatDate(value) {
   if (!value) return 'n/a';
@@ -788,6 +856,9 @@ function createPendingJob(payload) {
     updatedAt: now,
     startedAt: null,
     completedAt: null,
+    cancelRequestedAt: null,
+    canceledAt: null,
+    cancellationReason: null,
     provider: 'pending',
     providerJobId: null,
     workflowId: request.workflowId || requestPayload.workflow_id || requestPayload.workflowId || '',
@@ -827,6 +898,8 @@ function firstPayloadCandidate(candidates) {
 
 function mergeJobUpdate(localJob, jobUpdate, extras = {}) {
   const update = isPlainObject(jobUpdate) ? jobUpdate : {};
+  const incomingStatus = String(extras.status || update.status || '').toLowerCase();
+  const preserveLocalCanceled = localJob.status === 'canceled' && isActiveJobStatus(incomingStatus);
   const originalRequestPayload = isPlainObject(localJob.originalRequestPayload)
     ? clonePayload(localJob.originalRequestPayload)
     : isPlainObject(localJob.requestPayload)
@@ -844,6 +917,10 @@ function mergeJobUpdate(localJob, jobUpdate, extras = {}) {
     ...(isPlainObject(update.metadata) ? update.metadata : {}),
     ...(isPlainObject(extras.metadata) ? extras.metadata : {})
   };
+  const cancelRequestedAt = firstDefinedValue(extras.cancelRequestedAt, update.cancelRequestedAt, localJob.cancelRequestedAt, nextMetadata.cancelRequestedAt);
+  const canceledAt = firstDefinedValue(extras.canceledAt, update.canceledAt, localJob.canceledAt, nextMetadata.canceledAt);
+  const cancellationReason = firstDefinedValue(extras.cancellationReason, update.cancellationReason, localJob.cancellationReason, nextMetadata.cancellationReason);
+  const cancelFailedAt = firstDefinedValue(extras.cancelFailedAt, update.cancelFailedAt, localJob.cancelFailedAt, nextMetadata.cancelFailedAt);
   const merged = {
     ...localJob,
     ...update,
@@ -852,12 +929,31 @@ function mergeJobUpdate(localJob, jobUpdate, extras = {}) {
     clientId: localJob.clientId,
     clientSequence: localJob.clientSequence,
     isClientPending: localJob.isClientPending && !['succeeded', 'failed', 'canceled'].includes(update.status || extras.status || ''),
+    ...(cancelRequestedAt ? { cancelRequestedAt } : {}),
+    ...(canceledAt ? { canceledAt } : {}),
+    ...(cancellationReason ? { cancellationReason } : {}),
+    ...(cancelFailedAt ? { cancelFailedAt } : {}),
     originalRequestPayload,
     requestPayload,
     request: update.request || localJob.request || {},
-    metadata: nextMetadata,
+    metadata: {
+      ...nextMetadata,
+      ...(cancelRequestedAt ? { cancelRequestedAt } : {}),
+      ...(canceledAt ? { canceledAt } : {}),
+      ...(cancellationReason ? { cancellationReason } : {}),
+      ...(cancelFailedAt ? { cancelFailedAt } : {})
+    },
     updatedAt: update.updatedAt || extras.updatedAt || new Date().toISOString()
   };
+  if (preserveLocalCanceled) {
+    merged.status = 'canceled';
+    merged.completedAt = localJob.completedAt || localJob.canceledAt || merged.completedAt;
+    merged.canceledAt = localJob.canceledAt || merged.canceledAt || merged.completedAt;
+    merged.cancelRequestedAt = localJob.cancelRequestedAt || merged.cancelRequestedAt || merged.canceledAt;
+    merged.cancellationReason = localJob.cancellationReason || merged.cancellationReason || 'User requested cancellation.';
+    merged.error = null;
+    merged.isClientPending = false;
+  }
   const actualSeed = actualSeedForJob(merged);
   if (actualSeed !== null) {
     merged.seed = actualSeed;
@@ -888,6 +984,9 @@ function markPendingJobFailed(clientId, error, jobUpdate = null) {
   const bodyError = error?.body?.error;
   const message = bodyError?.message || error?.message || 'Generation failed.';
   const code = bodyError?.code || (error?.status === 429 ? 'IMAGE_QUEUE_LIMIT_REACHED' : 'IMAGE_GENERATION_FAILED');
+  if (code === 'IMAGE_JOB_CANCELED' || jobUpdate?.status === 'canceled') {
+    return markPendingJobCanceled(clientId, jobUpdate || {}, message);
+  }
   updatePendingJob(clientId, jobUpdate || {}, {
     status: 'failed',
     isClientPending: false,
@@ -896,6 +995,26 @@ function markPendingJobFailed(clientId, error, jobUpdate = null) {
     metadata: { clientStatus: 'Failed' }
   });
   return message;
+}
+
+function markPendingJobCanceled(clientId, jobUpdate = {}, message = 'Image generation was canceled.') {
+  const now = new Date().toISOString();
+  updatePendingJob(clientId, jobUpdate || {}, {
+    status: 'canceled',
+    isClientPending: false,
+    completedAt: jobUpdate?.completedAt || jobUpdate?.canceledAt || now,
+    cancelRequestedAt: jobUpdate?.cancelRequestedAt || now,
+    canceledAt: jobUpdate?.canceledAt || jobUpdate?.completedAt || now,
+    cancellationReason: jobUpdate?.cancellationReason || message || 'User requested cancellation.',
+    error: null,
+    metadata: {
+      clientStatus: 'Canceled',
+      cancelRequestedAt: jobUpdate?.cancelRequestedAt || now,
+      canceledAt: jobUpdate?.canceledAt || jobUpdate?.completedAt || now,
+      cancellationReason: jobUpdate?.cancellationReason || message || 'User requested cancellation.'
+    }
+  });
+  return message || 'Image generation was canceled.';
 }
 
 function pendingJobsById() {
@@ -961,9 +1080,9 @@ function renderLastResult() {
   const job = result.job || {};
   const artifact = firstArtifact(job) || (result.artifacts || []).find((item) => item?.url) || null;
   const imageUrl = artifact?.url || '';
-  const tone = job.status === 'succeeded' ? 'ok' : job.status === 'failed' ? 'bad' : 'warn';
+  const tone = statusTone(job.status || 'submitted', job);
   target.innerHTML = `<div class="generation-result image-lab-result">
-    <p>${statusPill(job.status || 'submitted', tone)} Job <code>${escapeHtml(job.id || 'n/a')}</code></p>
+    <p>${statusPill(statusLabelForJob(job), tone)} Job <code>${escapeHtml(job.id || 'n/a')}</code></p>
     ${imageUrl ? `<a href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="result-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Last generated image" loading="lazy" hidden><div class="thumb-placeholder">Loading result image...</div></a>` : '<div class="thumb-placeholder">No image artifact available</div>'}
     <p class="compact-meta-line"><span><strong>Seed:</strong> ${escapeHtml(actualSeedForJob(job, result) ?? job.requestPayload?.seed ?? 'n/a')}</span><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span></p>
   </div>`;
@@ -991,9 +1110,7 @@ function currentJobs() {
 }
 
 function gallerySortTimestamp(job) {
-  const timestamp = job?.clientId
-    ? job.createdAt || job.queuedAt || job.updatedAt
-    : job.completedAt || job.updatedAt || job.createdAt || job.queuedAt;
+  const timestamp = job?.completedAt || job?.canceledAt || job?.updatedAt || job?.createdAt || job?.queuedAt;
   const parsed = new Date(timestamp || 0).getTime();
   return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -1031,10 +1148,13 @@ function renderGallery() {
   hydrateImages();
 }
 
-function statusTone(status) {
-  if (status === 'succeeded') return 'ok';
-  if (status === 'failed' || status === 'canceled') return 'bad';
-  if (status === 'queued' || status === 'running') return 'warn';
+function statusTone(status, job = null) {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'succeeded') return 'ok';
+  if (normalized === 'failed') return 'bad';
+  if (normalized === 'canceled') return 'neutral';
+  if (job && hasActiveCancelFailure(job)) return 'bad';
+  if (isActiveJobStatus(normalized)) return 'warn';
   return 'warn';
 }
 
@@ -1051,11 +1171,24 @@ function galleryFrameStyle(job, payload) {
 
 function pendingMessage(job) {
   const clientStatus = job.clientStatus || job.metadata?.clientStatus || '';
+  if (hasActiveCancelFailure(job)) return 'Cancel failed';
+  if (job.status === 'canceled') return 'Canceled';
+  if (hasCancelRequested(job)) return 'Canceling...';
   if (job.status === 'running') return 'Generating...';
   if (job.status === 'queued') return clientStatus === 'Submitting...' ? 'Submitting...' : 'Queued...';
   if (job.status === 'failed') return 'Generation failed';
-  if (job.status === 'canceled') return 'Generation canceled';
   return clientStatus || 'Image loading...';
+}
+
+function renderCancelControl(job) {
+  if (hasActiveCancelFailure(job)) {
+    return '<button type="button" class="secondary image-lab-cancel-button" disabled>Cancel failed</button>';
+  }
+  if (hasCancelRequested(job) && !isTerminalJobStatus(job.status)) {
+    return '<button type="button" class="secondary image-lab-cancel-button" disabled>Canceling...</button>';
+  }
+  if (!isCancelableJob(job)) return '';
+  return '<button type="button" class="secondary image-lab-cancel-button" data-gallery-action="cancel-job">Cancel</button>';
 }
 
 function renderGalleryImageContent(job, imageUrl, prompt, jobId, dimensions) {
@@ -1063,10 +1196,14 @@ function renderGalleryImageContent(job, imageUrl, prompt, jobId, dimensions) {
   if (imageUrl) {
     return `<a class="gallery-image-link" href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="gallery-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Generated image: ${escapeHtml(previewText(prompt, 90) || jobId)}" loading="lazy" hidden><div class="thumb-placeholder">Image loading...</div></a>`;
   }
-  if (status === 'queued' || status === 'running' || job.isClientPending) {
-    return `<div class="thumb-placeholder image-lab-pending-placeholder"><span class="image-lab-placeholder-title">${escapeHtml(pendingMessage(job))}</span><span>${statusPill(status, statusTone(status))}</span><span class="image-lab-placeholder-subtitle">${escapeHtml(dimensions)} preview space reserved for this request.</span></div>`;
+  if (isActiveJobStatus(status) || job.isClientPending || (hasCancelRequested(job) && !isTerminalJobStatus(status))) {
+    return `<div class="thumb-placeholder image-lab-pending-placeholder"><span class="image-lab-placeholder-title">${escapeHtml(pendingMessage(job))}</span><span class="image-lab-status-actions">${statusPill(statusLabelForJob(job), statusTone(status, job))}${renderCancelControl(job)}</span><span class="image-lab-placeholder-subtitle">${escapeHtml(dimensions)} preview space reserved for this request.</span></div>`;
   }
-  if (status === 'failed' || status === 'canceled') {
+  if (status === 'canceled') {
+    const message = job.cancellationReason || job.metadata?.cancellationReason || 'This generation was canceled before an image was produced.';
+    return `<div class="thumb-placeholder image-lab-canceled-placeholder"><span class="image-lab-placeholder-title">Canceled</span><span class="image-lab-placeholder-subtitle">${escapeHtml(message)}</span></div>`;
+  }
+  if (status === 'failed') {
     const message = job.error?.message || `Job finished with status ${status}.`;
     return `<div class="thumb-placeholder image-lab-error-placeholder"><span class="image-lab-placeholder-title">${escapeHtml(pendingMessage(job))}</span><span class="image-lab-placeholder-subtitle">${escapeHtml(message)}</span></div>`;
   }
@@ -1082,19 +1219,28 @@ function renderGalleryCard(job, index) {
   const favorite = favoriteForJob(job);
   const jobId = job?.id || `job-${index + 1}`;
   const status = job.status || 'unknown';
-  const tone = statusTone(status);
+  const tone = statusTone(status, job);
   const dimensions = `${job.width ?? job.request?.width ?? payload.width ?? 'n/a'} x ${job.height ?? job.request?.height ?? payload.height ?? 'n/a'}`;
   const seed = actualSeedForJob(job) ?? payload.seed ?? 'n/a';
   const model = job.model || payload.model || 'model n/a';
   const hasDeterministicSeed = actualSeedForJob(job) !== null;
   const canSaveFavorite = Boolean(imageUrl) && status === 'succeeded' && hasDeterministicSeed;
   const saveFavoriteDisabled = favorite || !canSaveFavorite;
-  const favoriteTitle = canSaveFavorite
-    ? ''
-    : ` title="${escapeHtml(status === 'succeeded' && !hasDeterministicSeed ? 'This completed image did not expose the actual seed needed for deterministic favorite regeneration.' : 'A completed image artifact is required before saving a favorite.')}"`;
+  const favoriteDisabledReason = status === 'canceled'
+    ? 'Canceled jobs do not have a generated image to save as a favorite.'
+    : status === 'succeeded' && !hasDeterministicSeed
+      ? 'This completed image did not expose the actual seed needed for deterministic favorite regeneration.'
+      : 'A completed image artifact is required before saving a favorite.';
+  const favoriteTitle = canSaveFavorite ? '' : ` title="${escapeHtml(favoriteDisabledReason)}"`;
+  const requestedSeed = job.request?.seed ?? job.originalRequestPayload?.seed ?? payload.seed ?? 'n/a';
+  const resolvedSeed = actualSeedForJob(job) ?? 'n/a';
+  const cancelRequestedAt = job.cancelRequestedAt || job.metadata?.cancelRequestedAt || null;
+  const canceledAt = job.canceledAt || job.metadata?.canceledAt || (status === 'canceled' ? job.completedAt : null);
+  const cancellationReason = job.cancellationReason || job.metadata?.cancellationReason || null;
   const cardClasses = ['image-lab-gallery-card'];
-  if (status === 'queued' || status === 'running' || job.isClientPending) cardClasses.push('is-pending');
-  if (status === 'failed' || status === 'canceled') cardClasses.push('is-failed');
+  if (isActiveJobStatus(status) || job.isClientPending) cardClasses.push('is-pending');
+  if (status === 'failed') cardClasses.push('is-failed');
+  if (status === 'canceled') cardClasses.push('is-canceled');
   const requestDetails = {
     jobId,
     clientId: job.clientId || undefined,
@@ -1103,6 +1249,12 @@ function renderGalleryCard(job, index) {
     requestPayload: payload,
     request: job.request || {},
     metadata: job.metadata || {},
+    cancellation: {
+      cancelRequestedAt,
+      canceledAt,
+      cancellationReason,
+      cancelError: job.cancelError || job.metadata?.cancelError || null
+    },
     artifacts: jobArtifacts(job)
   };
   return `<article class="${cardClasses.join(' ')}" data-job-index="${escapeHtml(index)}" data-job-id="${escapeHtml(jobId)}" data-job-state="${escapeHtml(status)}">
@@ -1121,9 +1273,10 @@ function renderGalleryCard(job, index) {
           <button type="button" class="secondary" data-gallery-action="save-favorite" data-job-index="${escapeHtml(index)}" ${saveFavoriteDisabled ? 'disabled' : ''}${favoriteTitle}>${favorite ? 'Saved favorite' : 'Save Favorite'}</button>
         </div>
         <div class="compact-meta job-meta">
-          <p class="compact-meta-line"><span><strong>Status:</strong> ${statusPill(status, tone)}</span><span><strong>Job:</strong> <code>${escapeHtml(jobId)}</code></span>${job.clientId && job.clientId !== jobId ? `<span><strong>Client:</strong> <code>${escapeHtml(job.clientId)}</code></span>` : ''}</p>
-          <p class="compact-meta-line"><span><strong>Workflow:</strong> ${escapeHtml(job.workflowId || payload.workflow_id || 'n/a')}</span><span><strong>Provider:</strong> ${escapeHtml(job.provider || 'n/a')}</span><span><strong>Created:</strong> ${escapeHtml(formatDate(job.createdAt))}</span><span><strong>Completed:</strong> ${escapeHtml(formatDate(job.completedAt))}</span></p>
-          <p class="compact-meta-line"><span><strong>Steps:</strong> ${escapeHtml(job.steps ?? payload.steps ?? 'n/a')}</span><span><strong>CFG:</strong> ${escapeHtml(job.cfgScale ?? payload.cfg_scale ?? 'n/a')}</span><span><strong>Sampler:</strong> ${escapeHtml(job.samplerName ?? payload.sampler_name ?? 'n/a')}</span><span><strong>Scheduler:</strong> ${escapeHtml(job.scheduler ?? payload.scheduler ?? 'n/a')}</span></p>
+          <p class="compact-meta-line"><span><strong>Status:</strong> ${statusPill(statusLabelForJob(job), tone)}</span><span><strong>Job:</strong> <code>${escapeHtml(jobId)}</code></span>${job.clientId && job.clientId !== jobId ? `<span><strong>Client:</strong> <code>${escapeHtml(job.clientId)}</code></span>` : ''}<span><strong>Provider job:</strong> <code>${escapeHtml(job.providerJobId || 'n/a')}</code></span></p>
+          <p class="compact-meta-line"><span><strong>Workflow:</strong> ${escapeHtml(job.workflowId || payload.workflow_id || 'n/a')}</span><span><strong>Provider:</strong> ${escapeHtml(job.provider || 'n/a')}</span><span><strong>Submitted:</strong> ${escapeHtml(formatDate(job.queuedAt || job.createdAt))}</span><span><strong>Started:</strong> ${escapeHtml(formatDate(job.startedAt))}</span><span><strong>Completed:</strong> ${escapeHtml(formatDate(job.completedAt))}</span></p>
+          <p class="compact-meta-line"><span><strong>Cancel requested:</strong> ${escapeHtml(formatDate(cancelRequestedAt))}</span><span><strong>Canceled:</strong> ${escapeHtml(formatDate(canceledAt))}</span><span><strong>Reason:</strong> ${escapeHtml(cancellationReason || 'n/a')}</span></p>
+          <p class="compact-meta-line"><span><strong>Size:</strong> ${escapeHtml(dimensions)}</span><span><strong>Steps:</strong> ${escapeHtml(job.steps ?? payload.steps ?? 'n/a')}</span><span><strong>CFG:</strong> ${escapeHtml(job.cfgScale ?? payload.cfg_scale ?? 'n/a')}</span><span><strong>Seed requested:</strong> ${escapeHtml(requestedSeed)}</span><span><strong>Resolved seed:</strong> ${escapeHtml(resolvedSeed)}</span><span><strong>Sampler:</strong> ${escapeHtml(job.samplerName ?? payload.sampler_name ?? 'n/a')}</span><span><strong>Scheduler:</strong> ${escapeHtml(job.scheduler ?? payload.scheduler ?? 'n/a')}</span></p>
           <p class="compact-meta-line"><span><strong>Queue wait:</strong> ${escapeHtml(formatDurationMs(job.queueWaitMs ?? job.timings?.queueWaitMs))}</span><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span><span><strong>Execution:</strong> ${escapeHtml(formatDurationMs(job.executionMs ?? job.timings?.executionMs))}</span><span><strong>Artifact:</strong> ${escapeHtml(artifact?.id || 'n/a')}</span></p>
         </div>
         <div class="job-prompt-grid">
@@ -1131,6 +1284,7 @@ function renderGalleryCard(job, index) {
           ${renderPromptBlock('Negative prompt', negative, 'No negative prompt recorded')}
         </div>
         ${job.error ? `<p class="danger-text">${escapeHtml(job.error.code)}: ${escapeHtml(job.error.message)}</p>` : ''}
+        ${hasCancelFailed(job) ? `<p class="danger-text">Cancel failed: ${escapeHtml(job.metadata?.cancelError?.message || 'The backend rejected the cancellation request.')}</p>` : ''}
         <h3>Full request payload</h3>
         <pre><code>${escapeHtml(JSON.stringify(payload, null, 2))}</code></pre>
         <h3>Job, artifact, and provider metadata</h3>
@@ -1265,12 +1419,15 @@ async function prewarmSelectedModel() {
 }
 
 function statusLabelForJob(job) {
-  if (!job?.status) return 'Submitted';
-  if (job.status === 'queued') return 'Queued...';
-  if (job.status === 'running') return 'Generating...';
-  if (job.status === 'succeeded') return 'Completed';
-  if (job.status === 'failed') return 'Failed';
-  if (job.status === 'canceled') return 'Canceled';
+  if (!job?.status) return hasCancelRequested(job) ? 'Canceling...' : 'Submitted';
+  const status = String(job.status || '').toLowerCase();
+  if (status === 'succeeded') return 'Completed';
+  if (status === 'failed') return 'Failed';
+  if (status === 'canceled') return 'Canceled';
+  if (hasActiveCancelFailure(job)) return 'Cancel failed';
+  if (hasCancelRequested(job)) return 'Canceling...';
+  if (status === 'queued') return job.clientStatus === 'Submitting...' || job.metadata?.clientStatus === 'Submitting...' ? 'Submitting...' : 'Queued';
+  if (status === 'running') return 'Generating...';
   return String(job.status);
 }
 
@@ -1283,11 +1440,17 @@ function resultExtras(result, job, submittedPayload = null) {
     requestPayload,
     ...(isPlainObject(submittedPayload) ? { originalRequestPayload: clonePayload(submittedPayload) } : {}),
     ...(actualSeed !== null ? { seed: actualSeed } : {}),
+    ...(job?.cancelRequestedAt ? { cancelRequestedAt: job.cancelRequestedAt } : {}),
+    ...(job?.canceledAt ? { canceledAt: job.canceledAt } : {}),
+    ...(job?.cancellationReason ? { cancellationReason: job.cancellationReason } : {}),
     resultUrl: result?.result_url || result?.resultUrl || undefined,
     statusUrl: result?.status_url || result?.statusUrl || undefined,
     metadata: {
       clientStatus,
       ...(actualSeed !== null ? { actualSeed } : {}),
+      ...(job?.cancelRequestedAt ? { cancelRequestedAt: job.cancelRequestedAt } : {}),
+      ...(job?.canceledAt ? { canceledAt: job.canceledAt } : {}),
+      ...(job?.cancellationReason ? { cancellationReason: job.cancellationReason } : {}),
       resultUrl: result?.result_url || result?.resultUrl || undefined,
       statusUrl: result?.status_url || result?.statusUrl || undefined
     }
@@ -1303,6 +1466,14 @@ async function finalizeGenerationResult(clientId, submittedPayload, result) {
   if (!job) throw new Error('The generation response did not include a job record.');
   updatePendingJob(clientId, job, resultExtras(result, job, submittedPayload));
 
+  if (job.status === 'canceled') {
+    const request = state.cancelRequests.get(clientId);
+    if (request) request.confirmedAt = job.canceledAt || job.completedAt || new Date().toISOString();
+    setStatus(`Generation canceled for job ${job.id || 'n/a'}.`);
+    await refreshGalleryOnly();
+    return;
+  }
+
   if (job.status && job.status !== 'succeeded') {
     const error = new Error(job.error?.message || `Generation finished with status ${job.status}.`);
     error.body = { job, error: job.error };
@@ -1313,7 +1484,106 @@ async function finalizeGenerationResult(clientId, submittedPayload, result) {
   renderLastResult();
   await Promise.allSettled([refreshGalleryOnly(), refreshModelsOnly('', { renderControls: false })]);
   const seed = actualSeedForJob(job, result) ?? 'n/a';
-  setStatus(`Generation complete for job ${job.id || 'n/a'}. Actual seed: ${seed}.`);
+  const cancelNote = state.cancelRequests.has(clientId) ? ' Cancellation had been requested, but the backend completed before it could take effect.' : '';
+  setStatus(`Generation complete for job ${job.id || 'n/a'}. Actual seed: ${seed}.${cancelNote}`);
+}
+
+
+function markLocalCancelRequested(job, message = 'Canceling...') {
+  const key = cancelRequestKeyForJob(job);
+  if (!key) return null;
+  const now = new Date().toISOString();
+  const existing = state.cancelRequests.get(key) || {};
+  state.cancelRequests.set(key, {
+    ...existing,
+    requestedAt: existing.requestedAt || now,
+    reason: 'User requested cancellation.'
+  });
+  updatePendingJob(key, job, {
+    cancelRequestedAt: existing.requestedAt || now,
+    cancellationReason: 'User requested cancellation.',
+    metadata: {
+      clientStatus: message,
+      cancelRequestedAt: existing.requestedAt || now,
+      cancellationReason: 'User requested cancellation.'
+    }
+  });
+  return state.cancelRequests.get(key);
+}
+
+async function sendCancelForBackendJob(clientId, backendJobId, baseJob) {
+  const request = state.cancelRequests.get(clientId) || { requestedAt: new Date().toISOString(), reason: 'User requested cancellation.' };
+  if (request.sending) return null;
+  request.sending = true;
+  request.backendJobId = backendJobId;
+  state.cancelRequests.set(clientId, request);
+  updatePendingJob(clientId, baseJob || {}, {
+    cancelRequestedAt: request.requestedAt,
+    cancellationReason: request.reason,
+    metadata: {
+      clientStatus: 'Canceling...',
+      cancelRequestedAt: request.requestedAt,
+      cancellationReason: request.reason
+    }
+  });
+
+  try {
+    const result = await fetchJson(`/api/v1/jobs/${encodeURIComponent(backendJobId)}/cancel`, { method: 'POST' });
+    request.sending = false;
+    request.confirmedAt = result.job?.canceledAt || result.job?.completedAt || new Date().toISOString();
+    state.cancelRequests.set(clientId, request);
+    if (result.job) updatePendingJob(clientId, result.job, resultExtras(result, result.job));
+    if (result.job?.status === 'canceled') {
+      setStatus(`Generation canceled for job ${backendJobId}.`);
+    } else if (result.job?.status === 'succeeded') {
+      setStatus(`Cancel requested for job ${backendJobId}, but it had already completed.`);
+    } else if (result.job?.metadata?.cancelFailedAt) {
+      setStatus(`Cancel failed for job ${backendJobId}: ${result.job.metadata.cancelError?.message || 'backend rejected cancellation'}`, false);
+    } else {
+      setStatus(`Cancel requested for job ${backendJobId}.`);
+    }
+    return result;
+  } catch (error) {
+    const now = new Date().toISOString();
+    request.sending = false;
+    request.failedAt = now;
+    request.error = error.message;
+    state.cancelRequests.set(clientId, request);
+    updatePendingJob(clientId, baseJob || {}, {
+      cancelFailedAt: now,
+      metadata: {
+        clientStatus: 'Cancel failed',
+        cancelFailedAt: now,
+        cancelError: { code: error?.body?.error?.code || 'IMAGE_JOB_CANCEL_FAILED', message: error.message }
+      }
+    });
+    setStatus(`Cancel failed: ${error.message}`, false);
+    return null;
+  }
+}
+
+async function cancelGalleryJob(job) {
+  const clientId = cancelRequestKeyForJob(job);
+  if (!clientId) {
+    setStatus('Unable to cancel this job because it has no job identity.', false);
+    return;
+  }
+  markLocalCancelRequested(job, backendJobIdForCancel(job) ? 'Canceling...' : 'Cancel requested...');
+  const backendJobId = backendJobIdForCancel(job);
+  if (!backendJobId) {
+    setStatus('Cancel requested. The request will be sent as soon as the backend job ID is available.');
+    return;
+  }
+  await sendCancelForBackendJob(clientId, backendJobId, job);
+}
+
+async function applyDeferredCancelIfNeeded(clientId, job) {
+  const request = state.cancelRequests.get(clientId);
+  if (!request || !job?.id || isTerminalJobStatus(job.status)) return job;
+  const backendJobId = backendJobIdForCancel(job);
+  if (!backendJobId) return job;
+  const result = await sendCancelForBackendJob(clientId, backendJobId, job);
+  return result?.job || pendingJobForClient(clientId) || job;
 }
 
 async function submitGenerationJob(clientId, payload) {
@@ -1323,6 +1593,8 @@ async function submitGenerationJob(clientId, payload) {
     if (job) {
       state.activeJobId = job.id || state.activeJobId;
       updatePendingJob(clientId, job, resultExtras(result, job));
+      job = await applyDeferredCancelIfNeeded(clientId, job);
+      if (job) result = { ...result, job };
     }
 
     if (job?.id && ['queued', 'running'].includes(job.status)) {
@@ -1334,6 +1606,11 @@ async function submitGenerationJob(clientId, payload) {
     await finalizeGenerationResult(clientId, payload, result);
   } catch (error) {
     const job = errorJob(error);
+    if (job?.status === 'canceled' || error?.body?.error?.code === 'IMAGE_JOB_CANCELED') {
+      const message = markPendingJobCanceled(clientId, job || {}, error?.body?.error?.message || 'Image generation was canceled.');
+      setStatus(`Generation canceled: ${message}`);
+      return;
+    }
     const message = markPendingJobFailed(clientId, error, job);
     const target = $('#image-lab-last-result');
     if (target) target.innerHTML = `<p class="danger-text">${escapeHtml(message)}</p>`;
@@ -1372,6 +1649,10 @@ async function pollGenerationResult(jobId, clientId) {
   let consecutiveFailures = 0;
   for (let attempt = 0; attempt < GENERATION_POLL_ATTEMPTS; attempt += 1) {
     await sleep(GENERATION_POLL_INTERVAL_MS);
+    const localJob = pendingJobForClient(clientId);
+    if (localJob?.status === 'canceled') {
+      return { ok: false, job: localJob, error: { code: 'IMAGE_JOB_CANCELED', message: localJob.cancellationReason || 'Image generation was canceled.' } };
+    }
     try {
       const result = await fetchJson(`/api/v1/jobs/${encodeURIComponent(jobId)}/result?format=url`);
       consecutiveFailures = 0;
@@ -1379,7 +1660,7 @@ async function pollGenerationResult(jobId, clientId) {
       const job = result.job || null;
       if (job) updatePendingJob(clientId, job, resultExtras(result, job));
       const status = job?.status;
-      if (status !== 'queued' && status !== 'running') return result;
+      if (isTerminalJobStatus(status) || !isActiveJobStatus(status)) return result;
       setStatus(`Generation ${status}; polling job ${jobId}...`);
     } catch (error) {
       const job = errorJob(error);
@@ -1423,6 +1704,10 @@ async function saveFavoriteFromJob(job) {
   const artifact = firstArtifact(job);
   const actualSeed = actualSeedForJob(job);
   const payload = regenerationPayloadForJob(job);
+  if (job?.status === 'canceled') {
+    setStatus('Canceled jobs do not have a generated image to save as a favorite.', false);
+    return;
+  }
   if (!artifact?.url && !firstImageUrl(job)) {
     setStatus('Wait until the generated image artifact is available before saving a favorite.', false);
     return;
@@ -1472,6 +1757,10 @@ async function handleGalleryClick(event) {
   }
   const action = button.dataset.galleryAction;
   try {
+    if (action === 'cancel-job') {
+      await cancelGalleryJob(job);
+      return;
+    }
     if (action === 'save-favorite') {
       await saveFavoriteFromJob(job);
       return;

@@ -166,7 +166,45 @@ test('ImageJobQueue cancels queued jobs', async () => {
   const second = queue.submit(baseRequest({ prompt: 'second' }), builtinWorkflows()[0]!);
   const canceled = await queue.cancel(second.id);
   assert.equal(canceled.status, 'canceled');
+  assert.equal(canceled.error, null);
+  assert.ok(canceled.cancelRequestedAt);
+  assert.ok(canceled.canceledAt);
+  assert.equal(canceled.cancellationReason, 'User requested cancellation.');
+  assert.equal(canceled.request.prompt, 'second');
   const completed = await queue.waitForCompletion(first.id, 1000);
   assert.equal(completed?.status, 'succeeded');
+  assert.equal(queue.stats().canceled, 1);
+});
+
+test('ImageJobQueue cancels running jobs without marking them failed', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'image-queue-running-cancel-'));
+  const queue = new ImageJobQueue({
+    provider: new MockImageProvider(250),
+    artifactStore: new ArtifactStore(root, '/api/v1/artifacts'),
+    concurrency: 1,
+    maxQueuedJobs: 8,
+    logger: createLogger('silent')
+  });
+
+  const job = queue.submit(baseRequest({ prompt: 'cancel running job' }), builtinWorkflows()[0]!);
+  let running = queue.getJob(job.id);
+  for (let attempt = 0; attempt < 20 && running.status !== 'running'; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    running = queue.getJob(job.id);
+  }
+
+  assert.equal(running.status, 'running');
+  assert.equal(running.providerJobId, `mock-${job.id}`);
+
+  const canceled = await queue.cancel(job.id);
+  assert.equal(canceled.status, 'canceled');
+  assert.equal(canceled.error, null);
+  assert.ok(canceled.cancelRequestedAt);
+  assert.ok(canceled.canceledAt);
+  assert.equal(canceled.cancellationReason, 'User requested cancellation.');
+
+  const completed = await queue.waitForCompletion(job.id, 1000);
+  assert.equal(completed?.status, 'canceled');
+  assert.equal(queue.stats().failed, 0);
   assert.equal(queue.stats().canceled, 1);
 });

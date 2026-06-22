@@ -195,6 +195,10 @@ main {
   color: var(--warn);
 }
 
+.status-pill.neutral {
+  color: var(--muted);
+}
+
 .kv {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr);
@@ -1603,6 +1607,10 @@ summary {
   border-color: rgba(248, 113, 113, 0.58);
 }
 
+.image-lab-gallery-card.is-canceled {
+  border-color: rgba(148, 163, 184, 0.48);
+}
+
 .image-lab-image-frame {
   display: block;
   width: 100%;
@@ -1632,7 +1640,8 @@ summary {
 }
 
 .image-lab-pending-placeholder,
-.image-lab-error-placeholder {
+.image-lab-error-placeholder,
+.image-lab-canceled-placeholder {
   display: grid;
   gap: 6px;
   align-content: center;
@@ -1647,6 +1656,24 @@ summary {
 .image-lab-error-placeholder {
   background: linear-gradient(135deg, rgba(127, 29, 29, 0.24), rgba(17, 24, 39, 0.92));
   color: #fecaca;
+}
+
+.image-lab-canceled-placeholder {
+  background: linear-gradient(135deg, rgba(71, 85, 105, 0.28), rgba(17, 24, 39, 0.92));
+  color: var(--muted);
+}
+
+.image-lab-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.image-lab-cancel-button {
+  padding: 5px 10px;
+  font-size: 0.8rem;
 }
 
 .image-lab-placeholder-title {
