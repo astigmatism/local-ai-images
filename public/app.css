@@ -1233,11 +1233,20 @@ summary {
   white-space: nowrap;
 }
 
-.image-lab-parameter-grid input {
+.image-lab-parameter-grid input,
+.image-lab-parameter-grid select {
   margin-top: 0;
   min-width: 0;
   padding: 3px 6px;
   font-size: 0.8rem;
+}
+
+.image-lab-resolution-preset-label {
+  grid-template-columns: minmax(54px, auto) minmax(0, 1fr);
+}
+
+.image-lab-resolution-preset-label select {
+  min-width: 0;
 }
 
 .image-lab-seed-note {
@@ -1285,7 +1294,8 @@ summary {
   font-size: 0.84rem;
 }
 
-.image-lab-controls .image-lab-parameter-grid input {
+.image-lab-controls .image-lab-parameter-grid input,
+.image-lab-controls .image-lab-parameter-grid select {
   margin-top: 0;
   padding: 3px 6px;
   font-size: 0.8rem;

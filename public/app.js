@@ -165,6 +165,99 @@ function modelMatches(model, value) {
     .some((candidate) => normalizeModel(candidate) === normalized);
 }
 
+
+const RESOLUTION_PRESETS = [
+  { category: 'Prototype / fast iteration', width: 512, height: 512, label: 'small square draft' },
+  { category: 'Prototype / fast iteration', width: 768, height: 512, label: 'landscape draft' },
+  { category: 'Prototype / fast iteration', width: 512, height: 768, label: 'portrait draft' },
+  { category: 'Prototype / fast iteration', width: 768, height: 768, label: 'larger square draft' },
+  { category: 'Finished / SDXL-friendly', width: 1024, height: 1024, label: 'square baseline' },
+  { category: 'Finished / SDXL-friendly', width: 1152, height: 896, label: 'landscape' },
+  { category: 'Finished / SDXL-friendly', width: 896, height: 1152, label: 'portrait' },
+  { category: 'Finished / SDXL-friendly', width: 1216, height: 832, label: 'wide landscape' },
+  { category: 'Finished / SDXL-friendly', width: 832, height: 1216, label: 'tall portrait' },
+  { category: 'High detail / slower', width: 1536, height: 1024, label: '3:2 landscape' },
+  { category: 'High detail / slower', width: 1024, height: 1536, label: '2:3 portrait' },
+  { category: 'High detail / slower', width: 1536, height: 1536, label: 'large square' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 2048, height: 2048, label: 'very large square' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 2560, height: 1440, label: 'QHD landscape' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 1440, height: 2560, label: 'QHD portrait' },
+  { category: 'RTX 3090 / 24 GB experiments', width: 3072, height: 1728, label: 'super-high landscape' },
+  { category: 'Extreme / may require tiling or offload', width: 3840, height: 2160, label: '4K landscape' },
+  { category: 'Extreme / may require tiling or offload', width: 2160, height: 3840, label: '4K portrait' },
+  { category: 'Extreme / may require tiling or offload', width: 4096, height: 4096, label: 'max square' }
+];
+
+function resolutionPresetValue(width, height) {
+  return `${width}x${height}`;
+}
+
+function resolutionPresetOptionValue(preset) {
+  return resolutionPresetValue(preset.width, preset.height);
+}
+
+function resolutionPresetFromValue(value) {
+  return RESOLUTION_PRESETS.find((preset) => resolutionPresetOptionValue(preset) === value) || null;
+}
+
+function formatMegapixels(width, height) {
+  const megapixels = (Number(width) * Number(height)) / 1000000;
+  return `${megapixels < 1 ? megapixels.toFixed(2) : megapixels.toFixed(1)} MP`;
+}
+
+function resolutionPresetLabel(preset) {
+  return `${preset.width} x ${preset.height} - ${preset.label} (${formatMegapixels(preset.width, preset.height)})`;
+}
+
+function numericInputValue(selector) {
+  const value = Number($(selector)?.value || 0);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function matchedResolutionPresetValue(widthSelector, heightSelector) {
+  const width = numericInputValue(widthSelector);
+  const height = numericInputValue(heightSelector);
+  if (!width || !height) return '';
+  const match = RESOLUTION_PRESETS.find((preset) => preset.width === width && preset.height === height);
+  return match ? resolutionPresetOptionValue(match) : '';
+}
+
+function syncResolutionPresetToDimensions(selectSelector, widthSelector, heightSelector) {
+  const select = $(selectSelector);
+  if (!select) return;
+  select.value = matchedResolutionPresetValue(widthSelector, heightSelector);
+}
+
+function renderResolutionPresetOptions(selectSelector, widthSelector, heightSelector) {
+  const select = $(selectSelector);
+  if (!select) return;
+  let activeCategory = '';
+  let html = '<option value="">Custom/manual size</option>';
+  for (const preset of RESOLUTION_PRESETS) {
+    if (preset.category !== activeCategory) {
+      if (activeCategory) html += '</optgroup>';
+      activeCategory = preset.category;
+      html += `<optgroup label="${escapeHtml(activeCategory)}">`;
+    }
+    html += `<option value="${escapeHtml(resolutionPresetOptionValue(preset))}">${escapeHtml(resolutionPresetLabel(preset))}</option>`;
+  }
+  if (activeCategory) html += '</optgroup>';
+  select.innerHTML = html;
+  syncResolutionPresetToDimensions(selectSelector, widthSelector, heightSelector);
+}
+
+function applyResolutionPreset(selectSelector, widthSelector, heightSelector) {
+  const select = $(selectSelector);
+  const preset = select ? resolutionPresetFromValue(select.value) : null;
+  if (!preset) return false;
+  const widthInput = $(widthSelector);
+  const heightInput = $(heightSelector);
+  if (widthInput) widthInput.value = String(preset.width);
+  if (heightInput) heightInput.value = String(preset.height);
+  syncResolutionPresetToDimensions(selectSelector, widthSelector, heightSelector);
+  return true;
+}
+
 function currentPreloadStatus() {
   return state.imageModels?.defaultStatus || state.imageModels?.preload || state.imageHealth?.models?.preload || null;
 }
@@ -848,6 +941,7 @@ function renderPlaygroundOptions() {
   }
   if (!workflowSelect.value && workflows[0]) workflowSelect.value = workflows[0].id;
   applyWorkflowDefaults(false);
+  renderResolutionPresetOptions('#playground-size-preset', '#playground-width', '#playground-height');
   updatePlaygroundPreview();
   renderPlaygroundStatus();
 }
@@ -891,6 +985,7 @@ function applyWorkflowDefaults(overwrite = true) {
     if (!input || value === undefined || value === null) continue;
     if (overwrite || input.value === '') input.value = value;
   }
+  syncResolutionPresetToDimensions('#playground-size-preset', '#playground-width', '#playground-height');
 }
 
 function buildPlaygroundPayload() {
@@ -1207,6 +1302,7 @@ function applyGenerationPayloadToPlayground(payload) {
 
   setInputValue('#playground-width', payloadNumber(requestPayload, ['width']));
   setInputValue('#playground-height', payloadNumber(requestPayload, ['height']));
+  syncResolutionPresetToDimensions('#playground-size-preset', '#playground-width', '#playground-height');
   setInputValue('#playground-steps', payloadNumber(requestPayload, ['steps']));
   setInputValue('#playground-cfg-scale', payloadNumber(requestPayload, ['cfg_scale', 'cfgScale', 'guidance_scale', 'guidanceScale']));
   setInputValue('#playground-sampler', payloadString(requestPayload, ['sampler_name', 'samplerName', 'sampler']));
@@ -1494,6 +1590,10 @@ function wireEvents() {
     applyWorkflowDefaults(true);
     updatePlaygroundPreview();
   });
+  $('#playground-size-preset')?.addEventListener('change', () => {
+    applyResolutionPreset('#playground-size-preset', '#playground-width', '#playground-height');
+    updatePlaygroundPreview();
+  });
   $('#playground-load-selected').addEventListener('click', () => handlePlaygroundModelButton('load'));
   $('#playground-set-selected-default').addEventListener('click', () => handlePlaygroundModelButton('default'));
   $('#playground-preload-selected-startup').addEventListener('click', () => handlePlaygroundModelButton('startup'));
@@ -1519,8 +1619,14 @@ function wireEvents() {
 
   for (const selector of ['#playground-model', '#playground-workflow', '#playground-prompt', '#playground-negative', '#playground-width', '#playground-height', '#playground-steps', '#playground-cfg-scale', '#playground-seed', '#playground-output', '#playground-sampler', '#playground-scheduler', '#playground-sync-timeout', '#playground-random-seed']) {
     const element = $(selector);
-    element?.addEventListener('input', updatePlaygroundPreview);
-    element?.addEventListener('change', updatePlaygroundPreview);
+    const handlePlaygroundControlChange = () => {
+      if (selector === '#playground-width' || selector === '#playground-height') {
+        syncResolutionPresetToDimensions('#playground-size-preset', '#playground-width', '#playground-height');
+      }
+      updatePlaygroundPreview();
+    };
+    element?.addEventListener('input', handlePlaygroundControlChange);
+    element?.addEventListener('change', handlePlaygroundControlChange);
   }
 
   $('#model-download-form').addEventListener('submit', handleDownloadSubmit);
