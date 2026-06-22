@@ -1,0 +1,151 @@
+{
+  "destination": "/home/astigmatism/ai/models/checkpoints",
+  "source": "civitai",
+  "selection_reason": "Explicit nsfw=True:60 safetensors checkpoints from the discovered popular Civitai checkpoint list. Wan/video/GGUF entries intentionally excluded.",
+  "items": [
+    {
+      "model_id": 827184,
+      "version_id": 2883731,
+      "file_id": 2763986,
+      "model_name": "WAI-illustrious-SDXL",
+      "base_model": "Illustrious",
+      "file_name": "waiIllustriousSDXL_v170.safetensors",
+      "size_gib": 6.46,
+      "sha256": "F116B0C78FF441467B0CDC8F1936E1ED18EA31E9997C7B132B1B8DB533F0BD04",
+      "download_url": "https://civitai.com/api/download/models/2883731?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/827184"
+    },
+    {
+      "model_id": 6424,
+      "version_id": 11745,
+      "file_id": 103584,
+      "model_name": "ChilloutMix",
+      "base_model": "SD 1.5",
+      "file_name": "chilloutmix_NiPrunedFp32Fix.safetensors",
+      "size_gib": 3.97,
+      "sha256": "FC2511737A54C5E80B89AB03E0AB4B98D051AB187F92860F3CD664DC9D08B271",
+      "download_url": "https://civitai.com/api/download/models/11745?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/6424"
+    },
+    {
+      "model_id": 2661,
+      "version_id": 915814,
+      "file_id": 1155723,
+      "model_name": "Uber Realistic Porn Merge (URPM-SD1.5)",
+      "base_model": "SD 1.5",
+      "file_name": "uberRealisticPornMerge_v23Final.safetensors",
+      "size_gib": 1.99,
+      "sha256": "ABA5B77A1682417A2483F086022D6E07403355A4922AA70C83B34E6A9B56BB89",
+      "download_url": "https://civitai.com/api/download/models/915814?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/2661"
+    },
+    {
+      "model_id": 140272,
+      "version_id": 2615702,
+      "file_id": 2503211,
+      "model_name": "Hassaku XL (Illustrious)",
+      "base_model": "Illustrious",
+      "file_name": "hassakuXLIllustrious_v34.safetensors",
+      "size_gib": 6.46,
+      "sha256": "1618EDB443D9C641FB01C4961F5875D5F01B1A851FD9F2EA64623CEAC82257E0",
+      "download_url": "https://civitai.com/api/download/models/2615702?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/140272"
+    },
+    {
+      "model_id": 8281,
+      "version_id": 179446,
+      "file_id": 137381,
+      "model_name": "Perfect World",
+      "base_model": "SD 1.5",
+      "file_name": "perfectWorld_v6Baked.safetensors",
+      "size_gib": 5.28,
+      "sha256": "CA5BEFC0991ADDAFFC619562F003D2E63260ECD7ED276192DF5BDEDF173316CA",
+      "download_url": "https://civitai.com/api/download/models/179446?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/8281"
+    },
+    {
+      "model_id": 2583,
+      "version_id": 106922,
+      "file_id": 75289,
+      "model_name": "Hassaku (SD1.5)",
+      "base_model": "SD 1.5",
+      "file_name": "hassakuSD15_v13.safetensors",
+      "size_gib": 1.99,
+      "sha256": "7EB674963A0D93FCEAD95905B4D658D1E94E9A36230C0C732F65C3F53D8888AA",
+      "download_url": "https://civitai.com/api/download/models/106922?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/2583"
+    },
+    {
+      "model_id": 82543,
+      "version_id": 2551619,
+      "file_id": 2440003,
+      "model_name": "PornMaster-色情大师",
+      "base_model": "SDXL 1.0",
+      "file_name": "pornmaster_proSDXLV8.safetensors",
+      "size_gib": 6.62,
+      "sha256": "35B0E04532394303C0C9E4D780E2080426187CCB47EFD3AE148D9F3675F093E9",
+      "download_url": "https://civitai.com/api/download/models/2551619?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/82543"
+    },
+    {
+      "model_id": 9942,
+      "version_id": 17233,
+      "file_id": 14498,
+      "model_name": "AbyssOrangeMix3 (AOM3)",
+      "base_model": "SD 1.5",
+      "file_name": "abyssorangemix3AOM3_aom3a1b.safetensors",
+      "size_gib": 1.99,
+      "sha256": "EF49FBB25F8E17DFA9DA3CE603C948BE3E70F3B121251C200D0AF362CE973976",
+      "download_url": "https://civitai.com/api/download/models/17233?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/9942"
+    },
+    {
+      "model_id": 573152,
+      "version_id": 3045803,
+      "file_id": 2924520,
+      "model_name": "LUSTIFY! [SDXL NSFW checkpoint]",
+      "base_model": "SDXL 1.0",
+      "file_name": "lustifySDXLNSFW_zenithV9.safetensors",
+      "size_gib": 6.46,
+      "sha256": "72FEC72C13F27F5AC70DFD349557D4AD6BDB4C034985BB2845A2127B9D95EED7",
+      "download_url": "https://civitai.com/api/download/models/3045803?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/573152"
+    },
+    {
+      "model_id": 10961,
+      "version_id": 300972,
+      "file_id": 238469,
+      "model_name": "LazyMix+ (Real Amateur Nudes)",
+      "base_model": "SD 1.5",
+      "file_name": "lazymixRealAmateur_v40.safetensors",
+      "size_gib": 3.95,
+      "sha256": "97C5AEBA20AB49057EF225483151358B22084DDA4F58F1F7420744AC37F99FCD",
+      "download_url": "https://civitai.com/api/download/models/300972?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/10961"
+    },
+    {
+      "model_id": 12606,
+      "version_id": 948699,
+      "file_id": 855570,
+      "model_name": "MeinaHentai",
+      "base_model": "SD 1.5",
+      "file_name": "meinahentai_v5Final.safetensors",
+      "size_gib": 1.99,
+      "sha256": "FF1F28C77A5E95773E63C0BFA6D75BA841DA73B349384964BE2D63CDD8A7FE1B",
+      "download_url": "https://civitai.com/api/download/models/948699?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/12606"
+    },
+    {
+      "model_id": 404154,
+      "version_id": 1767402,
+      "file_id": 1671379,
+      "model_name": "WAI-ANI-PONYXL",
+      "base_model": "Pony",
+      "file_name": "waiANIPONYXL_v140.safetensors",
+      "size_gib": 6.46,
+      "sha256": "3694444580BF8EAE77250CFA60BD5F2981AE80BB049B64236A48135B64FD6D52",
+      "download_url": "https://civitai.com/api/download/models/1767402?type=Model&format=SafeTensor",
+      "model_url": "https://civitai.com/models/404154"
+    }
+  ]
+}
