@@ -14,6 +14,10 @@ const GENERATION_POLL_ATTEMPTS = 1200;
 const GENERATION_POLL_FAILURE_LIMIT = 5;
 const CANCELABLE_JOB_STATES = new Set(['queued', 'pending', 'submitting', 'running', 'generating', 'loading']);
 const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'canceled']);
+const IMAGE_VIEWER_INACTIVITY_MS = 3000;
+const IMAGE_VIEWER_MAX_NATURAL_SCALE = 4;
+const IMAGE_VIEWER_ZOOM_WHEEL_SPEED = 0.0015;
+const IMAGE_VIEWER_ZOOM_BUTTON_STEP = 1.18;
 
 const state = {
   imageHealth: null,
@@ -36,6 +40,35 @@ const state = {
 };
 
 const thumbnailObjectUrls = new Map();
+
+const imageViewer = {
+  overlay: null,
+  stage: null,
+  image: null,
+  message: null,
+  closeButton: null,
+  downloadButton: null,
+  cleanupCallbacks: [],
+  inactivityTimer: null,
+  previousBodyOverflow: '',
+  previousDocumentOverflow: '',
+  previousActiveElement: null,
+  isOpen: false,
+  isLoaded: false,
+  isPanning: false,
+  isControlActive: false,
+  naturalWidth: 0,
+  naturalHeight: 0,
+  minScale: 1,
+  maxScale: IMAGE_VIEWER_MAX_NATURAL_SCALE,
+  scale: 1,
+  translateX: 0,
+  translateY: 0,
+  pointerStartX: 0,
+  pointerStartY: 0,
+  pointerStartTranslateX: 0,
+  pointerStartTranslateY: 0
+};
 
 function readStoredGallerySize() {
   const raw = window.localStorage.getItem(GALLERY_SIZE_STORAGE_KEY);
@@ -695,8 +728,53 @@ function firstArtifact(job) {
   return jobArtifacts(job).find((artifact) => artifact?.url) || jobArtifacts(job)[0] || null;
 }
 
+function firstFullImageUrl(job) {
+  const artifactUrl = firstArtifact(job)?.url;
+  return artifactUrl || job?.imageUrl || job?.image_url || job?.thumbnailUrl || '';
+}
+
 function firstImageUrl(job) {
-  return job?.thumbnailUrl || firstArtifact(job)?.url || '';
+  return job?.thumbnailUrl || firstFullImageUrl(job);
+}
+
+function extensionForImageMime(mimeType) {
+  const normalized = String(mimeType || '').toLowerCase();
+  if (normalized.includes('jpeg') || normalized.includes('jpg')) return 'jpg';
+  if (normalized.includes('webp')) return 'webp';
+  if (normalized.includes('gif')) return 'gif';
+  if (normalized.includes('png')) return 'png';
+  return 'png';
+}
+
+function sanitizeDownloadFileName(value, fallback = 'generated-image.png') {
+  const base = String(value || '')
+    .split(/[\\/]/u)
+    .pop()
+    ?.replace(/[^a-zA-Z0-9._() -]+/gu, '-')
+    .replace(/\s+/gu, '-')
+    .replace(/-+/gu, '-')
+    .replace(/^[.-]+|[.-]+$/gu, '')
+    .slice(0, 160);
+  return base || fallback;
+}
+
+function compactTimestampForFileName(value) {
+  const parsed = new Date(value || Date.now());
+  if (Number.isNaN(parsed.getTime())) return new Date().toISOString().replace(/[:.]/gu, '-');
+  return parsed.toISOString().replace(/[:.]/gu, '-');
+}
+
+function imageDownloadFileName(job, artifact = firstArtifact(job)) {
+  const explicit = artifact?.fileName || artifact?.filename || artifact?.name;
+  if (explicit) return sanitizeDownloadFileName(explicit);
+  const id = sanitizeDownloadFileName(job?.id || artifact?.jobId || artifact?.id || 'generated-image', 'generated-image').replace(/\.[^.]+$/u, '');
+  const timestamp = compactTimestampForFileName(artifact?.createdAt || job?.completedAt || job?.updatedAt || job?.createdAt);
+  return sanitizeDownloadFileName(`${id}-${timestamp}.${extensionForImageMime(artifact?.mimeType)}`);
+}
+
+function generatedImageAltText(job, fallback = 'Generated image') {
+  const prompt = previewText(jobPrompt(job), 120);
+  return prompt ? `Generated image: ${prompt}` : fallback;
 }
 
 const ACTUAL_SEED_KEYS = ['actualSeed', 'actual_seed', 'seedUsed', 'seed_used', 'resolvedSeed', 'resolved_seed'];
@@ -1058,8 +1136,6 @@ function hydrateImages() {
         const objectUrl = URL.createObjectURL(blob);
         thumbnailObjectUrls.set(url, objectUrl);
         image.src = objectUrl;
-        const anchor = image.closest('a');
-        if (anchor) anchor.href = objectUrl;
         image.hidden = false;
         image.dataset.loaded = '1';
         image.nextElementSibling?.remove();
@@ -1069,6 +1145,366 @@ function hydrateImages() {
         image.nextElementSibling?.replaceWith(Object.assign(document.createElement('div'), { className: 'thumb-placeholder', textContent: 'Image unavailable' }));
       });
   }
+}
+
+function imageViewerMessage(text, isError = false) {
+  if (!imageViewer.message || !imageViewer.overlay) return;
+  imageViewer.message.textContent = text;
+  imageViewer.message.hidden = false;
+  imageViewer.overlay.classList.toggle('has-error', isError);
+  imageViewer.overlay.classList.toggle('is-loading', !isError && !imageViewer.isLoaded);
+}
+
+function addImageViewerListener(target, type, handler, options) {
+  if (!target) return;
+  target.addEventListener(type, handler, options);
+  imageViewer.cleanupCallbacks.push(() => target.removeEventListener(type, handler, options));
+}
+
+function clearImageViewerInactivityTimer() {
+  if (!imageViewer.inactivityTimer) return;
+  window.clearTimeout(imageViewer.inactivityTimer);
+  imageViewer.inactivityTimer = null;
+}
+
+function scheduleImageViewerInactivity() {
+  clearImageViewerInactivityTimer();
+  if (!imageViewer.isOpen || imageViewer.isPanning || imageViewer.isControlActive) return;
+  imageViewer.inactivityTimer = window.setTimeout(() => {
+    if (!imageViewer.overlay || imageViewer.isPanning || imageViewer.isControlActive) return;
+    imageViewer.overlay.classList.add('is-inactive');
+  }, IMAGE_VIEWER_INACTIVITY_MS);
+}
+
+function showImageViewerChrome() {
+  if (!imageViewer.overlay) return;
+  imageViewer.overlay.classList.remove('is-inactive');
+  scheduleImageViewerInactivity();
+}
+
+function imageViewerStageRect() {
+  return imageViewer.stage?.getBoundingClientRect() || { left: 0, top: 0, width: window.innerWidth || 1, height: window.innerHeight || 1 };
+}
+
+function calculateImageViewerFitScale() {
+  const rect = imageViewerStageRect();
+  const margin = 32;
+  const availableWidth = Math.max(1, rect.width - margin);
+  const availableHeight = Math.max(1, rect.height - margin);
+  const widthScale = availableWidth / Math.max(1, imageViewer.naturalWidth);
+  const heightScale = availableHeight / Math.max(1, imageViewer.naturalHeight);
+  return Math.max(0.02, Math.min(widthScale, heightScale, 1));
+}
+
+function clampImageViewerScale(scale) {
+  return clampNumber(scale, imageViewer.minScale, imageViewer.maxScale);
+}
+
+function clampImageViewerPan() {
+  if (!imageViewer.stage || !imageViewer.isLoaded) return;
+  const rect = imageViewerStageRect();
+  const scaledWidth = imageViewer.naturalWidth * imageViewer.scale;
+  const scaledHeight = imageViewer.naturalHeight * imageViewer.scale;
+  const maxX = Math.max(0, (scaledWidth - rect.width) / 2);
+  const maxY = Math.max(0, (scaledHeight - rect.height) / 2);
+  imageViewer.translateX = clampNumber(imageViewer.translateX, -maxX, maxX);
+  imageViewer.translateY = clampNumber(imageViewer.translateY, -maxY, maxY);
+}
+
+function applyImageViewerTransform() {
+  if (!imageViewer.image) return;
+  clampImageViewerPan();
+  imageViewer.image.style.transform = `translate(calc(-50% + ${imageViewer.translateX}px), calc(-50% + ${imageViewer.translateY}px)) scale(${imageViewer.scale})`;
+}
+
+function resetImageViewerToFit() {
+  if (!imageViewer.isLoaded) return;
+  imageViewer.minScale = calculateImageViewerFitScale();
+  imageViewer.maxScale = Math.max(IMAGE_VIEWER_MAX_NATURAL_SCALE, imageViewer.minScale);
+  imageViewer.scale = imageViewer.minScale;
+  imageViewer.translateX = 0;
+  imageViewer.translateY = 0;
+  applyImageViewerTransform();
+}
+
+function zoomImageViewerAtPoint(nextScale, clientX, clientY) {
+  if (!imageViewer.isLoaded) return;
+  const clampedScale = clampImageViewerScale(nextScale);
+  if (Math.abs(clampedScale - imageViewer.scale) < 0.0001) return;
+  const rect = imageViewerStageRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+  const imagePointX = (clientX - centerX - imageViewer.translateX) / imageViewer.scale;
+  const imagePointY = (clientY - centerY - imageViewer.translateY) / imageViewer.scale;
+  imageViewer.scale = clampedScale;
+  imageViewer.translateX = clientX - centerX - imagePointX * imageViewer.scale;
+  imageViewer.translateY = clientY - centerY - imagePointY * imageViewer.scale;
+  applyImageViewerTransform();
+}
+
+function zoomImageViewerAtCenter(nextScale) {
+  const rect = imageViewerStageRect();
+  zoomImageViewerAtPoint(nextScale, rect.left + rect.width / 2, rect.top + rect.height / 2);
+}
+
+function setImageViewerNaturalSize() {
+  if (!imageViewer.image) return;
+  imageViewer.naturalWidth = imageViewer.image.naturalWidth || 1;
+  imageViewer.naturalHeight = imageViewer.image.naturalHeight || 1;
+  imageViewer.image.style.width = `${imageViewer.naturalWidth}px`;
+  imageViewer.image.style.height = `${imageViewer.naturalHeight}px`;
+  imageViewer.isLoaded = true;
+  imageViewer.overlay?.classList.remove('is-loading', 'has-error');
+  imageViewer.overlay?.classList.add('is-loaded');
+  if (imageViewer.message) imageViewer.message.hidden = true;
+  imageViewer.image.hidden = false;
+  resetImageViewerToFit();
+}
+
+function closeImageViewer() {
+  if (!imageViewer.isOpen) return;
+  clearImageViewerInactivityTimer();
+  for (const cleanup of imageViewer.cleanupCallbacks.splice(0)) cleanup();
+  if (imageViewer.image) {
+    imageViewer.image.onload = null;
+    imageViewer.image.onerror = null;
+    imageViewer.image.removeAttribute('src');
+  }
+  imageViewer.overlay?.remove();
+  document.body.style.overflow = imageViewer.previousBodyOverflow;
+  document.documentElement.style.overflow = imageViewer.previousDocumentOverflow;
+  document.body.classList.remove('image-viewer-open');
+  if (imageViewer.previousActiveElement?.isConnected) {
+    try {
+      imageViewer.previousActiveElement.focus({ preventScroll: true });
+    } catch {
+      imageViewer.previousActiveElement.focus();
+    }
+  }
+  Object.assign(imageViewer, {
+    overlay: null,
+    stage: null,
+    image: null,
+    message: null,
+    closeButton: null,
+    downloadButton: null,
+    previousActiveElement: null,
+    isOpen: false,
+    isLoaded: false,
+    isPanning: false,
+    isControlActive: false,
+    naturalWidth: 0,
+    naturalHeight: 0,
+    minScale: 1,
+    maxScale: IMAGE_VIEWER_MAX_NATURAL_SCALE,
+    scale: 1,
+    translateX: 0,
+    translateY: 0
+  });
+}
+
+function handleImageViewerWheel(event) {
+  if (!imageViewer.isOpen) return;
+  event.preventDefault();
+  showImageViewerChrome();
+  if (!imageViewer.isLoaded) return;
+  const factor = Math.exp(-event.deltaY * IMAGE_VIEWER_ZOOM_WHEEL_SPEED);
+  zoomImageViewerAtPoint(imageViewer.scale * factor, event.clientX, event.clientY);
+}
+
+function handleImageViewerPointerDown(event) {
+  if (event.button !== undefined && event.button !== 0) return;
+  if (event.target.closest?.('.image-viewer-control')) return;
+  event.preventDefault();
+  showImageViewerChrome();
+  if (!imageViewer.isLoaded || !imageViewer.stage) return;
+  imageViewer.isPanning = true;
+  imageViewer.pointerStartX = event.clientX;
+  imageViewer.pointerStartY = event.clientY;
+  imageViewer.pointerStartTranslateX = imageViewer.translateX;
+  imageViewer.pointerStartTranslateY = imageViewer.translateY;
+  imageViewer.overlay?.classList.add('is-panning');
+  try {
+    imageViewer.stage.setPointerCapture(event.pointerId);
+  } catch {
+    // Pointer capture is best-effort; mouse dragging still works without it.
+  }
+}
+
+function handleImageViewerPointerMove(event) {
+  showImageViewerChrome();
+  if (!imageViewer.isPanning) return;
+  event.preventDefault();
+  imageViewer.translateX = imageViewer.pointerStartTranslateX + event.clientX - imageViewer.pointerStartX;
+  imageViewer.translateY = imageViewer.pointerStartTranslateY + event.clientY - imageViewer.pointerStartY;
+  applyImageViewerTransform();
+}
+
+function finishImageViewerPan(event) {
+  if (!imageViewer.isPanning) return;
+  imageViewer.isPanning = false;
+  imageViewer.overlay?.classList.remove('is-panning');
+  try {
+    imageViewer.stage?.releasePointerCapture(event.pointerId);
+  } catch {
+    // Pointer capture may already be released.
+  }
+  showImageViewerChrome();
+}
+
+function handleImageViewerKeydown(event) {
+  if (!imageViewer.isOpen) return;
+  showImageViewerChrome();
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    closeImageViewer();
+    return;
+  }
+  if (!imageViewer.isLoaded) return;
+  if (event.key === '0') {
+    event.preventDefault();
+    resetImageViewerToFit();
+    return;
+  }
+  if (event.key === '1') {
+    event.preventDefault();
+    zoomImageViewerAtCenter(1);
+    return;
+  }
+  if (event.key === '+' || event.key === '=') {
+    event.preventDefault();
+    zoomImageViewerAtCenter(imageViewer.scale * IMAGE_VIEWER_ZOOM_BUTTON_STEP);
+    return;
+  }
+  if (event.key === '-' || event.key === '_') {
+    event.preventDefault();
+    zoomImageViewerAtCenter(imageViewer.scale / IMAGE_VIEWER_ZOOM_BUTTON_STEP);
+  }
+}
+
+function handleImageViewerResize() {
+  if (!imageViewer.isLoaded) return;
+  imageViewer.minScale = calculateImageViewerFitScale();
+  imageViewer.maxScale = Math.max(IMAGE_VIEWER_MAX_NATURAL_SCALE, imageViewer.minScale);
+  imageViewer.scale = clampImageViewerScale(imageViewer.scale);
+  applyImageViewerTransform();
+}
+
+function createImageViewerOverlay() {
+  const overlay = document.createElement('div');
+  overlay.className = 'image-viewer-overlay is-loading';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', 'Image viewer');
+  overlay.tabIndex = -1;
+  overlay.innerHTML = `
+    <button type="button" class="image-viewer-control image-viewer-close" aria-label="Close image viewer">Close</button>
+    <a class="image-viewer-control image-viewer-download" aria-label="Download image">Download</a>
+    <div class="image-viewer-stage" aria-live="polite">
+      <div class="image-viewer-message">Loading full-resolution image...</div>
+      <img class="image-viewer-image" alt="Generated image" draggable="false" hidden>
+    </div>`;
+  return overlay;
+}
+
+function openImageViewer({ src, alt = 'Generated image', downloadName = 'generated-image.png' }) {
+  const fullSource = String(src || '').trim();
+  closeImageViewer();
+  const overlay = createImageViewerOverlay();
+  document.body.appendChild(overlay);
+  imageViewer.overlay = overlay;
+  imageViewer.stage = overlay.querySelector('.image-viewer-stage');
+  imageViewer.image = overlay.querySelector('.image-viewer-image');
+  imageViewer.message = overlay.querySelector('.image-viewer-message');
+  imageViewer.closeButton = overlay.querySelector('.image-viewer-close');
+  imageViewer.downloadButton = overlay.querySelector('.image-viewer-download');
+  imageViewer.previousBodyOverflow = document.body.style.overflow;
+  imageViewer.previousDocumentOverflow = document.documentElement.style.overflow;
+  imageViewer.previousActiveElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  imageViewer.isOpen = true;
+  imageViewer.isLoaded = false;
+  imageViewer.isPanning = false;
+  imageViewer.isControlActive = false;
+  document.body.style.overflow = 'hidden';
+  document.documentElement.style.overflow = 'hidden';
+  document.body.classList.add('image-viewer-open');
+
+  addImageViewerListener(imageViewer.closeButton, 'click', closeImageViewer);
+  addImageViewerListener(imageViewer.downloadButton, 'click', (event) => {
+    showImageViewerChrome();
+    if (!imageViewer.downloadButton?.getAttribute('href')) event.preventDefault();
+  });
+  for (const control of overlay.querySelectorAll('.image-viewer-control')) {
+    addImageViewerListener(control, 'pointerenter', () => {
+      imageViewer.isControlActive = true;
+      showImageViewerChrome();
+    });
+    addImageViewerListener(control, 'pointerleave', () => {
+      imageViewer.isControlActive = false;
+      showImageViewerChrome();
+    });
+    addImageViewerListener(control, 'focusin', () => {
+      imageViewer.isControlActive = true;
+      showImageViewerChrome();
+    });
+    addImageViewerListener(control, 'focusout', () => {
+      imageViewer.isControlActive = false;
+      showImageViewerChrome();
+    });
+  }
+  addImageViewerListener(overlay, 'wheel', handleImageViewerWheel, { passive: false });
+  addImageViewerListener(overlay, 'pointermove', handleImageViewerPointerMove);
+  addImageViewerListener(imageViewer.stage, 'pointerdown', handleImageViewerPointerDown);
+  addImageViewerListener(imageViewer.stage, 'pointerup', finishImageViewerPan);
+  addImageViewerListener(imageViewer.stage, 'pointercancel', finishImageViewerPan);
+  addImageViewerListener(window, 'keydown', handleImageViewerKeydown, true);
+  addImageViewerListener(window, 'resize', handleImageViewerResize);
+
+  if (imageViewer.downloadButton) {
+    imageViewer.downloadButton.setAttribute('download', sanitizeDownloadFileName(downloadName));
+    if (fullSource) imageViewer.downloadButton.setAttribute('href', fullSource);
+    else imageViewer.downloadButton.setAttribute('aria-disabled', 'true');
+  }
+
+  if (imageViewer.image) {
+    imageViewer.image.alt = alt;
+    imageViewer.image.onload = setImageViewerNaturalSize;
+    imageViewer.image.onerror = () => {
+      imageViewer.isLoaded = false;
+      imageViewer.image.hidden = true;
+      imageViewer.overlay?.classList.remove('is-loading', 'is-loaded');
+      imageViewerMessage('Unable to load this full-resolution image. The artifact may no longer be available.', true);
+    };
+  }
+
+  showImageViewerChrome();
+  overlay.focus({ preventScroll: true });
+  if (!fullSource) {
+    imageViewerMessage('No viewable image artifact is available for this item.', true);
+    return;
+  }
+  imageViewerMessage('Loading full-resolution image...');
+  imageViewer.image.src = fullSource;
+}
+
+function openImageViewerFromLink(link) {
+  const image = link.querySelector('img');
+  const src = link.dataset.imageViewerUrl || image?.dataset.fullImageUrl || image?.dataset.artifactUrl || link.getAttribute('href') || '';
+  openImageViewer({
+    src,
+    alt: link.dataset.imageAlt || image?.alt || 'Generated image',
+    downloadName: link.dataset.imageDownloadName || sanitizeDownloadFileName('generated-image.png')
+  });
+}
+
+function handleImageViewerLinkClick(event) {
+  const link = event.target.closest?.('[data-image-viewer-url]');
+  if (!link) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  openImageViewerFromLink(link);
+  return true;
 }
 
 function renderLastResult() {
@@ -1082,10 +1518,12 @@ function renderLastResult() {
   const job = result.job || {};
   const artifact = firstArtifact(job) || (result.artifacts || []).find((item) => item?.url) || null;
   const imageUrl = artifact?.url || '';
+  const imageAlt = generatedImageAltText(job, 'Last generated image');
+  const downloadName = imageDownloadFileName(job, artifact);
   const tone = statusTone(job.status || 'submitted', job);
   target.innerHTML = `<div class="generation-result image-lab-result">
     <p>${statusPill(statusLabelForJob(job), tone)} Job <code>${escapeHtml(job.id || 'n/a')}</code></p>
-    ${imageUrl ? `<a href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="result-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Last generated image" loading="lazy" hidden><div class="thumb-placeholder">Loading result image...</div></a>` : '<div class="thumb-placeholder">No image artifact available</div>'}
+    ${imageUrl ? `<a class="image-viewer-link" href="${escapeHtml(imageUrl)}" data-image-viewer-url="${escapeHtml(imageUrl)}" data-image-download-name="${escapeHtml(downloadName)}" data-image-alt="${escapeHtml(imageAlt)}"><img class="result-image" data-artifact-url="${escapeHtml(imageUrl)}" data-full-image-url="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageAlt)}" loading="lazy" draggable="false" hidden><div class="thumb-placeholder">Loading result image...</div></a>` : '<div class="thumb-placeholder">No image artifact available</div>'}
     <p class="compact-meta-line"><span><strong>Seed:</strong> ${escapeHtml(actualSeedForJob(job, result) ?? job.requestPayload?.seed ?? 'n/a')}</span><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span></p>
   </div>`;
   hydrateImages();
@@ -1197,8 +1635,12 @@ function renderCancelControl(job) {
 
 function renderGalleryImageContent(job, imageUrl, prompt, jobId, dimensions) {
   const status = job.status || 'unknown';
-  if (imageUrl) {
-    return `<a class="gallery-image-link" href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="gallery-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Generated image: ${escapeHtml(previewText(prompt, 90) || jobId)}" loading="lazy" hidden><div class="thumb-placeholder">Image loading...</div></a>`;
+  const artifact = firstArtifact(job);
+  const fullImageUrl = firstFullImageUrl(job) || imageUrl;
+  const displayImageUrl = imageUrl || fullImageUrl;
+  const imageAlt = `Generated image: ${previewText(prompt, 90) || jobId}`;
+  if (displayImageUrl) {
+    return `<a class="gallery-image-link" href="${escapeHtml(fullImageUrl)}" data-image-viewer-url="${escapeHtml(fullImageUrl)}" data-image-download-name="${escapeHtml(imageDownloadFileName(job, artifact))}" data-image-alt="${escapeHtml(imageAlt)}" aria-label="Open full-resolution image viewer for ${escapeHtml(previewText(prompt, 80) || jobId)}"><img class="gallery-image" data-artifact-url="${escapeHtml(displayImageUrl)}" data-full-image-url="${escapeHtml(fullImageUrl)}" alt="${escapeHtml(imageAlt)}" loading="lazy" draggable="false" hidden><div class="thumb-placeholder">Image loading...</div></a>`;
   }
   if (isActiveJobStatus(status) || job.isClientPending || (hasCancelRequested(job) && !isTerminalJobStatus(status))) {
     return `<div class="thumb-placeholder image-lab-pending-placeholder"><span class="image-lab-placeholder-title">${escapeHtml(pendingMessage(job))}</span><span class="image-lab-status-actions">${statusPill(statusLabelForJob(job), statusTone(status, job))}${renderCancelControl(job)}</span><span class="image-lab-placeholder-subtitle">${escapeHtml(dimensions)} preview space reserved for this request.</span></div>`;
@@ -1754,6 +2196,7 @@ function findGalleryJob(button) {
 }
 
 async function handleGalleryClick(event) {
+  if (handleImageViewerLinkClick(event)) return;
   const button = event.target.closest('[data-gallery-action]');
   if (!button || button.disabled) return;
   const job = findGalleryJob(button);
@@ -1892,6 +2335,7 @@ function wireEvents() {
   $('#image-lab-form')?.addEventListener('submit', handleGenerate);
   $('#image-lab-refresh-favorites')?.addEventListener('click', () => refreshFavoritesOnly('Image favorites refreshed.'));
   $('#image-lab-gallery')?.addEventListener('click', handleGalleryClick);
+  $('#image-lab-last-result')?.addEventListener('click', handleImageViewerLinkClick);
   $('#image-lab-favorites')?.addEventListener('click', handleFavoriteClick);
   $('#image-lab-load-more')?.addEventListener('click', async () => {
     state.galleryLimit = Math.min(MAX_GALLERY_LIMIT, state.galleryLimit + GALLERY_LIMIT_STEP);

@@ -1736,6 +1736,130 @@ summary {
   margin-top: 16px;
 }
 
+.gallery-image-link,
+.image-viewer-link {
+  cursor: zoom-in;
+}
+
+body.image-viewer-open {
+  overflow: hidden;
+}
+
+.image-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.94);
+  cursor: grab;
+  touch-action: none;
+}
+
+.image-viewer-overlay.is-panning {
+  cursor: grabbing;
+}
+
+.image-viewer-overlay.is-inactive {
+  cursor: none;
+}
+
+.image-viewer-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+
+.image-viewer-image {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  transform-origin: center center;
+  user-select: none;
+  pointer-events: none;
+  will-change: transform;
+  -webkit-user-drag: none;
+  -webkit-user-select: none;
+}
+
+.image-viewer-image[hidden],
+.image-viewer-message[hidden] {
+  display: none;
+}
+
+.image-viewer-control {
+  position: fixed;
+  top: 18px;
+  z-index: 10001;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.78);
+  color: #f9fafb;
+  font-weight: 800;
+  text-decoration: none;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(10px);
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 180ms ease, transform 180ms ease, background 180ms ease;
+}
+
+.image-viewer-close {
+  left: 18px;
+}
+
+.image-viewer-download {
+  right: 18px;
+}
+
+.image-viewer-control:hover,
+.image-viewer-control:focus-visible {
+  background: rgba(31, 41, 55, 0.96);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.image-viewer-overlay.is-inactive .image-viewer-control {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-6px);
+}
+
+.image-viewer-message {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 10001;
+  max-width: min(92vw, 520px);
+  padding: 14px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 14px;
+  background: rgba(17, 24, 39, 0.84);
+  color: var(--text);
+  text-align: center;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+.image-viewer-overlay.has-error .image-viewer-message {
+  border-color: rgba(252, 165, 165, 0.58);
+  color: var(--danger);
+}
+
 @media (max-width: 1280px) {
   .image-lab-controls {
     max-height: 58vh;
