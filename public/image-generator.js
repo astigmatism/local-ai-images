@@ -39,7 +39,11 @@ const state = {
   lastResult: null
 };
 
-const thumbnailObjectUrls = new Map();
+const galleryImageDrag = {
+  isDragging: false,
+  lastEndedAt: 0,
+  resetTimer: null
+};
 
 const imageViewer = {
   overlay: null,
@@ -812,6 +816,67 @@ function generatedImageAltText(job, fallback = 'Generated image') {
   return prompt ? `Generated image: ${prompt}` : fallback;
 }
 
+function imageMimeTypeForDrag(mimeType, url = '') {
+  const normalized = String(mimeType || '').toLowerCase();
+  if (normalized.startsWith('image/')) return normalized;
+  const path = String(url || '').split('?')[0].toLowerCase();
+  if (path.endsWith('.jpg') || path.endsWith('.jpeg')) return 'image/jpeg';
+  if (path.endsWith('.webp')) return 'image/webp';
+  if (path.endsWith('.gif')) return 'image/gif';
+  return 'image/png';
+}
+
+function markGalleryImageDragStarted() {
+  galleryImageDrag.isDragging = true;
+  if (galleryImageDrag.resetTimer) window.clearTimeout(galleryImageDrag.resetTimer);
+  galleryImageDrag.resetTimer = window.setTimeout(() => {
+    galleryImageDrag.isDragging = false;
+  }, 1500);
+}
+
+function markGalleryImageDragEnded() {
+  galleryImageDrag.isDragging = false;
+  galleryImageDrag.lastEndedAt = Date.now();
+  if (galleryImageDrag.resetTimer) window.clearTimeout(galleryImageDrag.resetTimer);
+  galleryImageDrag.resetTimer = window.setTimeout(() => {
+    galleryImageDrag.lastEndedAt = 0;
+  }, 600);
+}
+
+function shouldSuppressImageViewerClickAfterDrag() {
+  return galleryImageDrag.isDragging || (Date.now() - galleryImageDrag.lastEndedAt < 600);
+}
+
+function handleGalleryImageDragStart(event) {
+  const link = event.target.closest?.('[data-image-viewer-url]');
+  if (!link || link.closest?.('.image-viewer-overlay')) return;
+  const image = link.querySelector('img');
+  const source = link.dataset.imageDragUrl
+    || link.dataset.imageViewerUrl
+    || image?.dataset.fullImageUrl
+    || image?.dataset.artifactUrl
+    || link.getAttribute('href')
+    || '';
+  const url = absoluteImageUrl(source);
+  if (!url) return;
+  const fileName = sanitizeDownloadFileName(link.dataset.imageDownloadName || 'generated-image.png');
+  const mimeType = imageMimeTypeForDrag(link.dataset.imageMimeType, url);
+  markGalleryImageDragStarted();
+  link.classList.add('is-dragging-image');
+  if (!event.dataTransfer) return;
+  event.dataTransfer.effectAllowed = 'copy';
+  try { event.dataTransfer.setData('DownloadURL', `${mimeType}:${fileName}:${url}`); } catch {}
+  try { event.dataTransfer.setData('text/uri-list', url); } catch {}
+  try { event.dataTransfer.setData('text/plain', url); } catch {}
+  try { event.dataTransfer.setData('text/html', `<img src="${escapeHtml(url)}" alt="${escapeHtml(image?.alt || 'Generated image')}">`); } catch {}
+}
+
+function handleGalleryImageDragEnd(event) {
+  const link = event.target.closest?.('[data-image-viewer-url]');
+  if (link) link.classList.remove('is-dragging-image');
+  markGalleryImageDragEnded();
+}
+
 const ACTUAL_SEED_KEYS = ['actualSeed', 'actual_seed', 'seedUsed', 'seed_used', 'resolvedSeed', 'resolved_seed'];
 
 function normalizedSeedValue(value) {
@@ -1151,49 +1216,78 @@ function favoriteForJob(job) {
   }) || null;
 }
 
+function absoluteImageUrl(url) {
+  const value = String(url || '').trim();
+  if (!value) return '';
+  try {
+    return new URL(value, window.location.href).href;
+  } catch {
+    return value;
+  }
+}
+
+function retryableImageUrl(url, attempts = 0) {
+  const value = String(url || '').trim();
+  if (!value || attempts <= 0) return value;
+  try {
+    const parsed = new URL(value, window.location.href);
+    parsed.searchParams.set('image_preview_retry', String(attempts));
+    return parsed.href;
+  } catch {
+    return value;
+  }
+}
+
+function resetHydratedImageForNewUrl(image, url) {
+  if (image.dataset.hydratedUrl === url) return;
+  delete image.dataset.loaded;
+  delete image.dataset.loading;
+  delete image.dataset.loadAttempts;
+  image.dataset.hydratedUrl = url;
+  image.removeAttribute('src');
+}
+
+function markHydratedImageLoaded(image) {
+  if (!image.isConnected) return;
+  image.hidden = false;
+  image.dataset.loaded = '1';
+  delete image.dataset.loading;
+  image.nextElementSibling?.remove();
+  image.onload = null;
+  image.onerror = null;
+}
+
+function markHydratedImageErrored(image, url) {
+  if (!image.isConnected) return;
+  delete image.dataset.loading;
+  const attempts = Number(image.dataset.loadAttempts || '0') + 1;
+  image.dataset.loadAttempts = String(attempts);
+  if (attempts <= 8) {
+    const placeholder = image.nextElementSibling;
+    if (placeholder) placeholder.textContent = attempts > 2 ? 'Image still loading...' : 'Image loading...';
+    window.setTimeout(() => {
+      if (image.isConnected && image.dataset.loaded !== '1') hydrateImages();
+    }, Math.min(500 * attempts, 2000));
+    return;
+  }
+  image.hidden = true;
+  image.nextElementSibling?.replaceWith(Object.assign(document.createElement('div'), { className: 'thumb-placeholder', textContent: 'Image unavailable' }));
+  image.onload = null;
+  image.onerror = null;
+  console.warn('Unable to hydrate generated image preview', url);
+}
+
 function hydrateImages() {
   for (const image of document.querySelectorAll('img[data-artifact-url]')) {
     const url = image.dataset.artifactUrl;
-    if (!url || image.dataset.loaded === '1' || image.dataset.loading === '1') continue;
-    if (thumbnailObjectUrls.has(url)) {
-      image.src = thumbnailObjectUrls.get(url);
-      image.hidden = false;
-      image.dataset.loaded = '1';
-      image.nextElementSibling?.remove();
-      continue;
-    }
+    if (!url) continue;
+    resetHydratedImageForNewUrl(image, url);
+    if (image.dataset.loaded === '1' || image.dataset.loading === '1') continue;
+    const attempts = Number(image.dataset.loadAttempts || '0');
     image.dataset.loading = '1';
-    fetch(url)
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.blob();
-      })
-      .then((blob) => {
-        if (!image.isConnected) return;
-        const objectUrl = URL.createObjectURL(blob);
-        thumbnailObjectUrls.set(url, objectUrl);
-        image.src = objectUrl;
-        image.hidden = false;
-        image.dataset.loaded = '1';
-        delete image.dataset.loading;
-        image.nextElementSibling?.remove();
-      })
-      .catch(() => {
-        if (!image.isConnected) return;
-        delete image.dataset.loading;
-        const attempts = Number(image.dataset.loadAttempts || '0') + 1;
-        image.dataset.loadAttempts = String(attempts);
-        if (attempts <= 8) {
-          const placeholder = image.nextElementSibling;
-          if (placeholder) placeholder.textContent = attempts > 2 ? 'Image still loading...' : 'Image loading...';
-          window.setTimeout(() => {
-            if (image.isConnected && image.dataset.loaded !== '1') hydrateImages();
-          }, Math.min(500 * attempts, 2000));
-          return;
-        }
-        image.hidden = true;
-        image.nextElementSibling?.replaceWith(Object.assign(document.createElement('div'), { className: 'thumb-placeholder', textContent: 'Image unavailable' }));
-      });
+    image.onload = () => markHydratedImageLoaded(image);
+    image.onerror = () => markHydratedImageErrored(image, url);
+    image.src = retryableImageUrl(url, attempts);
   }
 }
 
@@ -1449,8 +1543,10 @@ function createImageViewerOverlay() {
   overlay.setAttribute('aria-label', 'Image viewer');
   overlay.tabIndex = -1;
   overlay.innerHTML = `
-    <button type="button" class="image-viewer-control image-viewer-close" aria-label="Close image viewer">Close</button>
-    <a class="image-viewer-control image-viewer-download" aria-label="Download image">Download</a>
+    <div class="image-viewer-controls" aria-label="Image viewer controls">
+      <a class="image-viewer-control image-viewer-download" aria-label="Download image">Download</a>
+      <button type="button" class="image-viewer-control image-viewer-close" aria-label="Close image viewer">Close</button>
+    </div>
     <div class="image-viewer-stage" aria-live="polite">
       <div class="image-viewer-message">Loading full-resolution image...</div>
       <img class="image-viewer-image" alt="Generated image" draggable="false" hidden>
@@ -1551,6 +1647,11 @@ function openImageViewerFromLink(link) {
 function handleImageViewerLinkClick(event) {
   const link = event.target.closest?.('[data-image-viewer-url]');
   if (!link) return false;
+  if (shouldSuppressImageViewerClickAfterDrag()) {
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
   event.preventDefault();
   event.stopPropagation();
   openImageViewerFromLink(link);
@@ -1574,7 +1675,7 @@ function renderLastResult() {
   const tone = statusTone(job.status || 'submitted', job);
   target.innerHTML = `<div class="generation-result image-lab-result">
     <p>${statusPill(statusLabelForJob(job), tone)} Job <code>${escapeHtml(job.id || 'n/a')}</code></p>
-    ${imageUrl ? `<a class="image-viewer-link" href="${escapeHtml(imageUrl)}" data-image-viewer-url="${escapeHtml(imageUrl)}" data-image-download-name="${escapeHtml(downloadName)}" data-image-alt="${escapeHtml(imageAlt)}"><img class="result-image" data-artifact-url="${escapeHtml(imageUrl)}" data-full-image-url="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageAlt)}" loading="lazy" draggable="false" hidden><div class="thumb-placeholder">Loading result image...</div></a>` : '<div class="thumb-placeholder">No image artifact available</div>'}
+    ${imageUrl ? `<a class="image-viewer-link" href="${escapeHtml(imageUrl)}" data-image-viewer-url="${escapeHtml(imageUrl)}" data-image-drag-url="${escapeHtml(imageUrl)}" data-image-download-name="${escapeHtml(downloadName)}" data-image-mime-type="${escapeHtml(artifact?.mimeType || '')}" data-image-alt="${escapeHtml(imageAlt)}" draggable="true"><img class="result-image" data-artifact-url="${escapeHtml(imageUrl)}" data-full-image-url="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageAlt)}" loading="lazy" draggable="true" hidden><div class="thumb-placeholder">Loading result image...</div></a>` : '<div class="thumb-placeholder">No image artifact available</div>'}
     <p class="compact-meta-line"><span><strong>Seed:</strong> ${escapeHtml(actualSeedForJob(job, result) ?? job.requestPayload?.seed ?? 'n/a')}</span><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span></p>
   </div>`;
   hydrateImages();
@@ -1731,7 +1832,7 @@ function renderGalleryImageContent(job, imageUrl, prompt, jobId, dimensions) {
   const displayImageUrl = imageUrl || fullImageUrl;
   const imageAlt = `Generated image: ${previewText(prompt, 90) || jobId}`;
   if (displayImageUrl) {
-    return `<a class="gallery-image-link" href="${escapeHtml(fullImageUrl)}" data-image-viewer-url="${escapeHtml(fullImageUrl)}" data-image-download-name="${escapeHtml(imageDownloadFileName(job, artifact))}" data-image-alt="${escapeHtml(imageAlt)}" aria-label="Open full-resolution image viewer for ${escapeHtml(previewText(prompt, 80) || jobId)}"><img class="gallery-image" data-artifact-url="${escapeHtml(displayImageUrl)}" data-full-image-url="${escapeHtml(fullImageUrl)}" alt="${escapeHtml(imageAlt)}" loading="lazy" draggable="false" hidden><div class="thumb-placeholder">Image loading...</div></a>`;
+    return `<a class="gallery-image-link" href="${escapeHtml(fullImageUrl)}" data-image-viewer-url="${escapeHtml(fullImageUrl)}" data-image-drag-url="${escapeHtml(fullImageUrl)}" data-image-download-name="${escapeHtml(imageDownloadFileName(job, artifact))}" data-image-mime-type="${escapeHtml(artifact?.mimeType || '')}" data-image-alt="${escapeHtml(imageAlt)}" draggable="true" aria-label="Open full-resolution image viewer for ${escapeHtml(previewText(prompt, 80) || jobId)}"><img class="gallery-image" data-artifact-url="${escapeHtml(displayImageUrl)}" data-full-image-url="${escapeHtml(fullImageUrl)}" alt="${escapeHtml(imageAlt)}" loading="lazy" draggable="true" hidden><div class="thumb-placeholder">Image loading...</div></a>`;
   }
   if (isActiveJobStatus(status) || job.isClientPending || (hasCancelRequested(job) && !isTerminalJobStatus(status))) {
     return `<div class="thumb-placeholder image-lab-pending-placeholder"><span class="image-lab-placeholder-title">${escapeHtml(pendingMessage(job))}</span><span class="image-lab-status-actions">${statusPill(statusLabelForJob(job), statusTone(status, job))}${renderCancelControl(job)}</span><span class="image-lab-placeholder-subtitle">${escapeHtml(dimensions)} preview space reserved for this request.</span></div>`;
@@ -2430,7 +2531,11 @@ function wireEvents() {
   $('#image-lab-form')?.addEventListener('submit', handleGenerate);
   $('#image-lab-refresh-favorites')?.addEventListener('click', () => refreshFavoritesOnly('Image favorites refreshed.'));
   $('#image-lab-gallery')?.addEventListener('click', handleGalleryClick);
+  $('#image-lab-gallery')?.addEventListener('dragstart', handleGalleryImageDragStart);
+  $('#image-lab-gallery')?.addEventListener('dragend', handleGalleryImageDragEnd);
   $('#image-lab-last-result')?.addEventListener('click', handleImageViewerLinkClick);
+  $('#image-lab-last-result')?.addEventListener('dragstart', handleGalleryImageDragStart);
+  $('#image-lab-last-result')?.addEventListener('dragend', handleGalleryImageDragEnd);
   $('#image-lab-favorites')?.addEventListener('click', handleFavoriteClick);
   $('#image-lab-load-more')?.addEventListener('click', async () => {
     state.galleryLimit = Math.min(MAX_GALLERY_LIMIT, state.galleryLimit + GALLERY_LIMIT_STEP);

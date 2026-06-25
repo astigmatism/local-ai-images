@@ -1741,6 +1741,11 @@ summary {
   cursor: zoom-in;
 }
 
+.gallery-image-link.is-dragging-image,
+.image-viewer-link.is-dragging-image {
+  cursor: copy;
+}
+
 body.image-viewer-open {
   overflow: hidden;
 }
@@ -1796,10 +1801,20 @@ body.image-viewer-open {
   display: none;
 }
 
-.image-viewer-control {
+.image-viewer-controls {
   position: fixed;
   top: 18px;
+  right: 18px;
   z-index: 10001;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.image-viewer-control {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1813,17 +1828,7 @@ body.image-viewer-open {
   text-decoration: none;
   box-shadow: 0 16px 45px rgba(0, 0, 0, 0.38);
   backdrop-filter: blur(10px);
-  opacity: 1;
-  transform: translateY(0);
-  transition: opacity 180ms ease, transform 180ms ease, background 180ms ease;
-}
-
-.image-viewer-close {
-  right: 18px;
-}
-
-.image-viewer-download {
-  left: 18px;
+  transition: background 180ms ease;
 }
 
 .image-viewer-control:hover,
@@ -1833,7 +1838,7 @@ body.image-viewer-open {
   outline-offset: 2px;
 }
 
-.image-viewer-overlay.is-inactive .image-viewer-control {
+.image-viewer-overlay.is-inactive .image-viewer-controls {
   opacity: 0;
   pointer-events: none;
   transform: translateY(-6px);
