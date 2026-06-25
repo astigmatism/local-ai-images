@@ -721,20 +721,55 @@ function applyGenerationPayloadToControls(payload) {
 }
 
 function jobArtifacts(job) {
-  return Array.isArray(job?.artifacts) ? job.artifacts : [];
+  if (Array.isArray(job?.artifacts)) return job.artifacts.filter(Boolean);
+  return job?.artifact ? [job.artifact].filter(Boolean) : [];
+}
+
+function artifactImageUrl(artifact) {
+  if (!artifact) return '';
+  return artifact.url
+    || artifact.imageUrl
+    || artifact.image_url
+    || artifact.href
+    || (artifact.id ? `/api/v1/artifacts/${encodeURIComponent(artifact.id)}` : '');
 }
 
 function firstArtifact(job) {
-  return jobArtifacts(job).find((artifact) => artifact?.url) || jobArtifacts(job)[0] || null;
+  const artifacts = jobArtifacts(job);
+  return artifacts.find((artifact) => artifactImageUrl(artifact)) || artifacts[0] || null;
+}
+
+function firstArtifactUrlFromList(artifacts) {
+  const list = Array.isArray(artifacts) ? artifacts.filter(Boolean) : [];
+  return artifactImageUrl(list.find((artifact) => artifactImageUrl(artifact)) || list[0]);
+}
+
+function resultArtifacts(result, job = null) {
+  const jobList = jobArtifacts(job);
+  const resultList = Array.isArray(result?.artifacts) ? result.artifacts.filter(Boolean) : [];
+  if (jobList.some((artifact) => artifactImageUrl(artifact))) return jobList;
+  if (resultList.some((artifact) => artifactImageUrl(artifact))) return resultList;
+  return jobList.length ? jobList : resultList;
 }
 
 function firstFullImageUrl(job) {
-  const artifactUrl = firstArtifact(job)?.url;
+  const artifactUrl = artifactImageUrl(firstArtifact(job));
   return artifactUrl || job?.imageUrl || job?.image_url || job?.thumbnailUrl || '';
 }
 
 function firstImageUrl(job) {
   return job?.thumbnailUrl || firstFullImageUrl(job);
+}
+
+function firstResultImageUrl(result, job) {
+  const artifactUrl = firstArtifactUrlFromList(resultArtifacts(result, job));
+  return artifactUrl
+    || result?.imageUrl
+    || result?.image_url
+    || job?.thumbnailUrl
+    || job?.imageUrl
+    || job?.image_url
+    || '';
 }
 
 function extensionForImageMime(mimeType) {
@@ -1119,7 +1154,7 @@ function favoriteForJob(job) {
 function hydrateImages() {
   for (const image of document.querySelectorAll('img[data-artifact-url]')) {
     const url = image.dataset.artifactUrl;
-    if (!url || image.dataset.loaded === '1') continue;
+    if (!url || image.dataset.loaded === '1' || image.dataset.loading === '1') continue;
     if (thumbnailObjectUrls.has(url)) {
       image.src = thumbnailObjectUrls.get(url);
       image.hidden = false;
@@ -1127,20 +1162,35 @@ function hydrateImages() {
       image.nextElementSibling?.remove();
       continue;
     }
+    image.dataset.loading = '1';
     fetch(url)
       .then((response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.blob();
       })
       .then((blob) => {
+        if (!image.isConnected) return;
         const objectUrl = URL.createObjectURL(blob);
         thumbnailObjectUrls.set(url, objectUrl);
         image.src = objectUrl;
         image.hidden = false;
         image.dataset.loaded = '1';
+        delete image.dataset.loading;
         image.nextElementSibling?.remove();
       })
       .catch(() => {
+        if (!image.isConnected) return;
+        delete image.dataset.loading;
+        const attempts = Number(image.dataset.loadAttempts || '0') + 1;
+        image.dataset.loadAttempts = String(attempts);
+        if (attempts <= 8) {
+          const placeholder = image.nextElementSibling;
+          if (placeholder) placeholder.textContent = attempts > 2 ? 'Image still loading...' : 'Image loading...';
+          window.setTimeout(() => {
+            if (image.isConnected && image.dataset.loaded !== '1') hydrateImages();
+          }, Math.min(500 * attempts, 2000));
+          return;
+        }
         image.hidden = true;
         image.nextElementSibling?.replaceWith(Object.assign(document.createElement('div'), { className: 'thumb-placeholder', textContent: 'Image unavailable' }));
       });
@@ -1516,8 +1566,9 @@ function renderLastResult() {
     return;
   }
   const job = result.job || {};
-  const artifact = firstArtifact(job) || (result.artifacts || []).find((item) => item?.url) || null;
-  const imageUrl = artifact?.url || '';
+  const artifacts = resultArtifacts(result, job);
+  const artifact = artifacts.find((item) => artifactImageUrl(item)) || firstArtifact(job) || artifacts[0] || null;
+  const imageUrl = firstResultImageUrl(result, job);
   const imageAlt = generatedImageAltText(job, 'Last generated image');
   const downloadName = imageDownloadFileName(job, artifact);
   const tone = statusTone(job.status || 'submitted', job);
@@ -1529,19 +1580,59 @@ function renderLastResult() {
   hydrateImages();
 }
 
+function galleryJobKeys(job) {
+  return [job?.id, job?.clientId, job?.providerJobId, job?.provider_job_id]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+}
+
+function mergeGalleryDisplayJob(localJob, remoteJob) {
+  if (!localJob) return remoteJob;
+  const remoteArtifacts = jobArtifacts(remoteJob);
+  const localArtifacts = jobArtifacts(localJob);
+  const remoteIsTerminal = isTerminalJobStatus(remoteJob?.status);
+  const merged = {
+    ...localJob,
+    ...remoteJob,
+    clientId: localJob.clientId || remoteJob.clientId,
+    clientSequence: localJob.clientSequence || remoteJob.clientSequence,
+    clientCreatedAt: localJob.clientCreatedAt || localJob.createdAt || remoteJob.clientCreatedAt || remoteJob.createdAt || null,
+    isClientPending: localJob.isClientPending && !remoteIsTerminal,
+    originalRequestPayload: isPlainObject(remoteJob.originalRequestPayload) ? remoteJob.originalRequestPayload : localJob.originalRequestPayload,
+    requestPayload: firstPayloadCandidate([remoteJob.requestPayload, remoteJob.request_payload, localJob.requestPayload, localJob.request_payload]),
+    request: isPlainObject(remoteJob.request) && Object.keys(remoteJob.request).length ? remoteJob.request : localJob.request || {},
+    metadata: {
+      ...(isPlainObject(localJob.metadata) ? localJob.metadata : {}),
+      ...(isPlainObject(remoteJob.metadata) ? remoteJob.metadata : {})
+    }
+  };
+  if (remoteArtifacts.length) merged.artifacts = remoteArtifacts;
+  else if (localArtifacts.length) merged.artifacts = localArtifacts;
+  const displayUrl = remoteJob.thumbnailUrl || firstFullImageUrl(merged) || localJob.thumbnailUrl || '';
+  if (displayUrl) merged.thumbnailUrl = displayUrl;
+  return merged;
+}
+
 function currentJobs() {
   const remoteJobs = state.imageJobs?.jobs || state.imageJobs?.items || [];
-  const jobsById = new Map();
-  for (const job of state.pendingJobs || []) {
-    const key = String(job.id || job.clientId || '');
-    if (key) jobsById.set(key, job);
-  }
-  for (const job of remoteJobs) {
-    const key = String(job?.id || '');
-    if (!key || jobsById.has(key)) continue;
-    jobsById.set(key, job);
-  }
-  return [...jobsById.values()].sort((a, b) => {
+  const jobsByPrimaryKey = new Map();
+  const aliasToPrimaryKey = new Map();
+
+  const upsertJob = (job, mergeWithExisting = false) => {
+    const keys = galleryJobKeys(job);
+    if (keys.length === 0) return;
+    const existingPrimaryKey = keys.map((key) => aliasToPrimaryKey.get(key)).find(Boolean);
+    const primaryKey = existingPrimaryKey || keys[0];
+    const existing = jobsByPrimaryKey.get(primaryKey);
+    const nextJob = existing && mergeWithExisting ? mergeGalleryDisplayJob(existing, job) : existing || job;
+    jobsByPrimaryKey.set(primaryKey, nextJob);
+    for (const key of new Set([...keys, ...galleryJobKeys(nextJob)])) aliasToPrimaryKey.set(key, primaryKey);
+  };
+
+  for (const job of state.pendingJobs || []) upsertJob(job);
+  for (const job of remoteJobs) upsertJob(job, true);
+
+  return [...jobsByPrimaryKey.values()].sort((a, b) => {
     const bDate = gallerySortTimestamp(b);
     const aDate = gallerySortTimestamp(a);
     if (bDate !== aDate) return bDate - aDate;
@@ -1882,10 +1973,14 @@ function resultExtras(result, job, submittedPayload = null) {
   const clientStatus = statusLabelForJob(job);
   const actualSeed = actualSeedForJob(job, result);
   const requestPayload = regenerationPayloadForJob(job, result);
+  const artifacts = resultArtifacts(result, job);
+  const imageUrl = firstResultImageUrl(result, job);
   return {
     clientStatus,
     requestPayload,
     ...(isPlainObject(submittedPayload) ? { originalRequestPayload: clonePayload(submittedPayload) } : {}),
+    ...(artifacts.length ? { artifacts } : {}),
+    ...(imageUrl ? { thumbnailUrl: job?.thumbnailUrl || imageUrl, imageUrl } : {}),
     ...(actualSeed !== null ? { seed: actualSeed } : {}),
     ...(job?.cancelRequestedAt ? { cancelRequestedAt: job.cancelRequestedAt } : {}),
     ...(job?.canceledAt ? { canceledAt: job.canceledAt } : {}),

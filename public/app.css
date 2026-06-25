@@ -1819,11 +1819,11 @@ body.image-viewer-open {
 }
 
 .image-viewer-close {
-  left: 18px;
+  right: 18px;
 }
 
 .image-viewer-download {
-  right: 18px;
+  left: 18px;
 }
 
 .image-viewer-control:hover,
