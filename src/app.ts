@@ -2055,15 +2055,20 @@ function renderImageGeneratorHtml(): string {
         </div>
 
         <div class="image-lab-main-grid">
-          <label class="image-lab-prompt-column">
-            <span class="field-label">Positive prompt <span class="field-help" tabindex="0" title="Describe what the model should create. Add subject, style, composition, lighting, and details when the image does not follow the prompt or lacks detail.">?</span></span>
-            <textarea id="image-lab-prompt" rows="4" required placeholder="What should the model create?"></textarea>
-          </label>
+          <section class="image-lab-prompt-stack" aria-label="Prompt controls">
+            <label class="image-lab-prompt-column image-lab-positive-prompt">
+              <span class="field-label">Positive prompt <span class="field-help" tabindex="0" title="Describe what the model should create. Add subject, style, composition, lighting, and details when the image does not follow the prompt or lacks detail.">?</span></span>
+              <textarea id="image-lab-prompt" rows="4" required placeholder="What should the model create?"></textarea>
+            </label>
 
-          <label class="image-lab-prompt-column">
-            <span class="field-label">Negative prompt <span class="field-help" tabindex="0" title="Describe what to avoid or de-emphasize, such as artifacts, unwanted text, watermarks, bad anatomy, or styles you do not want.">?</span></span>
-            <textarea id="image-lab-negative" rows="4" placeholder="What should the model avoid?"></textarea>
-          </label>
+            <details id="image-lab-negative-drawer" class="image-lab-negative-drawer compact-details">
+              <summary><span class="field-label">Negative prompt <span class="field-help" tabindex="0" title="Describe what to avoid or de-emphasize, such as artifacts, unwanted text, watermarks, bad anatomy, or styles you do not want.">?</span></span></summary>
+              <label class="image-lab-negative-field">
+                <span class="visually-hidden">Negative prompt</span>
+                <textarea id="image-lab-negative" rows="4" placeholder="What should the model avoid?"></textarea>
+              </label>
+            </details>
+          </section>
 
           <div class="image-lab-parameter-column" aria-label="Generation parameters">
             <div class="image-lab-parameter-grid">
@@ -2104,11 +2109,6 @@ function renderImageGeneratorHtml(): string {
           </div>
 
           <section class="image-lab-favorites-panel" aria-label="Saved image favorites">
-            <div class="image-lab-favorites-heading">
-              <strong>Favorites</strong>
-              <span class="hint">Load restores settings only.</span>
-              <button id="image-lab-refresh-favorites" class="secondary" type="button">Refresh</button>
-            </div>
             <div id="image-lab-favorites" class="image-lab-favorites-strip placeholder">Loading favorites...</div>
           </section>
         </div>

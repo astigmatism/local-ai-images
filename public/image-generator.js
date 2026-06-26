@@ -6,7 +6,7 @@ const GALLERY_LIMIT_STEP = 48;
 const DEFAULT_TILE_SIZE = 300;
 const GALLERY_SIZE_STORAGE_KEY = 'local-ai-images-gallery-size';
 const CONTROLS_HEIGHT_STORAGE_KEY = 'local-ai-images-controls-height';
-const CONTROLS_MIN_HEIGHT = 220;
+const CONTROLS_MIN_HEIGHT = 240;
 const CONTROLS_DEFAULT_HEIGHT = 320;
 const CONTROLS_MAX_VIEWPORT_RATIO = 0.58;
 const GENERATION_POLL_INTERVAL_MS = 1500;
@@ -117,6 +117,21 @@ function applyControlsHeight(height = state.controlsHeight, persist = false) {
     handle.setAttribute('aria-valuenow', String(nextHeight));
   }
   if (persist) window.localStorage.setItem(CONTROLS_HEIGHT_STORAGE_KEY, String(nextHeight));
+}
+
+function syncNegativePromptDrawerLayout() {
+  const drawer = $('#image-lab-negative-drawer');
+  const stack = $('.image-lab-prompt-stack');
+  if (!drawer || !stack) return;
+  stack.classList.toggle('has-negative-open', Boolean(drawer.open));
+}
+
+function setNegativePromptDrawerOpen(open) {
+  const drawer = $('#image-lab-negative-drawer');
+  if (!drawer) return;
+  const shouldOpen = Boolean(open);
+  if (drawer.open !== shouldOpen) drawer.open = shouldOpen;
+  syncNegativePromptDrawerLayout();
 }
 
 async function fetchJson(url, options = {}) {
@@ -696,6 +711,7 @@ function applyGenerationPayloadToControls(payload) {
   const negativeInput = $('#image-lab-negative');
   if (promptInput) promptInput.value = prompt;
   if (negativeInput) negativeInput.value = negative;
+  setNegativePromptDrawerOpen(Boolean(negative));
 
   const model = payloadString(requestPayload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']);
   if (model && !selectModelByPayload(model)) warnings.push(`model ${model}`);
@@ -1940,15 +1956,32 @@ function renderPromptBlock(label, text, emptyText) {
   </div>`;
 }
 
+function favoriteDimensions(favorite) {
+  const payload = favorite?.requestPayload || {};
+  const width = favorite?.width ?? favorite?.artifact?.width ?? payloadNumber(payload, ['width']);
+  const height = favorite?.height ?? favorite?.artifact?.height ?? payloadNumber(payload, ['height']);
+  return width && height ? `${width}x${height}` : 'size n/a';
+}
+
+function favoriteModelLabel(favorite) {
+  return favorite?.model || payloadString(favorite?.requestPayload || {}, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']) || 'model n/a';
+}
+
+function favoriteSeedLabel(favorite) {
+  return favorite?.seed ?? payloadSeed(favorite?.requestPayload || {}) ?? 'n/a';
+}
+
 function renderFavorites() {
   const target = $('#image-lab-favorites');
   if (!target) return;
   const favorites = state.imageFavorites?.favorites || [];
   if (!state.imageFavorites) {
+    target.classList.add('placeholder');
     target.innerHTML = '<p class="muted">Loading saved image favorites...</p>';
     return;
   }
   if (favorites.length === 0) {
+    target.classList.add('placeholder');
     target.innerHTML = '<p class="muted">No image favorites yet. Save a generated gallery item to pin it here.</p>';
     return;
   }
@@ -1956,16 +1989,26 @@ function renderFavorites() {
   target.innerHTML = favorites.map((favorite) => {
     const imageUrl = favorite.imageUrl || favorite.artifact?.url || '';
     const caption = favorite.title || favorite.promptPreview || favorite.jobId || 'Image favorite';
+    const promptPreview = favorite.promptPreview || favorite.prompt || caption;
+    const model = favoriteModelLabel(favorite);
+    const seed = favoriteSeedLabel(favorite);
+    const dimensions = favoriteDimensions(favorite);
+    const updated = formatDate(favorite.updatedAt || favorite.createdAt);
     return `<article class="image-lab-favorite-card" data-favorite-id="${escapeHtml(favorite.id)}">
       <button type="button" class="image-lab-favorite-thumb" data-favorite-action="load" aria-label="Load favorite ${escapeHtml(caption)}">
         ${imageUrl ? `<img data-artifact-url="${escapeHtml(imageUrl)}" alt="Favorite image: ${escapeHtml(previewText(caption, 80))}" loading="lazy" hidden><div class="thumb-placeholder">Loading favorite...</div>` : '<div class="thumb-placeholder">No image</div>'}
       </button>
       <div class="image-lab-favorite-body">
-        <strong>${escapeHtml(previewText(caption, 72))}</strong>
-        <span class="hint"><code>${escapeHtml(favorite.model || 'model n/a')}</code> - seed ${escapeHtml(favorite.seed ?? 'n/a')}</span>
+        <div class="image-lab-favorite-details">
+          <strong title="${escapeHtml(caption)}">${escapeHtml(previewText(caption, 64))}</strong>
+          <span class="hint image-lab-favorite-model"><code>${escapeHtml(model)}</code></span>
+          <span class="hint">seed ${escapeHtml(seed)} - ${escapeHtml(dimensions)} - ${escapeHtml(updated)}</span>
+          <span class="image-lab-favorite-prompt">${escapeHtml(previewText(promptPreview, 92))}</span>
+        </div>
         <div class="button-row favorite-actions">
-          <button type="button" data-favorite-action="load">Load</button>
-          <button type="button" class="secondary danger" data-favorite-action="delete">Delete</button>
+          <button type="button" data-favorite-action="load" aria-label="Load favorite ${escapeHtml(caption)}">Load</button>
+          <span class="favorite-action-spacer" aria-hidden="true"></span>
+          <button type="button" class="secondary danger" data-favorite-action="delete" aria-label="Delete favorite ${escapeHtml(caption)}">Delete</button>
         </div>
       </div>
     </article>`;
@@ -2529,7 +2572,9 @@ function wireEvents() {
   initResizableControls();
   $('#image-lab-refresh')?.addEventListener('click', () => refreshAll('Image generator refreshed.'));
   $('#image-lab-form')?.addEventListener('submit', handleGenerate);
-  $('#image-lab-refresh-favorites')?.addEventListener('click', () => refreshFavoritesOnly('Image favorites refreshed.'));
+  const negativeDrawer = $('#image-lab-negative-drawer');
+  negativeDrawer?.addEventListener('toggle', syncNegativePromptDrawerLayout);
+  syncNegativePromptDrawerLayout();
   $('#image-lab-gallery')?.addEventListener('click', handleGalleryClick);
   $('#image-lab-gallery')?.addEventListener('dragstart', handleGalleryImageDragStart);
   $('#image-lab-gallery')?.addEventListener('dragend', handleGalleryImageDragEnd);
