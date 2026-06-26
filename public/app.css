@@ -1375,7 +1375,6 @@ summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(24px, auto);
   align-items: center;
-  width: 100%;
   gap: 7px;
 }
 
