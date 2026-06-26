@@ -1343,7 +1343,6 @@ summary {
   position: relative;
   display: inline-flex;
   align-items: center;
-  min-width: 184px;
   min-height: 31px;
   padding: 4px 7px 4px 10px;
   border-radius: 999px;
