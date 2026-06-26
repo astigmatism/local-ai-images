@@ -765,15 +765,24 @@ function renderControlChrome() {
     generateButton.disabled = Boolean(state.prewarmingModel);
     generateButton.textContent = 'Generate!';
   }
-  const autoGenerateButton = $('#image-lab-auto-generate');
-  if (autoGenerateButton) {
+  const autoGenerateControl = $('#image-lab-auto-generate');
+  if (autoGenerateControl) {
     const isEnabled = Boolean(state.autoGenerateEnabled);
-    autoGenerateButton.textContent = isEnabled ? 'Auto-Generate On' : 'Auto-Generate Off';
-    autoGenerateButton.setAttribute('aria-pressed', isEnabled ? 'true' : 'false');
-    autoGenerateButton.classList.toggle('is-active', isEnabled);
-    autoGenerateButton.title = isEnabled
+    const switchLabel = autoGenerateControl.closest('.image-lab-auto-generate-switch');
+    const stateLabel = $('#image-lab-auto-generate-state');
+    const title = isEnabled
       ? 'Auto-Generate is on. The next image starts automatically when there are no active generation jobs.'
       : 'When enabled, starts the next image automatically after the current active generation finishes.';
+    autoGenerateControl.checked = isEnabled;
+    autoGenerateControl.setAttribute('aria-checked', isEnabled ? 'true' : 'false');
+    autoGenerateControl.setAttribute('aria-label', isEnabled ? 'Auto-Generate on' : 'Auto-Generate off');
+    autoGenerateControl.title = title;
+    if (switchLabel) {
+      switchLabel.classList.toggle('is-active', isEnabled);
+      switchLabel.dataset.state = isEnabled ? 'on' : 'off';
+      switchLabel.title = title;
+    }
+    if (stateLabel) stateLabel.textContent = isEnabled ? 'On' : 'Off';
   }
   applyControlsHeight();
   updatePayloadPreview();
@@ -2780,8 +2789,8 @@ function wireEvents() {
   $('#image-lab-generate')?.addEventListener('click', () => {
     if (state.autoGenerateEnabled) setAutoGenerateEnabled(false, { message: 'Auto-Generate turned off for manual generation.', ok: true });
   });
-  $('#image-lab-auto-generate')?.addEventListener('click', () => {
-    setAutoGenerateEnabled(!state.autoGenerateEnabled, { userInitiated: true });
+  $('#image-lab-auto-generate')?.addEventListener('change', (event) => {
+    setAutoGenerateEnabled(Boolean(event.currentTarget?.checked), { userInitiated: true });
   });
   $('#image-lab-form')?.addEventListener('submit', handleGenerate);
   const negativeDrawer = $('#image-lab-negative-drawer');
