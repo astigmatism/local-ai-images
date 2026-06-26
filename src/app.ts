@@ -1324,6 +1324,45 @@ function publicFavoritePrompt(favorite: FavoriteImagePrompt) {
   };
 }
 
+function publicImageFavoriteStringField(value: unknown, keys: string[]): string | null {
+  if (!isRecord(value)) return null;
+  for (const key of keys) {
+    const field = value[key];
+    if (typeof field === 'string' && field.trim() !== '') return field;
+  }
+  return null;
+}
+
+function publicImageFavoriteArtifactUrlFromId(id: string | null | undefined): string | null {
+  return id && id.trim() !== '' ? `/api/v1/artifacts/${encodeURIComponent(id)}` : null;
+}
+
+function publicImageFavoriteThumbnailUrl(favorite: ImageFavorite): string | null {
+  const directUrl = typeof favorite.imageUrl === 'string' && favorite.imageUrl.trim() !== '' ? favorite.imageUrl : null;
+  if (directUrl) return directUrl;
+
+  const artifactUrl = publicImageFavoriteStringField(favorite.artifact, ['url', 'imageUrl', 'image_url', 'href']);
+  if (artifactUrl) return artifactUrl;
+
+  const artifactId = favorite.artifactId ?? publicImageFavoriteStringField(favorite.artifact, ['id']);
+  const artifactIdUrl = publicImageFavoriteArtifactUrlFromId(artifactId);
+  if (artifactIdUrl) return artifactIdUrl;
+
+  const jobUrl = publicImageFavoriteStringField(favorite.job, ['thumbnailUrl', 'thumbnail_url', 'imageUrl', 'image_url']);
+  if (jobUrl) return jobUrl;
+
+  const jobArtifacts = isRecord(favorite.job) && Array.isArray(favorite.job.artifacts) ? favorite.job.artifacts : [];
+  for (const artifact of jobArtifacts) {
+    const url = publicImageFavoriteStringField(artifact, ['url', 'imageUrl', 'image_url', 'href']);
+    if (url) return url;
+    const id = publicImageFavoriteStringField(artifact, ['id']);
+    const urlFromId = publicImageFavoriteArtifactUrlFromId(id);
+    if (urlFromId) return urlFromId;
+  }
+
+  return null;
+}
+
 function publicImageFavoriteSummary(favorite: ImageFavorite) {
   return {
     id: favorite.id,
@@ -1344,6 +1383,7 @@ function publicImageFavoriteSummary(favorite: ImageFavorite) {
     cfgScale: favorite.cfgScale ?? null,
     seed: favorite.seed ?? null,
     imageUrl: favorite.imageUrl ?? null,
+    thumbnailUrl: publicImageFavoriteThumbnailUrl(favorite),
     artifactId: favorite.artifactId ?? null,
     jobId: favorite.jobId ?? null,
     artifact: favorite.artifact ?? null,

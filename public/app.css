@@ -1137,14 +1137,13 @@ summary {
 
 .image-lab-form {
   display: grid;
-  grid-template-rows: auto minmax(min-content, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 6px;
   height: 100%;
   min-height: 0;
   min-width: 0;
-  overflow: auto;
+  overflow: hidden;
   padding-bottom: 6px;
-  scrollbar-gutter: stable;
 }
 
 .image-lab-top-row {
@@ -1207,6 +1206,8 @@ summary {
   gap: 7px;
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .image-lab-main-grid > * {
@@ -1215,24 +1216,26 @@ summary {
 
 .image-lab-prompt-stack {
   display: grid;
-  grid-template-rows: minmax(126px, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 6px;
   min-width: 0;
   min-height: 0;
+  max-height: 100%;
   align-self: stretch;
+  overflow: hidden;
 }
 
 .image-lab-prompt-stack.has-negative-open {
-  grid-template-rows: minmax(108px, 1fr) minmax(128px, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .image-lab-prompt-column {
-  grid-template-rows: auto minmax(126px, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
 }
 
 .image-lab-prompt-stack.has-negative-open .image-lab-prompt-column {
-  grid-template-rows: auto minmax(108px, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .image-lab-negative-drawer {
@@ -1255,14 +1258,14 @@ summary {
 }
 
 .image-lab-negative-field {
-  grid-template-rows: minmax(108px, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   margin-top: 6px;
 }
 
 .image-lab-negative-field textarea {
   height: 100%;
-  min-height: 108px;
+  min-height: 0;
 }
 
 .image-lab-parameter-column {
@@ -1366,7 +1369,7 @@ summary {
 }
 
 .image-lab-controls textarea {
-  min-height: 126px;
+  min-height: 0;
   max-height: none;
   resize: none;
   line-height: 1.25;
@@ -1472,11 +1475,12 @@ summary {
 .image-lab-advanced {
   min-width: 0;
   min-height: 0;
+  max-height: 2.4rem;
   overflow: hidden;
 }
 
 .image-lab-advanced[open] {
-  max-height: min(260px, max(120px, calc(var(--image-lab-controls-height, 320px) - 128px)));
+  max-height: min(44%, 190px);
   overflow: auto;
   scrollbar-gutter: stable;
 }
@@ -1510,6 +1514,10 @@ summary {
   font-size: 0.8rem;
 }
 
+.image-lab-advanced .image-lab-preview-columns pre {
+  max-height: 110px;
+}
+
 .image-lab-result .result-image {
   max-height: 180px;
 }
@@ -1528,6 +1536,7 @@ summary {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: rgba(17, 24, 39, 0.38);
+  contain: layout paint;
 }
 
 .image-lab-favorites-strip {
@@ -1536,6 +1545,7 @@ summary {
   align-content: start;
   gap: 7px;
   min-height: 0;
+  max-height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
   padding-right: 3px;
@@ -1548,11 +1558,11 @@ summary {
 
 .image-lab-favorite-card {
   display: grid;
-  grid-template-columns: minmax(74px, 92px) minmax(0, 1fr);
+  grid-template-columns: clamp(92px, 38%, 140px) minmax(0, 1fr);
   align-items: stretch;
-  gap: 7px;
+  gap: 9px;
   min-width: 0;
-  min-height: 92px;
+  min-height: 108px;
   background: var(--card-soft);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1560,11 +1570,12 @@ summary {
 }
 
 .image-lab-favorite-thumb {
-  display: block;
+  display: grid;
+  place-items: stretch;
   align-self: stretch;
   width: 100%;
   height: 100%;
-  min-height: 82px;
+  min-height: 98px;
   padding: 0;
   overflow: hidden;
   border-radius: 8px;
@@ -1574,6 +1585,7 @@ summary {
 
 .image-lab-favorite-thumb img,
 .image-lab-favorite-thumb .thumb-placeholder {
+  grid-area: 1 / 1;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -1581,6 +1593,10 @@ summary {
   border: 0;
   border-radius: 0;
   font-size: 0.68rem;
+}
+
+.image-lab-favorite-image:not([data-loaded="1"]) {
+  visibility: hidden;
 }
 
 .image-lab-favorite-body {
@@ -1641,9 +1657,11 @@ summary {
 
 .image-lab-favorite-body .favorite-actions {
   display: grid;
-  grid-template-columns: auto minmax(10px, 1fr) auto;
+  grid-template-columns: minmax(70px, max-content) 1fr minmax(70px, max-content);
   align-items: center;
-  gap: 6px;
+  gap: 12px;
+  padding-top: 3px;
+  border-top: 1px solid rgba(55, 65, 81, 0.62);
 }
 
 .image-lab-favorite-body button {
@@ -1996,6 +2014,8 @@ body.image-viewer-open {
 @media (max-width: 1120px) {
   .image-lab-main-grid {
     grid-template-columns: minmax(0, 1fr) minmax(190px, 0.72fr);
+    overflow-y: auto;
+    scrollbar-gutter: stable;
   }
 
   .image-lab-favorites-panel {
@@ -2025,11 +2045,14 @@ body.image-viewer-open {
 
   .image-lab-main-grid {
     height: auto;
+    max-height: 100%;
+    overflow-y: auto;
   }
 
   .image-lab-prompt-stack,
   .image-lab-prompt-stack.has-negative-open {
     grid-template-rows: auto auto;
+    overflow: visible;
   }
 
   .image-lab-negative-field {
@@ -2097,11 +2120,11 @@ body.image-viewer-open {
   }
 
   .image-lab-favorite-card {
-    grid-template-columns: 70px minmax(0, 1fr);
-    min-height: 78px;
+    grid-template-columns: 82px minmax(0, 1fr);
+    min-height: 92px;
   }
 
   .image-lab-favorite-thumb {
-    min-height: 68px;
+    min-height: 82px;
   }
 }

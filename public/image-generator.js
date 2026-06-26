@@ -1971,6 +1971,25 @@ function favoriteSeedLabel(favorite) {
   return favorite?.seed ?? payloadSeed(favorite?.requestPayload || {}) ?? 'n/a';
 }
 
+function artifactUrlFromId(id) {
+  const value = String(id || '').trim();
+  return value ? `/api/v1/artifacts/${encodeURIComponent(value)}` : '';
+}
+
+function favoriteImageUrl(favorite) {
+  if (!favorite) return '';
+  return favorite.thumbnailUrl
+    || favorite.thumbnail_url
+    || favorite.imageUrl
+    || favorite.image_url
+    || favorite.url
+    || artifactImageUrl(favorite.artifact)
+    || artifactUrlFromId(favorite.artifactId || favorite.artifact_id)
+    || firstImageUrl(favorite.job)
+    || firstArtifactUrlFromList(favorite.artifacts)
+    || '';
+}
+
 function renderFavorites() {
   const target = $('#image-lab-favorites');
   if (!target) return;
@@ -1987,7 +2006,7 @@ function renderFavorites() {
   }
   target.classList.remove('placeholder');
   target.innerHTML = favorites.map((favorite) => {
-    const imageUrl = favorite.imageUrl || favorite.artifact?.url || '';
+    const imageUrl = favoriteImageUrl(favorite);
     const caption = favorite.title || favorite.promptPreview || favorite.jobId || 'Image favorite';
     const promptPreview = favorite.promptPreview || favorite.prompt || caption;
     const model = favoriteModelLabel(favorite);
@@ -1996,7 +2015,7 @@ function renderFavorites() {
     const updated = formatDate(favorite.updatedAt || favorite.createdAt);
     return `<article class="image-lab-favorite-card" data-favorite-id="${escapeHtml(favorite.id)}">
       <button type="button" class="image-lab-favorite-thumb" data-favorite-action="load" aria-label="Load favorite ${escapeHtml(caption)}">
-        ${imageUrl ? `<img data-artifact-url="${escapeHtml(imageUrl)}" alt="Favorite image: ${escapeHtml(previewText(caption, 80))}" loading="lazy" hidden><div class="thumb-placeholder">Loading favorite...</div>` : '<div class="thumb-placeholder">No image</div>'}
+        ${imageUrl ? `<img class="image-lab-favorite-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Favorite image: ${escapeHtml(previewText(caption, 80))}" loading="lazy" decoding="async"><div class="thumb-placeholder">Loading favorite...</div>` : '<div class="thumb-placeholder">No saved image</div>'}
       </button>
       <div class="image-lab-favorite-body">
         <div class="image-lab-favorite-details">
@@ -2394,7 +2413,8 @@ async function saveFavoriteFromJob(job) {
     setStatus('Canceled jobs do not have a generated image to save as a favorite.', false);
     return;
   }
-  if (!artifact?.url && !firstImageUrl(job)) {
+  const savedFavoriteImageUrl = artifactImageUrl(artifact) || firstImageUrl(job) || '';
+  if (!savedFavoriteImageUrl) {
     setStatus('Wait until the generated image artifact is available before saving a favorite.', false);
     return;
   }
@@ -2414,7 +2434,7 @@ async function saveFavoriteFromJob(job) {
   const body = {
     title: title.trim() || defaultFavoriteTitle(job),
     request_payload: payload,
-    image_url: artifact?.url || firstImageUrl(job) || undefined,
+    image_url: savedFavoriteImageUrl,
     artifact_id: artifact?.id || undefined,
     job_id: job?.id || undefined,
     artifact: artifact || undefined,
