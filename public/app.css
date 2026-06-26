@@ -1346,9 +1346,7 @@ summary {
   min-width: 184px;
   min-height: 31px;
   padding: 4px 7px 4px 10px;
-  border: 1px solid rgba(96, 165, 250, 0.48);
   border-radius: 999px;
-  background: rgba(17, 24, 39, 0.42);
   color: var(--text);
   cursor: pointer;
   user-select: none;
