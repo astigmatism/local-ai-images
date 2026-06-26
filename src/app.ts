@@ -2096,17 +2096,29 @@ function renderImageGeneratorHtml(): string {
 
         <div class="image-lab-main-grid">
           <section class="image-lab-prompt-stack" aria-label="Prompt controls">
-            <label class="image-lab-prompt-column image-lab-positive-prompt">
-              <span class="field-label">Positive prompt <span class="field-help" tabindex="0" title="Describe what the model should create. Add subject, style, composition, lighting, and details when the image does not follow the prompt or lacks detail.">?</span></span>
+            <div class="image-lab-prompt-column image-lab-positive-prompt">
+              <div class="image-lab-prompt-header">
+                <label class="field-label" for="image-lab-prompt">Positive prompt <span class="field-help" tabindex="0" title="Describe what the model should create. Add subject, style, composition, lighting, and details when the image does not follow the prompt or lacks detail.">?</span></label>
+                <div class="image-lab-prompt-actions" aria-label="Positive prompt clipboard controls">
+                  <button type="button" class="secondary" data-prompt-clipboard-action="copy" data-prompt-clipboard-target="image-lab-prompt" data-prompt-clipboard-label="Positive prompt">Copy</button>
+                  <button type="button" class="secondary" data-prompt-clipboard-action="paste" data-prompt-clipboard-target="image-lab-prompt" data-prompt-clipboard-label="Positive prompt">Paste</button>
+                </div>
+              </div>
               <textarea id="image-lab-prompt" rows="4" required placeholder="What should the model create?"></textarea>
-            </label>
+            </div>
 
             <details id="image-lab-negative-drawer" class="image-lab-negative-drawer compact-details">
               <summary><span class="field-label">Negative prompt <span class="field-help" tabindex="0" title="Describe what to avoid or de-emphasize, such as artifacts, unwanted text, watermarks, bad anatomy, or styles you do not want.">?</span></span></summary>
-              <label class="image-lab-negative-field">
-                <span class="visually-hidden">Negative prompt</span>
+              <div class="image-lab-negative-field">
+                <div class="image-lab-negative-field-header">
+                  <label class="field-label" for="image-lab-negative">Negative prompt</label>
+                  <div class="image-lab-prompt-actions" aria-label="Negative prompt clipboard controls">
+                    <button type="button" class="secondary" data-prompt-clipboard-action="copy" data-prompt-clipboard-target="image-lab-negative" data-prompt-clipboard-label="Negative prompt">Copy</button>
+                    <button type="button" class="secondary" data-prompt-clipboard-action="paste" data-prompt-clipboard-target="image-lab-negative" data-prompt-clipboard-label="Negative prompt">Paste</button>
+                  </div>
+                </div>
                 <textarea id="image-lab-negative" rows="4" placeholder="What should the model avoid?"></textarea>
-              </label>
+              </div>
             </details>
           </section>
 
@@ -2144,15 +2156,18 @@ function renderImageGeneratorHtml(): string {
             </div>
 
             <div class="image-lab-action-panel">
+              <div class="image-lab-auto-generate-row">
+                <label class="image-lab-auto-generate-switch" data-state="off" title="When enabled, starts the next image automatically after the current active generation finishes.">
+                  <input id="image-lab-auto-generate" class="image-lab-auto-generate-input" type="checkbox" role="switch" aria-checked="false" aria-describedby="image-lab-auto-generate-state">
+                  <span class="image-lab-auto-generate-shell">
+                    <span class="image-lab-auto-generate-label">Auto-Generate</span>
+                    <span class="image-lab-auto-generate-track" aria-hidden="true"><span class="image-lab-auto-generate-thumb"></span></span>
+                    <span id="image-lab-auto-generate-state" class="image-lab-auto-generate-state">Off</span>
+                  </span>
+                </label>
+                <button id="image-lab-slideshow-start" class="secondary image-lab-slideshow-start" type="button" hidden>Slideshow</button>
+              </div>
               <button id="image-lab-generate" type="submit" title="Submit the current generation request. Repeated clicks queue separate jobs with their own pending gallery cards.">Generate!</button>
-              <label class="image-lab-auto-generate-switch" data-state="off" title="When enabled, starts the next image automatically after the current active generation finishes.">
-                <input id="image-lab-auto-generate" class="image-lab-auto-generate-input" type="checkbox" role="switch" aria-checked="false" aria-describedby="image-lab-auto-generate-state">
-                <span class="image-lab-auto-generate-shell">
-                  <span class="image-lab-auto-generate-label">Auto-Gen</span>
-                  <span class="image-lab-auto-generate-track" aria-hidden="true"><span class="image-lab-auto-generate-thumb"></span></span>
-                  <span id="image-lab-auto-generate-state" class="image-lab-auto-generate-state">Off</span>
-                </span>
-              </label>
             </div>
           </div>
 
