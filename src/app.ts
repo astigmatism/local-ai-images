@@ -2145,6 +2145,7 @@ function renderImageGeneratorHtml(): string {
 
             <div class="image-lab-action-panel">
               <button id="image-lab-generate" type="submit" title="Submit the current generation request. Repeated clicks queue separate jobs with their own pending gallery cards.">Generate!</button>
+              <button id="image-lab-auto-generate" class="secondary image-lab-auto-generate-toggle" type="button" aria-pressed="false" title="When enabled, starts the next image automatically after the current active generation finishes.">Auto-Generate Off</button>
             </div>
           </div>
 
