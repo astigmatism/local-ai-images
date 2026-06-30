@@ -231,13 +231,26 @@ function normalizeDefaults(value: Record<string, unknown>): WorkflowPreset['defa
 }
 
 function normalizeMappings(value: Record<string, unknown>): WorkflowPreset['comfyui']['mappings'] {
+  const samplerNameNode = readOptionalString(value, 'samplerNameNode') || readOptionalString(value, 'samplerSelectorNode');
+  const samplerNameInput = readOptionalString(value, 'samplerNameInput') || readOptionalString(value, 'samplerInput');
+
   return {
     ...(readOptionalString(value, 'positivePromptNode') ? { positivePromptNode: readOptionalString(value, 'positivePromptNode') } : {}),
     ...(readOptionalString(value, 'negativePromptNode') ? { negativePromptNode: readOptionalString(value, 'negativePromptNode') } : {}),
     ...(readOptionalString(value, 'checkpointNode') ? { checkpointNode: readOptionalString(value, 'checkpointNode') } : {}),
     ...(readOptionalString(value, 'latentImageNode') ? { latentImageNode: readOptionalString(value, 'latentImageNode') } : {}),
     ...(readOptionalString(value, 'samplerNode') ? { samplerNode: readOptionalString(value, 'samplerNode') } : {}),
-    ...(readOptionalString(value, 'saveImageNode') ? { saveImageNode: readOptionalString(value, 'saveImageNode') } : {})
+    ...(readOptionalString(value, 'saveImageNode') ? { saveImageNode: readOptionalString(value, 'saveImageNode') } : {}),
+    ...(readOptionalString(value, 'seedNode') ? { seedNode: readOptionalString(value, 'seedNode') } : {}),
+    ...(readOptionalString(value, 'seedInput') ? { seedInput: readOptionalString(value, 'seedInput') } : {}),
+    ...(readOptionalString(value, 'stepsNode') ? { stepsNode: readOptionalString(value, 'stepsNode') } : {}),
+    ...(readOptionalString(value, 'stepsInput') ? { stepsInput: readOptionalString(value, 'stepsInput') } : {}),
+    ...(readOptionalString(value, 'cfgNode') ? { cfgNode: readOptionalString(value, 'cfgNode') } : {}),
+    ...(readOptionalString(value, 'cfgInput') ? { cfgInput: readOptionalString(value, 'cfgInput') } : {}),
+    ...(samplerNameNode ? { samplerNameNode } : {}),
+    ...(samplerNameInput ? { samplerNameInput } : {}),
+    ...(readOptionalString(value, 'schedulerNode') ? { schedulerNode: readOptionalString(value, 'schedulerNode') } : {}),
+    ...(readOptionalString(value, 'schedulerInput') ? { schedulerInput: readOptionalString(value, 'schedulerInput') } : {})
   };
 }
 

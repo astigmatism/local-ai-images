@@ -81,10 +81,18 @@ In the current ComfyUI preset format, those values are mapped onto known node ID
 - `positivePromptNode` points to a `CLIPTextEncode` node whose `text` input receives the positive prompt,
 - `negativePromptNode` points to a `CLIPTextEncode` node whose `text` input receives the negative prompt,
 - `latentImageNode` points to an `EmptyLatentImage` node whose `width` and `height` inputs are updated,
-- `samplerNode` points to a `KSampler` node whose `seed`, `steps`, `cfg`, `sampler_name`, and `scheduler` inputs are updated,
+- `samplerNode` points to a legacy `KSampler`-style node whose `seed`, `steps`, `cfg`, `sampler_name`, and `scheduler` inputs are updated,
 - `saveImageNode` points to a `SaveImage` node whose `filename_prefix` is set by the app.
 
-If a mapping is omitted, the app tries to infer common node classes in the default order. Explicit mappings are safer and recommended.
+Workflows that split sampler controls across multiple nodes can also provide explicit control mappings:
+
+- `seedNode` / `seedInput`, for example `RandomNoise.noise_seed`,
+- `stepsNode` / `stepsInput`, for example `BasicScheduler.steps`,
+- `cfgNode` / `cfgInput`, for example `FluxGuidance.guidance`,
+- `samplerNameNode` / `samplerNameInput`, for example `KSamplerSelect.sampler_name`,
+- `schedulerNode` / `schedulerInput`, for example `BasicScheduler.scheduler`.
+
+If these split mappings are omitted and the workflow uses common Flux-style node classes, the app tries to infer `RandomNoise`, `BasicScheduler`, `FluxGuidance`, and `KSamplerSelect` nodes. Explicit mappings are safer and recommended.
 
 ## Optional inputs
 
@@ -279,7 +287,7 @@ HTTP 400 from ComfyUI usually means ComfyUI rejected the prompt graph before gen
 - mapped node IDs still exist after editing/exporting the workflow,
 - `positivePromptNode` and `negativePromptNode` are text encoder nodes with `text` inputs,
 - `latentImageNode` accepts `width` and `height`,
-- `samplerNode` accepts `seed`, `steps`, `cfg`, `sampler_name`, and `scheduler`,
+- `samplerNode` accepts `seed`, `steps`, `cfg`, `sampler_name`, and `scheduler`, or split control mappings point seed/steps/CFG/sampler/scheduler to the actual nodes that own those inputs,
 - the output node produces image references in history,
 - custom ComfyUI nodes used by the workflow are installed on the target machine,
 - dimensions are multiples supported by the model/workflow,

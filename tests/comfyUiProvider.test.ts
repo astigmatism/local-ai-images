@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 import { ComfyUiProvider, materializeComfyPrompt } from '../src/services/image/comfyUiProvider.ts';
 import { builtinWorkflows } from '../src/services/image/workflowStore.ts';
-import type { ProviderGenerationRequest } from '../src/types.ts';
+import type { ProviderGenerationRequest, WorkflowPreset } from '../src/types.ts';
 
 const tinyPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lzLZhwAAAABJRU5ErkJggg==';
 
@@ -64,6 +64,68 @@ test('materializeComfyPrompt maps stable API request fields onto a ComfyUI workf
   assert.equal((prompt['5'] as any).inputs.width, 640);
   assert.equal((prompt['3'] as any).inputs.steps, 12);
   assert.equal((prompt['3'] as any).inputs.scheduler, 'karras');
+});
+
+function nodeInputs(prompt: Record<string, unknown>, nodeId: string): Record<string, unknown> {
+  const node = prompt[nodeId];
+  assert.ok(node && typeof node === 'object' && !Array.isArray(node));
+  const inputs = (node as { inputs?: unknown }).inputs;
+  assert.ok(inputs && typeof inputs === 'object' && !Array.isArray(inputs));
+  return inputs as Record<string, unknown>;
+}
+
+test('materializeComfyPrompt maps split Flux controls onto their actual control nodes', () => {
+  const workflow: WorkflowPreset = {
+    id: 'flux-split-text-to-image',
+    name: 'Flux split text to image',
+    description: 'Test workflow with Flux-style split sampler controls.',
+    engine: 'comfyui',
+    defaults: {},
+    parameters: ['prompt', 'width', 'height'],
+    source: 'file',
+    comfyui: {
+      mappings: {
+        positivePromptNode: '9',
+        negativePromptNode: '90',
+        latentImageNode: '16',
+        samplerNode: '17',
+        saveImageNode: '19'
+      },
+      prompt: {
+        '9': { class_type: 'CLIPTextEncode', inputs: { text: '' } },
+        '10': { class_type: 'FluxGuidance', inputs: { guidance: 0.7 } },
+        '12': { class_type: 'KSamplerSelect', inputs: { sampler_name: 'euler' } },
+        '13': { class_type: 'BasicScheduler', inputs: { scheduler: 'simple', steps: 4, denoise: 1 } },
+        '15': { class_type: 'RandomNoise', inputs: { noise_seed: 15616347943228 } },
+        '16': { class_type: 'EmptySD3LatentImage', inputs: { width: 1008, height: 1792, batch_size: 1 } },
+        '17': { class_type: 'SamplerCustomAdvanced', inputs: { noise: ['15', 0], sampler: ['12', 0], sigmas: ['13', 0], latent_image: ['16', 0] } },
+        '19': { class_type: 'SaveImage', inputs: { filename_prefix: 'flux-output' } },
+        '90': { class_type: 'CLIPTextEncode', inputs: { text: '' } }
+      }
+    }
+  };
+
+  const prompt = materializeComfyPrompt(workflow, providerRequest({
+    workflow,
+    workflowId: workflow.id,
+    prompt: 'a tree',
+    width: 512,
+    height: 768,
+    steps: 6,
+    cfgScale: 0.7,
+    seed: 123456,
+    samplerName: 'heun',
+    scheduler: 'karras'
+  }));
+
+  assert.equal(nodeInputs(prompt, '9').text, 'a tree');
+  assert.equal(nodeInputs(prompt, '16').width, 512);
+  assert.equal(nodeInputs(prompt, '16').height, 768);
+  assert.equal(nodeInputs(prompt, '15').noise_seed, 123456);
+  assert.equal(nodeInputs(prompt, '13').steps, 6);
+  assert.equal(nodeInputs(prompt, '13').scheduler, 'karras');
+  assert.equal(nodeInputs(prompt, '10').guidance, 0.7);
+  assert.equal(nodeInputs(prompt, '12').sampler_name, 'heun');
 });
 
 test('ComfyUiProvider health succeeds when ComfyUI system stats are reachable', async () => {

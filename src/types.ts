@@ -278,6 +278,16 @@ export interface ComfyUiWorkflowMapping {
   latentImageNode?: string;
   samplerNode?: string;
   saveImageNode?: string;
+  seedNode?: string;
+  seedInput?: string;
+  stepsNode?: string;
+  stepsInput?: string;
+  cfgNode?: string;
+  cfgInput?: string;
+  samplerNameNode?: string;
+  samplerNameInput?: string;
+  schedulerNode?: string;
+  schedulerInput?: string;
 }
 
 export interface WorkflowPreset {

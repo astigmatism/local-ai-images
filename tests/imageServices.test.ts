@@ -89,6 +89,42 @@ test('WorkflowStore loads builtin and operator workflow presets', async () => {
   assert.equal(workflow.name, 'Custom SDXL');
 });
 
+test('WorkflowStore preserves explicit split ComfyUI control mappings from operator presets', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'image-workflows-'));
+  const custom = builtinWorkflows()[0]!;
+  await fs.writeFile(path.join(root, 'custom-split.json'), JSON.stringify({
+    ...custom,
+    id: 'custom-split-controls',
+    name: 'Custom split controls',
+    source: undefined,
+    comfyui: {
+      ...custom.comfyui,
+      mappings: {
+        ...custom.comfyui.mappings,
+        seedNode: '15',
+        seedInput: 'noise_seed',
+        stepsNode: '13',
+        cfgNode: '10',
+        cfgInput: 'guidance',
+        samplerSelectorNode: '12',
+        samplerInput: 'sampler_name',
+        schedulerNode: '13'
+      }
+    }
+  }));
+
+  const store = new WorkflowStore(root, 'custom-split-controls');
+  const workflow = await store.get('custom-split-controls');
+  assert.equal(workflow.comfyui.mappings.seedNode, '15');
+  assert.equal(workflow.comfyui.mappings.seedInput, 'noise_seed');
+  assert.equal(workflow.comfyui.mappings.stepsNode, '13');
+  assert.equal(workflow.comfyui.mappings.cfgNode, '10');
+  assert.equal(workflow.comfyui.mappings.cfgInput, 'guidance');
+  assert.equal(workflow.comfyui.mappings.samplerNameNode, '12');
+  assert.equal(workflow.comfyui.mappings.samplerNameInput, 'sampler_name');
+  assert.equal(workflow.comfyui.mappings.schedulerNode, '13');
+});
+
 test('GenerationSourceRegistry keeps plausible checkpoint candidates selectable while ComfyUI is unavailable', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'image-source-registry-'));
   const modelPath = path.join(root, 'models');

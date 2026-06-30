@@ -528,11 +528,22 @@ function workflowCompatibility(workflow: WorkflowPreset): WorkflowCompatibility 
   const saveNode = mappings.saveImageNode ?? findNodeId(prompt, 'SaveImage', 0);
   const checkpointNode = mappings.checkpointNode ?? findNodeId(prompt, 'CheckpointLoaderSimple', 0);
   const checkpointName = workflow.defaults.checkpoint ?? readNodeInputString(prompt, checkpointNode, 'ckpt_name');
+  const splitControlNode = mappings.seedNode
+    ?? mappings.stepsNode
+    ?? mappings.cfgNode
+    ?? mappings.samplerNameNode
+    ?? mappings.schedulerNode
+    ?? findNodeId(prompt, 'RandomNoise', 0)
+    ?? findNodeId(prompt, 'BasicScheduler', 0)
+    ?? findNodeId(prompt, 'FluxGuidance', 0)
+    ?? findNodeId(prompt, 'KSamplerSelect', 0);
 
   if (!positiveNode || !nodeExists(prompt, positiveNode)) return incompatible('Workflow is missing a positive prompt text node mapping.');
   if (!negativeNode || !nodeExists(prompt, negativeNode)) return incompatible('Workflow is missing a negative prompt text node mapping.');
   if (!latentNode || !nodeExists(prompt, latentNode)) return incompatible('Workflow is missing an EmptyLatentImage-compatible width/height mapping.');
-  if (!samplerNode || !nodeExists(prompt, samplerNode)) return incompatible('Workflow is missing a sampler node mapping for seed, steps, and CFG.');
+  if ((!samplerNode || !nodeExists(prompt, samplerNode)) && (!splitControlNode || !nodeExists(prompt, splitControlNode))) {
+    return incompatible('Workflow is missing sampler/control mappings for seed, steps, and CFG.');
+  }
   if (!saveNode || !nodeExists(prompt, saveNode)) return incompatible('Workflow is missing a SaveImage-compatible output mapping.');
   if (checkpointNode && !nodeExists(prompt, checkpointNode)) return incompatible('Workflow checkpoint mapping points to a missing node.');
   if ((workflow.parameters.includes('model') || checkpointNode) && !checkpointName) {

@@ -280,6 +280,14 @@ export function materializeComfyPrompt(workflow: WorkflowPreset, request: Provid
     setInput(prompt, samplerNode, 'scheduler', request.scheduler);
   }
 
+  if (usesSplitControlMappings(prompt, mappings, samplerNode)) {
+    setMappedControlInput(prompt, mappings.seedNode, mappings.seedInput, 'RandomNoise', 'seed', request.seed);
+    setMappedControlInput(prompt, mappings.stepsNode, mappings.stepsInput, 'BasicScheduler', 'steps', request.steps);
+    setMappedControlInput(prompt, mappings.cfgNode, mappings.cfgInput, 'FluxGuidance', 'cfg', request.cfgScale);
+    setMappedControlInput(prompt, mappings.samplerNameNode, mappings.samplerNameInput, 'KSamplerSelect', 'samplerName', request.samplerName);
+    setMappedControlInput(prompt, mappings.schedulerNode, mappings.schedulerInput, 'BasicScheduler', 'scheduler', request.scheduler);
+  }
+
   const saveImageNode = mappings.saveImageNode ?? findNodeId(prompt, 'SaveImage', 0);
   if (saveImageNode) {
     setInput(prompt, saveImageNode, 'filename_prefix', request.filenamePrefix);
@@ -294,6 +302,39 @@ function setInput(prompt: Record<string, unknown>, nodeId: string | undefined, k
   if (!isRecord(node)) return;
   if (!isRecord(node.inputs)) node.inputs = {};
   node.inputs[key] = value;
+}
+
+function usesSplitControlMappings(prompt: Record<string, unknown>, mappings: WorkflowPreset['comfyui']['mappings'], samplerNode: string | undefined): boolean {
+  if (mappings.seedNode || mappings.stepsNode || mappings.cfgNode || mappings.samplerNameNode || mappings.schedulerNode) return true;
+  const samplerClassType = nodeClassType(prompt, samplerNode);
+  return !samplerClassType || !['KSampler', 'KSamplerAdvanced'].includes(samplerClassType);
+}
+
+function setMappedControlInput(
+  prompt: Record<string, unknown>,
+  mappedNodeId: string | undefined,
+  mappedInputName: string | undefined,
+  fallbackClassType: string,
+  role: 'seed' | 'steps' | 'cfg' | 'samplerName' | 'scheduler',
+  value: unknown
+): void {
+  const nodeId = mappedNodeId ?? findNodeId(prompt, fallbackClassType, 0);
+  if (!nodeId) return;
+  setInput(prompt, nodeId, mappedInputName ?? defaultControlInputName(prompt, nodeId, role), value);
+}
+
+function defaultControlInputName(prompt: Record<string, unknown>, nodeId: string, role: 'seed' | 'steps' | 'cfg' | 'samplerName' | 'scheduler'): string {
+  const classType = nodeClassType(prompt, nodeId);
+  if (role === 'seed') return classType === 'RandomNoise' || classType === 'KSamplerAdvanced' ? 'noise_seed' : 'seed';
+  if (role === 'cfg') return classType === 'FluxGuidance' ? 'guidance' : 'cfg';
+  if (role === 'samplerName') return 'sampler_name';
+  return role;
+}
+
+function nodeClassType(prompt: Record<string, unknown>, nodeId: string | undefined): string | undefined {
+  if (!nodeId) return undefined;
+  const node = prompt[nodeId];
+  return isRecord(node) && typeof node.class_type === 'string' ? node.class_type : undefined;
 }
 
 function findNodeId(prompt: Record<string, unknown>, classType: string, occurrence: number): string | undefined {
