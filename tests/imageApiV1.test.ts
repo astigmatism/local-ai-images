@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { AppError } from '../src/errors.ts';
+import { builtinWorkflows } from '../src/services/image/workflowStore.ts';
 import { mockOllama, sampleGpu0, tempConfigStore, testRuntimeConfig, withTestServer } from './helpers.ts';
 
 async function tempImageRuntimeConfig(overrides = {}) {
@@ -138,7 +139,16 @@ test('GET /api/v1/generation-sources probes checkpoints, groups workflow sources
   const checkpointDir = path.join(runtimeConfig.imageModelPaths[0]!, 'checkpoints');
   await fs.writeFile(path.join(checkpointDir, 'prewarm failed, ComfyUI prompt returned HTTP 400.safetensors'), 'not a model option');
   await fs.writeFile(path.join(checkpointDir, 'demo.vae.safetensors'), 'vae-only');
+  await fs.mkdir(path.join(runtimeConfig.imageModelPaths[0]!, 'text_encoders'), { recursive: true });
+  await fs.writeFile(path.join(runtimeConfig.imageModelPaths[0]!, 'text_encoders', 'not-a-checkpoint.safetensors'), 'text encoder');
   await fs.writeFile(path.join(checkpointDir, 'notes.json'), '{}');
+  const customWorkflow = {
+    ...builtinWorkflows()[0]!,
+    id: 'custom-sdxl-text-to-image',
+    name: 'Custom SDXL text to image',
+    source: undefined
+  };
+  await fs.writeFile(path.join(runtimeConfig.imageWorkflowPath, 'custom-sdxl-text-to-image.json'), JSON.stringify(customWorkflow));
 
   await withTestServer({
     runtimeConfig,
@@ -151,7 +161,7 @@ test('GET /api/v1/generation-sources probes checkpoints, groups workflow sources
     assert.ok(Number(testRecord(testRecord(initial.status).checkpointProbe).total) >= 1);
 
     const list = await waitForGenerationSources(baseUrl, (body) => {
-      return generationSourceGroup(body, 'checkpoints').some((source) => source.checkpointName === 'demo.safetensors');
+      return generationSourceGroup(body, 'checkpoints').some((source) => source.checkpointName === 'demo.safetensors' && source.probeStatus === 'valid');
     });
     assert.equal(list.ok, true);
     const labels = testRecords(list.sources).map((source) => stringField(source, 'label'));
@@ -159,7 +169,8 @@ test('GET /api/v1/generation-sources probes checkpoints, groups workflow sources
     assert.ok(!labels.some((label: string) => label.includes('prewarm failed')));
     assert.ok(!labels.some((label: string) => label.includes('HTTP 400')));
     assert.ok(!labels.includes('demo.vae.safetensors'));
-    assert.ok(generationSourceGroup(list, 'workflows').some((source) => source.id === 'workflow:sdxl-text-to-image'));
+    assert.ok(!generationSourceGroup(list, 'workflows').some((source) => source.id === 'workflow:sdxl-text-to-image'));
+    assert.ok(generationSourceGroup(list, 'workflows').some((source) => source.id === 'workflow:custom-sdxl-text-to-image'));
 
     const checkpoint = generationSourceGroup(list, 'checkpoints').find((source) => source.checkpointName === 'demo.safetensors');
     assert.ok(checkpoint);
@@ -184,7 +195,7 @@ test('GET /api/v1/generation-sources probes checkpoints, groups workflow sources
     assert.equal(generatedWithCheckpoint.job.model, 'demo.safetensors');
     assert.equal(generatedWithCheckpoint.job.requestPayload.generation_source_type, 'checkpoint');
 
-    const workflow = generationSourceGroup(list, 'workflows').find((source) => source.id === 'workflow:sdxl-text-to-image');
+    const workflow = generationSourceGroup(list, 'workflows').find((source) => source.id === 'workflow:custom-sdxl-text-to-image');
     assert.ok(workflow);
     const generatedWithWorkflow = await (await fetch(`${baseUrl}/api/v1/generate`, {
       method: 'POST',

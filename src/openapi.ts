@@ -72,7 +72,7 @@ const generationSourceSchema = {
     label: { type: 'string' },
     displayLabel: { type: 'string' },
     selectable: { type: 'boolean' },
-    capabilityStatus: { enum: ['valid'] },
+    capabilityStatus: { enum: ['candidate', 'valid', 'probe_error'] },
     workflowId: { type: 'string' },
     workflowName: { type: 'string' },
     checkpointName: { type: 'string' },
@@ -569,7 +569,7 @@ export function buildOpenApiDocument() {
       '/api/v1/generation-sources': {
         get: {
           summary: 'List selectable generation sources',
-          description: 'Returns structured, selectable generation sources: checkpoints that passed the compatibility probe and compatible workflow presets from the workflow registry. Operational errors and failed probe messages are returned only in status fields, never as selectable labels.',
+          description: 'Returns structured, selectable generation sources: plausible checkpoint candidates with probe status plus compatible operator workflow presets from the workflow registry. Operational errors and failed probe messages are returned only in status fields, never as selectable labels.',
           security: bearerSecurity,
           responses: { '200': { description: 'Selectable generation sources grouped by checkpoint and workflow', content: { 'application/json': { schema: generationSourceListSchema } } }, ...authErrorResponses }
         }

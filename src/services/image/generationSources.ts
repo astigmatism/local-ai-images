@@ -63,13 +63,25 @@ const NON_CHECKPOINT_PATH_SEGMENTS = new Set([
   'upscaler',
   'clip',
   'text_encoder',
+  'text_encoders',
+  'encoder',
+  'encoders',
+  'diffusion_model',
+  'diffusion_models',
+  'unet',
+  'unets',
+  'ipadapter',
+  'ip-adapter',
+  'pulid',
+  'instantid',
   'configs',
   'metadata',
   'logs'
 ]);
-const NON_CHECKPOINT_NAME_PATTERN = /(^|[_.\-\s])(lora|lycoris|locon|controlnet|embedding|textual[_.\-\s]?inversion|clip|text[_.\-\s]?encoder|upscaler|esrgan|realesrgan|vae)([_.\-\s]|$)/iu;
+const NON_CHECKPOINT_NAME_PATTERN = /(^|[_.\-\s])(lora|lycoris|locon|controlnet|embedding|textual[_.\-\s]?inversion|clip|text[_.\-\s]?encoder|upscaler|esrgan|realesrgan|vae|ip[_.\-\s]?adapter|pulid|instantid)([_.\-\s]|$)/iu;
 const OPERATIONAL_STATUS_PATTERN = /(prewarm\s+failed|prompt\s+returned|http\s+\d{3}|traceback|error[:\s]|failed[,\s])/iu;
 const PROBE_PROMPT = 'local ai images checkpoint compatibility probe';
+const PROBE_RETRY_DELAY_MS = 5000;
 
 export class GenerationSourceRegistry {
   private readonly runtimeConfig: RuntimeConfig;
@@ -84,6 +96,8 @@ export class GenerationSourceRegistry {
   private lastError: { code: string; message: string } | null = null;
   private providerCheckpointNames: Set<string> | null = null;
   private providerCheckpointNamesLoadedAt: string | null = null;
+  private probeRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private nextProbeNotBeforeMs = 0;
 
   constructor(options: GenerationSourceRegistryOptions) {
     this.runtimeConfig = options.runtimeConfig;
@@ -183,9 +197,22 @@ export class GenerationSourceRegistry {
   private ensureProbeRun(): void {
     if (this.activeProbeRun) return;
     if (![...this.checkpointProbeCache.values()].some((entry) => entry.status === 'pending')) return;
+
+    const delayMs = Math.max(0, this.nextProbeNotBeforeMs - Date.now());
+    if (delayMs > 0) {
+      this.scheduleProbeRetry(delayMs);
+      return;
+    }
+
+    if (this.probeRetryTimer) {
+      clearTimeout(this.probeRetryTimer);
+      this.probeRetryTimer = null;
+    }
+
     this.activeProbeRun = this.runProbeQueue()
       .catch((error: unknown) => {
         this.lastError = errorSummary(error);
+        this.nextProbeNotBeforeMs = Date.now() + PROBE_RETRY_DELAY_MS;
         this.logger.warn({ err: error }, 'Generation source checkpoint probe queue failed');
       })
       .finally(() => {
@@ -197,16 +224,47 @@ export class GenerationSourceRegistry {
       });
   }
 
+  private scheduleProbeRetry(delayMs: number): void {
+    if (this.probeRetryTimer) return;
+    this.probeRetryTimer = setTimeout(() => {
+      this.probeRetryTimer = null;
+      this.ensureProbeRun();
+    }, delayMs);
+    this.probeRetryTimer.unref?.();
+  }
+
   private async runProbeQueue(): Promise<void> {
     this.lastStartedAt = new Date().toISOString();
     this.lastCompletedAt = null;
     this.lastError = null;
+
+    if (!await this.providerIsReadyForProbe()) return;
     await this.refreshProviderCheckpointNames();
 
     while (true) {
       const next = [...this.checkpointProbeCache.values()].find((entry) => entry.status === 'pending');
       if (!next) return;
-      await this.probeCheckpoint(next);
+      const shouldContinue = await this.probeCheckpoint(next);
+      if (!shouldContinue) return;
+    }
+  }
+
+  private async providerIsReadyForProbe(): Promise<boolean> {
+    try {
+      const health = await this.provider.health();
+      if (health.ok) return true;
+      this.lastError = {
+        code: health.error?.code || 'IMAGE_PROVIDER_UNAVAILABLE',
+        message: health.error?.message || 'Image generation provider is not ready for checkpoint probing.'
+      };
+      this.nextProbeNotBeforeMs = Date.now() + PROBE_RETRY_DELAY_MS;
+      this.logger.warn({ provider: health.provider, error: health.error }, 'Image provider is not ready for generation source probing; checkpoint candidates remain selectable and will be retried');
+      return false;
+    } catch (error: unknown) {
+      this.lastError = errorSummary(error);
+      this.nextProbeNotBeforeMs = Date.now() + PROBE_RETRY_DELAY_MS;
+      this.logger.warn({ err: error }, 'Image provider readiness check failed during generation source probing; checkpoint candidates remain selectable and will be retried');
+      return false;
     }
   }
 
@@ -218,19 +276,25 @@ export class GenerationSourceRegistry {
       this.providerCheckpointNamesLoadedAt = new Date().toISOString();
     } catch (error: unknown) {
       this.providerCheckpointNames = null;
+      if (isProviderUnavailableError(error)) {
+        this.lastError = errorSummary(error);
+        this.nextProbeNotBeforeMs = Date.now() + PROBE_RETRY_DELAY_MS;
+        this.logger.warn({ err: error }, 'ComfyUI checkpoint listing is unavailable; checkpoint candidates remain selectable and probing will retry');
+        return;
+      }
       this.providerCheckpointNamesLoadedAt = new Date().toISOString();
       this.logger.warn({ err: error }, 'ComfyUI checkpoint listing unavailable during generation source probing; falling back to workflow probe');
     }
   }
 
-  private async probeCheckpoint(entry: CheckpointProbeCacheEntry): Promise<void> {
+  private async probeCheckpoint(entry: CheckpointProbeCacheEntry): Promise<boolean> {
     const current = this.checkpointProbeCache.get(entry.checkpointId);
-    if (!current || current.signature !== entry.signature) return;
+    if (!current || current.signature !== entry.signature) return true;
 
     const listedByProvider = this.providerCheckpointNames;
     if (listedByProvider && listedByProvider.size > 0 && !checkpointListedByProvider(entry, listedByProvider)) {
       this.markProbe(entry, 'invalid', 'Checkpoint is not present in ComfyUI CheckpointLoaderSimple object_info ckpt_name list.');
-      return;
+      return true;
     }
 
     let workflow: WorkflowPreset;
@@ -238,12 +302,12 @@ export class GenerationSourceRegistry {
       workflow = await this.resolveProbeWorkflow();
     } catch (error: unknown) {
       this.markProbe(entry, 'error', error instanceof Error ? error.message : String(error));
-      return;
+      return true;
     }
 
     if (!workflow.comfyui.mappings.checkpointNode && !findNodeId(workflow.comfyui.prompt, 'CheckpointLoaderSimple', 0)) {
       this.markProbe(entry, 'error', `Probe workflow ${workflow.id} does not expose a checkpoint loader.`);
-      return;
+      return true;
     }
 
     const controller = new AbortController();
@@ -281,11 +345,19 @@ export class GenerationSourceRegistry {
       });
       this.markProbe(entry, 'valid', null);
       this.logger.info({ checkpoint: entry.checkpointName }, 'Checkpoint generation source probe succeeded');
+      return true;
     } catch (error: unknown) {
+      if (isProviderUnavailableError(error)) {
+        this.lastError = errorSummary(error);
+        this.nextProbeNotBeforeMs = Date.now() + PROBE_RETRY_DELAY_MS;
+        this.logger.warn({ err: error, checkpoint: entry.checkpointName }, 'Checkpoint generation source probe postponed because the provider is unavailable');
+        return false;
+      }
       const summary = errorSummary(error);
       const status: CheckpointProbeStatus = isInvalidPromptError(error) ? 'invalid' : 'error';
       this.markProbe(entry, status, summary.message);
       this.logger.warn({ err: error, checkpoint: entry.checkpointName, probeStatus: status }, 'Checkpoint generation source probe failed');
+      return true;
     } finally {
       clearTimeout(timeout);
     }
@@ -310,7 +382,7 @@ export class GenerationSourceRegistry {
 
   private buildSourceList(): GenerationSourceList {
     const checkpointSources = [...this.checkpointProbeCache.values()]
-      .filter((entry) => entry.status === 'valid')
+      .filter((entry) => entry.status !== 'invalid')
       .sort((left, right) => left.checkpointName.localeCompare(right.checkpointName))
       .map((entry): GenerationSourceSummary => ({
         id: entry.checkpointId,
@@ -318,7 +390,7 @@ export class GenerationSourceRegistry {
         label: entry.checkpointName,
         displayLabel: entry.checkpointName,
         selectable: true,
-        capabilityStatus: 'valid',
+        capabilityStatus: checkpointCapabilityStatus(entry.status),
         checkpointName: entry.checkpointName,
         checkpointId: entry.model.id,
         workflowId: this.runtimeConfig.imageDefaultWorkflowId,
@@ -333,7 +405,7 @@ export class GenerationSourceRegistry {
       }));
 
     const workflows = this.workflowStore.getCachedWorkflows();
-    const workflowResults = workflows.map((workflow) => ({ workflow, compatibility: workflowCompatibility(workflow) }));
+    const workflowResults = workflows.filter(isStandaloneWorkflowSource).map((workflow) => ({ workflow, compatibility: workflowCompatibility(workflow) }));
     const workflowSources = workflowResults
       .filter((item) => item.compatibility.ok)
       .sort((left, right) => left.workflow.name.localeCompare(right.workflow.name))
@@ -420,6 +492,16 @@ function isEligibleCheckpointCandidate(model: ModelInventoryItem): boolean {
   const segments = model.relativePath.toLowerCase().split(/[\\/]+/u).filter(Boolean);
   if (segments.some((segment) => NON_CHECKPOINT_PATH_SEGMENTS.has(segment))) return false;
   return true;
+}
+
+function checkpointCapabilityStatus(status: CheckpointProbeStatus): GenerationSourceSummary['capabilityStatus'] {
+  if (status === 'valid') return 'valid';
+  if (status === 'error') return 'probe_error';
+  return 'candidate';
+}
+
+function isStandaloneWorkflowSource(workflow: WorkflowPreset): boolean {
+  return workflow.source === 'file';
 }
 
 function checkpointSignature(model: ModelInventoryItem): string {
@@ -511,6 +593,11 @@ function errorSummary(error: unknown): { code: string; message: string } {
     return { code: 'GENERATION_SOURCE_PROBE_FAILED', message: error.message };
   }
   return { code: 'GENERATION_SOURCE_PROBE_FAILED', message: 'Unknown generation source probe failure.' };
+}
+
+function isProviderUnavailableError(error: unknown): boolean {
+  if (!(error instanceof AppError)) return false;
+  return error.code === 'COMFYUI_UNAVAILABLE' || error.code === 'COMFYUI_TIMEOUT';
 }
 
 function isInvalidPromptError(error: unknown): boolean {

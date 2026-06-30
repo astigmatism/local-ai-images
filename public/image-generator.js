@@ -782,9 +782,9 @@ function generationSourceStatusMessage() {
   }
   if (generationSources().length === 0) {
     if (Number(status?.invalid || 0) > 0 || Number(status?.error || 0) > 0) {
-      return 'No valid checkpoint generation sources were found. Check ComfyUI/model probe status for invalid candidates.';
+      return 'No selectable generation sources were found. Check ComfyUI/model status for invalid candidates.';
     }
-    return 'No valid generation sources found.';
+    return 'No generation sources available.';
   }
   return '';
 }
@@ -878,8 +878,9 @@ function generationSourceOption(source) {
 function generationSourcePlaceholder() {
   if (!state.generationSources) return 'Loading generation sources...';
   const status = generationSourceProbeStatus();
-  if (status?.active || status?.pending > 0) return 'Probing checkpoints...';
-  return 'No valid generation sources found';
+  if (generationSources().length > 0) return 'Choose a generation source';
+  if (status?.active || status?.pending > 0) return 'Discovering checkpoint sources...';
+  return 'No generation sources available';
 }
 
 function renderModelOptions() {
@@ -896,7 +897,8 @@ function renderModelOptions() {
   const workflowHtml = workflows.length
     ? `<optgroup label="Workflows">${workflows.map(generationSourceOption).join('')}</optgroup>`
     : '';
-  select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>${checkpointHtml}${workflowHtml}`;
+  const placeholderSelected = allSources.length === 0 ? ' selected' : '';
+  select.innerHTML = `<option value="" disabled${placeholderSelected}>${escapeHtml(placeholder)}</option>${checkpointHtml}${workflowHtml}`;
   const selected = allSources.some((source) => source.id === previous)
     ? previous
     : allSources[0]?.id || '';

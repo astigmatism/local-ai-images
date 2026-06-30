@@ -220,7 +220,7 @@ export interface GenerationSourceSummary {
   label: string;
   displayLabel: string;
   selectable: boolean;
-  capabilityStatus: 'valid';
+  capabilityStatus: 'candidate' | 'valid' | 'probe_error';
   capabilities: GenerationSourceCapabilities;
   workflowId: string;
   workflowName?: string;

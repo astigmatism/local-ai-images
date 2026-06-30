@@ -2,8 +2,8 @@
 
 The image-generation portal has one **Generation source** selector. A source can be either:
 
-- a checkpoint that has passed the app's text-to-image compatibility probe, or
-- a registered ComfyUI workflow preset that the app can safely fill from the standard portal controls.
+- a plausible checkpoint candidate that passed safe file/category filtering and is usable with the default text-to-image workflow, or
+- an explicitly registered operator ComfyUI workflow preset that the app can safely fill from the standard portal controls.
 
 The portal intentionally does **not** list every file in a model directory and does **not** treat status strings as model names. Failed prewarm/probe messages such as `prewarm failed, ComfyUI prompt returned HTTP 400` are status/errors only; they are never selectable generation sources.
 
@@ -19,11 +19,11 @@ Before a checkpoint is probed, the app excludes obvious invalid candidates:
 - files located in known non-checkpoint folders such as `loras`, `vae`, `controlnet`, `embeddings`, `upscale_models`, `clip`, and `text_encoder`,
 - filenames that look like LoRA, VAE-only, ControlNet, embedding, CLIP/text-encoder, or upscaler assets.
 
-For each remaining candidate, the app runs a bounded compatibility probe. The preferred first check is ComfyUI's `CheckpointLoaderSimple` object info, which confirms that ComfyUI itself exposes the candidate as a checkpoint choice. The app then runs a tiny text-to-image probe through the configured preload/default workflow using a low step count, small dimensions, and a deterministic seed. A checkpoint is selectable only after that probe succeeds.
+For each remaining candidate, the app runs a bounded compatibility probe in the background. The preferred first check is ComfyUI's `CheckpointLoaderSimple` object info, which confirms that ComfyUI itself exposes the candidate as a checkpoint choice. The app then runs a tiny text-to-image probe through the configured preload/default workflow using a low step count, small dimensions, and a deterministic seed. Probe status improves the app's knowledge of the candidate, but a transient startup/readiness failure does not erase plausible checkpoint choices from the selector.
 
 Probe results are cached in memory with the checkpoint identifier, file path, file modification timestamp, size, status (`pending`, `valid`, `invalid`, or `error`), probe timestamp, and failure reason. The cache is invalidated when the file signature changes, when a file disappears, or when a rescan is requested. This first implementation does not persist the cache across process restarts.
 
-The probe queue is intentionally conservative: one checkpoint is probed at a time, each probe has a timeout, and a bad checkpoint does not block app startup. While probing is active, the frontend shows a compact probing/loading state and only renders sources whose status is valid.
+The probe queue is intentionally conservative: one checkpoint is probed at a time, each probe has a timeout, and a bad checkpoint does not block app startup. If ComfyUI is unavailable during container startup, the registry leaves checkpoint candidates pending, records a registry-level readiness error, and automatically retries instead of marking every checkpoint as failed. While probing is active, the frontend shows a compact probing/loading state and keeps plausible checkpoint candidates selectable; candidates are hidden only when the app can determine they are definitively invalid.
 
 ### Refreshing checkpoint probes
 
@@ -37,14 +37,14 @@ If API authentication is enabled, include the same bearer token or `X-API-Key` h
 
 ### Why a checkpoint may not appear
 
-A checkpoint is hidden from the selector when it is not eligible or when its probe fails. Common reasons include:
+A checkpoint is hidden from the selector when it is not eligible or when the app can determine it is definitively invalid. Transient ComfyUI startup/readiness failures leave the checkpoint pending/selectable and trigger automatic retry. Common reasons a checkpoint may be hidden include:
 
 - the file is in the wrong ComfyUI model subfolder,
 - the file is a LoRA, VAE, ControlNet, embedding, text encoder, upscaler, config, log, metadata file, or partial download,
 - ComfyUI does not list it as a `CheckpointLoaderSimple` checkpoint,
 - the default/preload workflow cannot insert the checkpoint,
 - ComfyUI returned HTTP 400 during prompt validation/submission,
-- ComfyUI was unavailable or timed out during the probe,
+- ComfyUI returned HTTP 400 in a way that proves the default text-to-image prompt cannot use the checkpoint,
 - the file changed and is waiting to be re-probed.
 
 Check backend logs or the `/api/v1/health` and `/api/v1/generation-sources` status sections for probe counts. Failure reasons are kept in logs/status/debug data, not in dropdown labels.
@@ -53,11 +53,11 @@ Check backend logs or the `/api/v1/health` and `/api/v1/generation-sources` stat
 
 Workflow/subgraph generation sources are explicit workflow presets. The app does not blindly treat every ComfyUI workflow JSON file as compatible.
 
-Workflow presets are loaded from the built-in registry and from JSON files in `IMAGE_WORKFLOW_PATH`. A preset must pass structural compatibility checks before it appears in the selector. Invalid registry files are skipped and logged as workflow load warnings so one bad workflow file does not break the portal.
+Workflow presets are loaded from the built-in registry and from JSON files in `IMAGE_WORKFLOW_PATH`. The built-in default `sdxl-text-to-image` workflow remains the internal checkpoint-generation mechanism and is not shown as a standalone user-selectable generation source. Operator-supplied JSON preset files are the standalone workflow/subgraph sources. A file preset must pass structural compatibility checks before it appears in the selector. Invalid registry files are skipped and logged as workflow load warnings so one bad workflow file does not break the portal.
 
 A workflow source summary returned by `/api/v1/generation-sources` includes:
 
-- `id`, for example `workflow:sdxl-text-to-image`,
+- `id`, for example `workflow:portrait-sdxl`,
 - `type: "workflow"`,
 - display label,
 - `workflowId`,
@@ -285,7 +285,7 @@ HTTP 400 from ComfyUI usually means ComfyUI rejected the prompt graph before gen
 - dimensions are multiples supported by the model/workflow,
 - the workflow JSON is API-format ComfyUI prompt data, not only the visual editor format.
 
-A workflow that fails these checks is hidden from the selector when the app can detect the problem. A checkpoint that returns HTTP 400 during the probe is marked invalid/error and hidden from the checkpoint group.
+A workflow that fails these checks is hidden from the selector when the app can detect the problem. A checkpoint that returns a definitive HTTP 400 prompt-validation failure during the probe is marked invalid and hidden from the checkpoint group. A checkpoint probe that cannot run because ComfyUI is still unavailable at startup is left pending/selectable and retried automatically.
 
 ## Testing a workflow through the portal
 
@@ -300,7 +300,7 @@ A workflow that fails these checks is hidden from the selector when the app can 
 
 ## Current limitations
 
-- Checkpoint probe results are cached in memory only; they are re-created after app restart.
+- Checkpoint probe results are cached in memory only; they are re-created after app restart. Until probes complete, plausible checkpoint candidates remain selectable so startup readiness races do not empty the selector.
 - When validation-only probing is unavailable, the app runs a tiny real generation. The portal does not persist those probe images in its artifact store, but ComfyUI may still leave temporary/probe output files in its own output folder depending on the workflow's save node behavior.
 - Workflow-specific controls are not auto-rendered yet; required custom values should be represented as safe defaults inside the workflow preset.
 - The filename filter intentionally excludes common non-checkpoint tokens. A legitimate checkpoint with a misleading name such as one containing `vae` or `lora` may be hidden until renamed or moved into a clearer checkpoint path.

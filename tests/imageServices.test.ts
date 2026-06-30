@@ -5,11 +5,13 @@ import path from 'node:path';
 import test from 'node:test';
 import { createLogger } from '../src/logger.ts';
 import { ArtifactStore } from '../src/services/image/artifactStore.ts';
+import { GenerationSourceRegistry } from '../src/services/image/generationSources.ts';
 import { ImageJobQueue } from '../src/services/image/jobQueue.ts';
 import { MockImageProvider } from '../src/services/image/mockProvider.ts';
 import { ModelScanner } from '../src/services/image/modelScanner.ts';
 import { builtinWorkflows, WorkflowStore } from '../src/services/image/workflowStore.ts';
-import type { NormalizedGenerationRequest } from '../src/types.ts';
+import type { ImageGenerationProvider, NormalizedGenerationRequest } from '../src/types.ts';
+import { testRuntimeConfig } from './helpers.ts';
 
 function baseRequest(overrides: Partial<NormalizedGenerationRequest> = {}): NormalizedGenerationRequest {
   return {
@@ -85,6 +87,58 @@ test('WorkflowStore loads builtin and operator workflow presets', async () => {
   const workflow = await store.get('custom-sdxl');
   assert.equal(workflow.source, 'file');
   assert.equal(workflow.name, 'Custom SDXL');
+});
+
+test('GenerationSourceRegistry keeps plausible checkpoint candidates selectable while ComfyUI is unavailable', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'image-source-registry-'));
+  const modelPath = path.join(root, 'models');
+  const workflowPath = path.join(root, 'workflows');
+  await fs.mkdir(path.join(modelPath, 'checkpoints'), { recursive: true });
+  await fs.mkdir(path.join(modelPath, 'text_encoders'), { recursive: true });
+  await fs.mkdir(workflowPath, { recursive: true });
+  await fs.writeFile(path.join(modelPath, 'checkpoints', 'candidate.safetensors'), 'checkpoint');
+  await fs.writeFile(path.join(modelPath, 'text_encoders', 'not-a-checkpoint.safetensors'), 'text encoder');
+
+  const provider: ImageGenerationProvider = {
+    name: 'comfyui',
+    async health() {
+      return {
+        ok: false,
+        provider: 'comfyui',
+        error: { code: 'COMFYUI_UNAVAILABLE', message: 'Unable to connect to ComfyUI.' }
+      };
+    },
+    async generate() {
+      throw new Error('generate should not be called before provider readiness is confirmed');
+    },
+    async listCheckpoints() {
+      throw new Error('listCheckpoints should not be called before provider readiness is confirmed');
+    }
+  };
+
+  const registry = new GenerationSourceRegistry({
+    runtimeConfig: testRuntimeConfig({ imageModelPaths: [modelPath], imageWorkflowPath: workflowPath }),
+    provider,
+    modelScanner: new ModelScanner([modelPath]),
+    workflowStore: new WorkflowStore(workflowPath, 'sdxl-text-to-image'),
+    logger: createLogger('silent')
+  });
+
+  const list = await registry.refresh();
+  const checkpoints = list.sourceGroups.checkpoints;
+  assert.equal(checkpoints.length, 1);
+  assert.equal(checkpoints[0]?.checkpointName, 'candidate.safetensors');
+  assert.equal(checkpoints[0]?.probeStatus, 'pending');
+  assert.equal(checkpoints[0]?.capabilityStatus, 'candidate');
+  assert.equal(checkpoints[0]?.selectable, true);
+  assert.equal(list.sourceGroups.workflows.length, 0);
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const cached = registry.cachedSourceList();
+  assert.equal(cached.sourceGroups.checkpoints[0]?.checkpointName, 'candidate.safetensors');
+  assert.equal(cached.sourceGroups.checkpoints[0]?.probeStatus, 'pending');
+  assert.equal(cached.status.checkpointProbe.pending, 1);
+  assert.equal(cached.status.checkpointProbe.error, 0);
 });
 
 test('ArtifactStore writes image data and sidecar metadata', async () => {
