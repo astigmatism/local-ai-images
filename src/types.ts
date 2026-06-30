@@ -3,6 +3,9 @@ export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancele
 export type OutputDelivery = 'metadata' | 'url' | 'base64' | 'binary';
 export type ModelInstallType = 'checkpoint' | 'lora' | 'vae' | 'controlnet' | 'upscaler' | 'other';
 export type ModelDownloadStatus = 'queued' | 'downloading' | 'succeeded' | 'failed' | 'canceled';
+export type GenerationSourceType = 'checkpoint' | 'workflow';
+export type CheckpointProbeStatus = 'pending' | 'valid' | 'invalid' | 'error';
+
 
 export interface RuntimeConfig {
   host: string;
@@ -204,6 +207,59 @@ export interface ModelInventory {
   defaultWorkflowId?: string;
 }
 
+export interface GenerationSourceCapabilities {
+  textToImage: true;
+  supportsSeed: boolean;
+  supportsCheckpoint: boolean;
+  sourceWorkflowId?: string;
+}
+
+export interface GenerationSourceSummary {
+  id: string;
+  type: GenerationSourceType;
+  label: string;
+  displayLabel: string;
+  selectable: boolean;
+  capabilityStatus: 'valid';
+  capabilities: GenerationSourceCapabilities;
+  workflowId: string;
+  workflowName?: string;
+  checkpointName?: string;
+  checkpointId?: string;
+  probeStatus?: CheckpointProbeStatus;
+  source: 'checkpoint-probe' | 'workflow-registry';
+}
+
+export interface GenerationSourceListStatus {
+  checkpointProbe: {
+    active: boolean;
+    total: number;
+    pending: number;
+    valid: number;
+    invalid: number;
+    error: number;
+    lastStartedAt: string | null;
+    lastCompletedAt: string | null;
+    lastError: { code: string; message: string } | null;
+  };
+  workflows: {
+    total: number;
+    valid: number;
+    invalid: number;
+  };
+}
+
+export interface GenerationSourceList {
+  ok: true;
+  refreshedAt: string;
+  sources: GenerationSourceSummary[];
+  sourceGroups: {
+    checkpoints: GenerationSourceSummary[];
+    workflows: GenerationSourceSummary[];
+  };
+  status: GenerationSourceListStatus;
+}
+
 export interface WorkflowPresetDefaults {
   width?: number;
   height?: number;
@@ -244,6 +300,11 @@ export interface NormalizedGenerationRequest {
   negativePrompt: string;
   model: string | null;
   workflowId: string;
+  generationSourceType: GenerationSourceType;
+  generationSourceId: string;
+  generationSourceLabel: string;
+  checkpointName: string | null;
+  workflowSourceId: string | null;
   width: number;
   height: number;
   steps: number;
@@ -276,6 +337,9 @@ export interface FavoriteImagePrompt {
   model?: string | null;
   workflow?: string | null;
   workflowId?: string | null;
+  generationSourceType?: GenerationSourceType | null;
+  generationSourceId?: string | null;
+  generationSourceLabel?: string | null;
   sampler?: string | null;
   scheduler?: string | null;
   width?: number | null;
@@ -300,6 +364,9 @@ export interface ImageFavorite {
   model?: string | null;
   workflow?: string | null;
   workflowId?: string | null;
+  generationSourceType?: GenerationSourceType | null;
+  generationSourceId?: string | null;
+  generationSourceLabel?: string | null;
   sampler?: string | null;
   scheduler?: string | null;
   width?: number | null;
@@ -330,6 +397,9 @@ export interface ArtifactMetadata {
   provider: string;
   workflowId: string;
   model: string | null;
+  generationSourceType: GenerationSourceType;
+  generationSourceId: string;
+  generationSourceLabel: string;
   prompt: string;
   negativePrompt?: string;
   seed: number;
@@ -379,6 +449,7 @@ export interface ImageGenerationProvider {
   readonly name: string;
   health(): Promise<ImageProviderHealth>;
   generate(request: ProviderGenerationRequest): Promise<ProviderGenerationResult>;
+  listCheckpoints?(): Promise<string[]>;
   cancel?(providerJobId?: string | null): Promise<void>;
 }
 
@@ -401,6 +472,9 @@ export interface ImageJob {
   providerJobId: string | null;
   workflowId: string;
   model: string | null;
+  generationSourceType: GenerationSourceType;
+  generationSourceId: string;
+  generationSourceLabel: string;
   artifacts: ArtifactMetadata[];
   error: { code: string; message: string; details?: unknown } | null;
   metadata: Record<string, unknown>;
@@ -425,6 +499,9 @@ export interface ImageJobSummary {
   providerJobId: string | null;
   workflowId: string;
   model: string | null;
+  generationSourceType: GenerationSourceType;
+  generationSourceId: string;
+  generationSourceLabel: string;
   prompt: string;
   negativePrompt: string;
   seed: number;

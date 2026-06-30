@@ -36,6 +36,7 @@ async function main(): Promise<void> {
     await maybePrewarmLegacyDefaultModel();
   }
 
+  imageRuntime.generationSources.startStartupProbe();
   void imageRuntime.modelLifecycle.startStartupPreload();
 }
 

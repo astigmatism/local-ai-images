@@ -4,6 +4,7 @@ import type { ImageGenerationProvider, RuntimeConfig } from '../../types.ts';
 import { ArtifactStore } from './artifactStore.ts';
 import { ComfyUiProvider } from './comfyUiProvider.ts';
 import { FavoritePromptStore } from './favoritePromptStore.ts';
+import { GenerationSourceRegistry } from './generationSources.ts';
 import { ImageFavoriteStore } from './imageFavoriteStore.ts';
 import { ImageJobQueue } from './jobQueue.ts';
 import { MockImageProvider } from './mockProvider.ts';
@@ -17,6 +18,7 @@ export interface ImageRuntime {
   provider: ImageGenerationProvider;
   modelScanner: ModelScanner;
   workflowStore: WorkflowStore;
+  generationSources: GenerationSourceRegistry;
   artifactStore: ArtifactStore;
   favoritePromptStore: FavoritePromptStore;
   imageFavoriteStore: ImageFavoriteStore;
@@ -36,6 +38,13 @@ export function createImageRuntime(runtimeConfig: RuntimeConfig, logger: Logger,
   const imageFavoriteStore = new ImageFavoriteStore(runtimeConfig.imageFavoritesPath, runtimeConfig.imageGenerationMaxPromptChars);
   const modelScanner = new ModelScanner(runtimeConfig.imageModelPaths);
   const workflowStore = new WorkflowStore(runtimeConfig.imageWorkflowPath, runtimeConfig.imageDefaultWorkflowId);
+  const generationSources = new GenerationSourceRegistry({
+    runtimeConfig,
+    provider,
+    modelScanner,
+    workflowStore,
+    logger
+  });
   const modelLifecycle = new ModelLifecycleManager({
     runtimeConfig,
     configStore,
@@ -49,6 +58,7 @@ export function createImageRuntime(runtimeConfig: RuntimeConfig, logger: Logger,
     provider,
     modelScanner,
     workflowStore,
+    generationSources,
     artifactStore,
     favoritePromptStore,
     imageFavoriteStore,

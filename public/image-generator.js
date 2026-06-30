@@ -23,6 +23,8 @@ const IMAGE_VIEWER_ZOOM_BUTTON_STEP = 1.18;
 const state = {
   imageHealth: null,
   imageModels: null,
+  generationSources: null,
+  generationSourcePollTimer: null,
   imageWorkflows: null,
   selectedWorkflowId: null,
   imageJobs: null,
@@ -723,17 +725,98 @@ function modelMatches(model, value) {
     .some((candidate) => normalizeModel(candidate) === normalized);
 }
 
-function checkpointModels() {
-  return (state.imageModels?.models || []).filter((model) => model.type === 'checkpoint');
+function generationSources() {
+  return (state.generationSources?.sources || []).filter((source) => source?.selectable !== false);
+}
+
+function checkpointSources() {
+  const grouped = state.generationSources?.sourceGroups?.checkpoints;
+  return (Array.isArray(grouped) ? grouped : generationSources().filter((source) => source.type === 'checkpoint'))
+    .filter((source) => source?.selectable !== false);
+}
+
+function workflowSources() {
+  const grouped = state.generationSources?.sourceGroups?.workflows;
+  return (Array.isArray(grouped) ? grouped : generationSources().filter((source) => source.type === 'workflow'))
+    .filter((source) => source?.selectable !== false);
+}
+
+function selectedGenerationSource() {
+  const value = $('#image-lab-model')?.value || '';
+  if (!value) return null;
+  return generationSources().find((source) => source.id === value) || null;
+}
+
+function sourceMatchesCheckpointValue(source, value) {
+  const normalized = normalizeModel(value);
+  if (!normalized || !source) return false;
+  return [source.id, source.checkpointName, source.checkpointId, source.label, source.displayLabel]
+    .filter(Boolean)
+    .some((candidate) => normalizeModel(candidate) === normalized);
 }
 
 function selectedModel() {
-  return $('#image-lab-model')?.value || '';
+  const source = selectedGenerationSource();
+  if (!source) return '';
+  return source.checkpointName || (source.type === 'checkpoint' ? source.label : '') || '';
+}
+
+function selectedSourceRequiresPrewarm(source = selectedGenerationSource()) {
+  return Boolean(source && source.type === 'checkpoint' && (source.checkpointName || source.label));
+}
+
+function generationSourceProbeStatus() {
+  return state.generationSources?.status?.checkpointProbe || null;
+}
+
+function generationSourceProbeInProgress() {
+  const status = generationSourceProbeStatus();
+  return Boolean(status && (status.active || Number(status.pending || 0) > 0));
+}
+
+function generationSourceStatusMessage() {
+  if (!state.generationSources) return 'Loading generation sources...';
+  const status = generationSourceProbeStatus();
+  if (status?.active || Number(status?.pending || 0) > 0) {
+    return `Probing checkpoints (${Number(status.valid || 0)} valid, ${Number(status.pending || 0)} pending).`;
+  }
+  if (generationSources().length === 0) {
+    if (Number(status?.invalid || 0) > 0 || Number(status?.error || 0) > 0) {
+      return 'No valid checkpoint generation sources were found. Check ComfyUI/model probe status for invalid candidates.';
+    }
+    return 'No valid generation sources found.';
+  }
+  return '';
+}
+
+function scheduleGenerationSourceProbePoll() {
+  if (!generationSourceProbeInProgress()) {
+    if (state.generationSourcePollTimer) {
+      window.clearTimeout(state.generationSourcePollTimer);
+      state.generationSourcePollTimer = null;
+    }
+    return;
+  }
+  if (state.generationSourcePollTimer) return;
+  state.generationSourcePollTimer = window.setTimeout(async () => {
+    state.generationSourcePollTimer = null;
+    try {
+      state.generationSources = await fetchJson('/api/v1/generation-sources');
+      renderControls();
+      const message = generationSourceStatusMessage();
+      if (message && generationSources().length === 0) setStatus(message, true);
+    } catch (error) {
+      setStatus(`Generation source probe status unavailable: ${error.message}`, false);
+    } finally {
+      scheduleGenerationSourceProbePoll();
+    }
+  }, 2000);
 }
 
 function defaultWorkflowId() {
   return state.imageWorkflows?.default_workflow_id
     || state.imageWorkflows?.defaultWorkflowId
+    || state.generationSources?.sourceGroups?.checkpoints?.[0]?.workflowId
     || state.imageModels?.defaultWorkflowId
     || state.imageModels?.default_workflow_id
     || state.imageWorkflows?.workflows?.[0]?.id
@@ -741,6 +824,11 @@ function defaultWorkflowId() {
 }
 
 function selectedWorkflowId() {
+  const selectedSource = selectedGenerationSource();
+  if (selectedSource?.workflowId) {
+    state.selectedWorkflowId = selectedSource.workflowId;
+    return selectedSource.workflowId;
+  }
   const workflows = state.imageWorkflows?.workflows || [];
   const selected = $('#image-lab-workflow')?.value || '';
   if (selected && workflows.some((workflow) => workflow.id === selected)) {
@@ -761,6 +849,8 @@ function selectedWorkflow() {
 }
 
 function workflowUsesCheckpointModel(workflow = selectedWorkflow()) {
+  const source = selectedGenerationSource();
+  if (source) return source.type === 'checkpoint' || Boolean(source.capabilities?.supportsCheckpoint);
   return Boolean((workflow?.parameters || []).includes('model'));
 }
 
@@ -777,39 +867,43 @@ function renderWorkflowOptions() {
     ? previous
     : defaultWorkflowId();
   select.value = selected || '';
-  state.selectedWorkflowId = select.value || null;
+  state.selectedWorkflowId = selected || null;
+}
+
+function generationSourceOption(source) {
+  const label = source.displayLabel || source.label || source.id;
+  return `<option value="${escapeHtml(source.id)}">${escapeHtml(label)}</option>`;
+}
+
+function generationSourcePlaceholder() {
+  if (!state.generationSources) return 'Loading generation sources...';
+  const status = generationSourceProbeStatus();
+  if (status?.active || status?.pending > 0) return 'Probing checkpoints...';
+  return 'No valid generation sources found';
 }
 
 function renderModelOptions() {
   const select = $('#image-lab-model');
   if (!select) return;
-  const checkpointRequired = workflowUsesCheckpointModel();
-  if (!checkpointRequired) {
-    select.innerHTML = '<option value="">No checkpoint required for this workflow</option>';
-    select.value = '';
-    select.disabled = true;
-    return;
-  }
-  select.disabled = false;
   const previous = select.value;
-  const checkpoints = checkpointModels();
-  const lastLoaded = checkpoints.find((model) => model.isLastConfirmedLoaded) || null;
-  const selected = checkpoints.some((model) => modelMatches(model, previous))
+  const checkpoints = checkpointSources();
+  const workflows = workflowSources();
+  const allSources = [...checkpoints, ...workflows];
+  const placeholder = generationSourcePlaceholder();
+  const checkpointHtml = checkpoints.length
+    ? `<optgroup label="Checkpoints">${checkpoints.map(generationSourceOption).join('')}</optgroup>`
+    : '';
+  const workflowHtml = workflows.length
+    ? `<optgroup label="Workflows">${workflows.map(generationSourceOption).join('')}</optgroup>`
+    : '';
+  select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>${checkpointHtml}${workflowHtml}`;
+  const selected = allSources.some((source) => source.id === previous)
     ? previous
-    : lastLoaded
-      ? modelIdentifier(lastLoaded)
-      : checkpoints[0]
-        ? modelIdentifier(checkpoints[0])
-        : '';
-  const placeholder = checkpoints.length > 0 ? 'Choose a checkpoint' : 'No checkpoint models found';
-  select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>` + checkpoints.map((model) => {
-    const labels = [];
-    if (model.isLastConfirmedLoaded) labels.push('last loaded/prewarmed');
-    if (model.loadedStatus === 'default_not_confirmed_loaded') labels.push('available');
-    const label = `${model.comfyName || model.fileName}${labels.length ? ` (${labels.join(', ')})` : ''}`;
-    return `<option value="${escapeHtml(modelIdentifier(model))}">${escapeHtml(label)}</option>`;
-  }).join('');
+    : allSources[0]?.id || '';
   select.value = selected;
+  select.disabled = allSources.length === 0;
+  state.selectedWorkflowId = selectedGenerationSource()?.workflowId || state.selectedWorkflowId;
+  scheduleGenerationSourceProbePoll();
 }
 
 function applyWorkflowDefaults(overwrite = false) {
@@ -847,7 +941,7 @@ function renderControls() {
 function renderControlChrome() {
   const generateButton = $('#image-lab-generate');
   if (generateButton) {
-    generateButton.disabled = Boolean(state.prewarmingModel);
+    generateButton.disabled = Boolean(state.prewarmingModel) || generationSources().length === 0;
     generateButton.textContent = 'Generate!';
   }
   const autoGenerateControl = $('#image-lab-auto-generate');
@@ -885,15 +979,22 @@ function renderControlChrome() {
 function buildGenerationPayload() {
   const basePayload = isPlainObject(state.loadedFavoritePayloadBase) ? clonePayload(state.loadedFavoritePayloadBase) : {};
   const baseMetadata = isPlainObject(basePayload.metadata) ? basePayload.metadata : {};
+  const source = selectedGenerationSource();
   const workflow = selectedWorkflow();
+  const model = source?.checkpointName || (source?.type === 'checkpoint' ? source.label : '') || '';
   const seedRaw = $('#image-lab-seed')?.value.trim() || '';
   const parsedSeed = seedRaw === '' ? -1 : Number(seedRaw);
   const payload = {
     ...basePayload,
     prompt: $('#image-lab-prompt')?.value.trim() || '',
     negative_prompt: $('#image-lab-negative')?.value.trim() || '',
-    workflow_id: workflow?.id || basePayload.workflow_id || basePayload.workflowId || undefined,
-    model: workflowUsesCheckpointModel(workflow) ? selectedModel() || undefined : undefined,
+    workflow_id: source?.workflowId || workflow?.id || basePayload.workflow_id || basePayload.workflowId || undefined,
+    generation_source_type: source?.type || basePayload.generation_source_type || basePayload.generationSourceType || undefined,
+    generation_source_id: source?.id || basePayload.generation_source_id || basePayload.generationSourceId || undefined,
+    generation_source_label: source?.label || source?.displayLabel || basePayload.generation_source_label || basePayload.generationSourceLabel || undefined,
+    checkpoint_name: source?.type === 'checkpoint' ? model || undefined : source?.checkpointName || basePayload.checkpoint_name || basePayload.checkpointName || undefined,
+    workflow_source_id: source?.type === 'workflow' ? source.id : undefined,
+    model: model || undefined,
     width: Number($('#image-lab-width')?.value || 0) || undefined,
     height: Number($('#image-lab-height')?.value || 0) || undefined,
     steps: Number($('#image-lab-steps')?.value || 0) || undefined,
@@ -922,19 +1023,68 @@ function setInputValue(selector, value) {
   input.value = String(value);
 }
 
+function selectSourceByPayload(payload) {
+  const select = $('#image-lab-model');
+  if (!select) return false;
+  const sourceId = payloadString(payload, ['generation_source_id', 'generationSourceId', 'source_id', 'sourceId']);
+  const sourceType = payloadString(payload, ['generation_source_type', 'generationSourceType', 'source_type', 'sourceType']);
+  if (sourceId) {
+    const direct = generationSources().find((source) => source.id === sourceId && (!sourceType || source.type === sourceType));
+    if (direct) {
+      select.value = direct.id;
+      state.selectedWorkflowId = direct.workflowId || state.selectedWorkflowId;
+      return true;
+    }
+  }
+
+  const workflowSourceId = payloadString(payload, ['workflow_source_id', 'workflowSourceId']);
+  if (workflowSourceId) {
+    const direct = generationSources().find((source) => source.id === workflowSourceId || (source.type === 'workflow' && source.workflowId === workflowSourceId));
+    if (direct) {
+      select.value = direct.id;
+      state.selectedWorkflowId = direct.workflowId || state.selectedWorkflowId;
+      return true;
+    }
+  }
+
+  const workflowId = payloadString(payload, ['workflow_id', 'workflowId', 'workflow']);
+  const model = payloadString(payload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']);
+  if (sourceType === 'workflow' || (!model && workflowId)) {
+    const workflowSource = workflowSources().find((source) => source.workflowId === workflowId);
+    if (workflowSource) {
+      select.value = workflowSource.id;
+      state.selectedWorkflowId = workflowSource.workflowId || state.selectedWorkflowId;
+      return true;
+    }
+  }
+  if (model) return selectModelByPayload(model);
+  return true;
+}
+
 function selectModelByPayload(model) {
   if (!model) return true;
   const select = $('#image-lab-model');
   if (!select) return false;
-  const direct = [...select.options].find((option) => option.value === model);
+  const direct = generationSources().find((source) => source.id === model);
   if (direct) {
-    select.value = direct.value;
+    select.value = direct.id;
+    state.selectedWorkflowId = direct.workflowId || state.selectedWorkflowId;
     return true;
   }
-  const matched = checkpointModels().find((candidate) => modelMatches(candidate, model));
-  if (matched) {
-    select.value = modelIdentifier(matched);
+  const matchedSource = checkpointSources().find((source) => sourceMatchesCheckpointValue(source, model));
+  if (matchedSource) {
+    select.value = matchedSource.id;
+    state.selectedWorkflowId = matchedSource.workflowId || state.selectedWorkflowId;
     return true;
+  }
+  const matchedModel = (state.imageModels?.models || []).find((candidate) => modelMatches(candidate, model));
+  if (matchedModel) {
+    const matchedByInventory = checkpointSources().find((source) => sourceMatchesCheckpointValue(source, modelIdentifier(matchedModel)));
+    if (matchedByInventory) {
+      select.value = matchedByInventory.id;
+      state.selectedWorkflowId = matchedByInventory.workflowId || state.selectedWorkflowId;
+      return true;
+    }
   }
   return false;
 }
@@ -956,8 +1106,11 @@ function applyGenerationPayloadToControls(payload) {
   if (negativeInput) negativeInput.value = negative;
   setNegativePromptDrawerOpen(Boolean(negative));
 
-  const model = payloadString(requestPayload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']);
-  if (model && !selectModelByPayload(model)) warnings.push(`model ${model}`);
+  if (!selectSourceByPayload(requestPayload)) {
+    const sourceId = payloadString(requestPayload, ['generation_source_id', 'generationSourceId', 'source_id', 'sourceId']);
+    const model = payloadString(requestPayload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']);
+    warnings.push(sourceId ? `generation source ${sourceId}` : `model ${model || 'n/a'}`);
+  }
 
   setInputValue('#image-lab-width', payloadNumber(requestPayload, ['width']));
   setInputValue('#image-lab-height', payloadNumber(requestPayload, ['height']));
@@ -1209,6 +1362,11 @@ function jobRequestPayload(job) {
     negative_prompt: jobNegativePrompt(job),
     model: job?.model || request.model || undefined,
     workflow_id: job?.workflowId || request.workflowId || request.workflow_id || undefined,
+    generation_source_type: job?.generationSourceType || request.generationSourceType || request.generation_source_type || undefined,
+    generation_source_id: job?.generationSourceId || request.generationSourceId || request.generation_source_id || undefined,
+    generation_source_label: job?.generationSourceLabel || request.generationSourceLabel || request.generation_source_label || undefined,
+    checkpoint_name: job?.checkpointName || request.checkpointName || request.checkpoint_name || undefined,
+    workflow_source_id: job?.workflowSourceId || request.workflowSourceId || request.workflow_source_id || undefined,
     width: job?.width ?? request.width ?? undefined,
     height: job?.height ?? request.height ?? undefined,
     steps: job?.steps ?? request.steps ?? undefined,
@@ -1224,6 +1382,25 @@ function jobRequestPayload(job) {
     if (payload[key] === undefined || payload[key] === '') delete payload[key];
   }
   return payload;
+}
+
+function generationSourceLabelFromPayload(payload = {}) {
+  const sourceLabel = payloadString(payload, ['generation_source_label', 'generationSourceLabel', 'source_label', 'sourceLabel']);
+  if (sourceLabel) return sourceLabel;
+  const sourceType = payloadString(payload, ['generation_source_type', 'generationSourceType', 'source_type', 'sourceType']);
+  const workflowSourceId = payloadString(payload, ['workflow_source_id', 'workflowSourceId']);
+  const workflowId = payloadString(payload, ['workflow_id', 'workflowId', 'workflow']);
+  const model = payloadString(payload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']);
+  if (sourceType === 'workflow') return workflowId || workflowSourceId || 'workflow source n/a';
+  return model || 'source n/a';
+}
+
+function generationSourceLabelForJob(job, payload = null) {
+  const requestPayload = payload || jobRequestPayload(job);
+  return job?.generationSourceLabel
+    || job?.request?.generationSourceLabel
+    || job?.request?.generation_source_label
+    || generationSourceLabelFromPayload(requestPayload);
 }
 
 function requestPayloadWithSeed(payload, seed) {
@@ -1262,6 +1439,11 @@ function requestFromPayload(payload) {
     negativePrompt: payloadString(payload, ['negative_prompt', 'negativePrompt']),
     model: payloadString(payload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']) || null,
     workflowId: payloadString(payload, ['workflow_id', 'workflowId']),
+    generationSourceType: payloadString(payload, ['generation_source_type', 'generationSourceType', 'source_type', 'sourceType']),
+    generationSourceId: payloadString(payload, ['generation_source_id', 'generationSourceId', 'source_id', 'sourceId']),
+    generationSourceLabel: payloadString(payload, ['generation_source_label', 'generationSourceLabel', 'source_label', 'sourceLabel']),
+    checkpointName: payloadString(payload, ['checkpoint_name', 'checkpointName']),
+    workflowSourceId: payloadString(payload, ['workflow_source_id', 'workflowSourceId']),
     width: payloadNumber(payload, ['width']),
     height: payloadNumber(payload, ['height']),
     steps: payloadNumber(payload, ['steps']),
@@ -1302,6 +1484,9 @@ function createPendingJob(payload, options = {}) {
     providerJobId: null,
     workflowId: request.workflowId || requestPayload.workflow_id || requestPayload.workflowId || '',
     model: request.model,
+    generationSourceType: request.generationSourceType || requestPayload.generation_source_type || requestPayload.generationSourceType || null,
+    generationSourceId: request.generationSourceId || requestPayload.generation_source_id || requestPayload.generationSourceId || null,
+    generationSourceLabel: request.generationSourceLabel || requestPayload.generation_source_label || requestPayload.generationSourceLabel || null,
     prompt: request.prompt,
     negativePrompt: request.negativePrompt,
     seed: request.seed,
@@ -2178,10 +2363,11 @@ function renderLastResult() {
   const imageAlt = generatedImageAltText(job, 'Last generated image');
   const downloadName = imageDownloadFileName(job, artifact);
   const tone = statusTone(job.status || 'submitted', job);
+  const sourceLabel = generationSourceLabelForJob(job, jobRequestPayload(job));
   target.innerHTML = `<div class="generation-result image-lab-result">
     <p>${statusPill(statusLabelForJob(job), tone)} Job <code>${escapeHtml(job.id || 'n/a')}</code></p>
     ${imageUrl ? `<a class="image-viewer-link" href="${escapeHtml(imageUrl)}" data-image-viewer-url="${escapeHtml(imageUrl)}" data-image-drag-url="${escapeHtml(imageUrl)}" data-image-download-name="${escapeHtml(downloadName)}" data-image-mime-type="${escapeHtml(artifact?.mimeType || '')}" data-image-alt="${escapeHtml(imageAlt)}" draggable="true"><img class="result-image" data-artifact-url="${escapeHtml(imageUrl)}" data-full-image-url="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageAlt)}" loading="lazy" draggable="true" hidden><div class="thumb-placeholder">Loading result image...</div></a>` : '<div class="thumb-placeholder">No image artifact available</div>'}
-    <p class="compact-meta-line"><span><strong>Seed:</strong> ${escapeHtml(actualSeedForJob(job, result) ?? job.requestPayload?.seed ?? 'n/a')}</span><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span></p>
+    <p class="compact-meta-line"><span><strong>Source:</strong> ${escapeHtml(sourceLabel || 'n/a')}</span><span><strong>Seed:</strong> ${escapeHtml(actualSeedForJob(job, result) ?? job.requestPayload?.seed ?? 'n/a')}</span><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span></p>
   </div>`;
   hydrateImages();
 }
@@ -2366,7 +2552,8 @@ function renderGalleryCard(job, index) {
   const tone = statusTone(status, job);
   const dimensions = `${job.width ?? job.request?.width ?? payload.width ?? 'n/a'} x ${job.height ?? job.request?.height ?? payload.height ?? 'n/a'}`;
   const seed = actualSeedForJob(job) ?? payload.seed ?? 'n/a';
-  const model = job.model || payload.model || 'model n/a';
+  const sourceLabel = generationSourceLabelForJob(job, payload);
+  const model = job.model || payload.model || payload.checkpoint_name || 'model n/a';
   const hasDeterministicSeed = actualSeedForJob(job) !== null;
   const canSaveFavorite = Boolean(imageUrl) && status === 'succeeded' && hasDeterministicSeed;
   const saveFavoriteDisabled = favorite || !canSaveFavorite;
@@ -2409,7 +2596,7 @@ function renderGalleryCard(job, index) {
     <details class="image-lab-card-details">
       <summary>
         <span class="image-lab-caption-title">${escapeHtml(previewText(prompt, 100) || jobId)}</span>
-        <span class="image-lab-caption-meta"><code>${escapeHtml(model)}</code> - ${escapeHtml(dimensions)} - seed ${escapeHtml(seed)} - ${escapeHtml(formatDate(job.completedAt || job.updatedAt || job.createdAt))}</span>
+        <span class="image-lab-caption-meta"><code>${escapeHtml(sourceLabel || model)}</code> - ${escapeHtml(dimensions)} - seed ${escapeHtml(seed)} - ${escapeHtml(formatDate(job.completedAt || job.updatedAt || job.createdAt))}</span>
       </summary>
       <div class="image-lab-card-detail-body">
         <div class="button-row image-lab-card-actions">
@@ -2419,7 +2606,7 @@ function renderGalleryCard(job, index) {
         </div>
         <div class="compact-meta job-meta">
           <p class="compact-meta-line"><span><strong>Status:</strong> ${statusPill(statusLabelForJob(job), tone)}</span><span><strong>Job:</strong> <code>${escapeHtml(jobId)}</code></span>${job.clientId && job.clientId !== jobId ? `<span><strong>Client:</strong> <code>${escapeHtml(job.clientId)}</code></span>` : ''}<span><strong>Provider job:</strong> <code>${escapeHtml(job.providerJobId || 'n/a')}</code></span></p>
-          <p class="compact-meta-line"><span><strong>Workflow:</strong> ${escapeHtml(job.workflowId || payload.workflow_id || 'n/a')}</span><span><strong>Provider:</strong> ${escapeHtml(job.provider || 'n/a')}</span><span><strong>Submitted:</strong> ${escapeHtml(formatDate(job.queuedAt || job.createdAt))}</span><span><strong>Started:</strong> ${escapeHtml(formatDate(job.startedAt))}</span><span><strong>Completed:</strong> ${escapeHtml(formatDate(job.completedAt))}</span></p>
+          <p class="compact-meta-line"><span><strong>Source:</strong> ${escapeHtml(sourceLabel || 'n/a')}</span><span><strong>Source type:</strong> ${escapeHtml(job.generationSourceType || payload.generation_source_type || 'n/a')}</span><span><strong>Workflow:</strong> ${escapeHtml(job.workflowId || payload.workflow_id || 'n/a')}</span><span><strong>Provider:</strong> ${escapeHtml(job.provider || 'n/a')}</span><span><strong>Submitted:</strong> ${escapeHtml(formatDate(job.queuedAt || job.createdAt))}</span><span><strong>Started:</strong> ${escapeHtml(formatDate(job.startedAt))}</span><span><strong>Completed:</strong> ${escapeHtml(formatDate(job.completedAt))}</span></p>
           <p class="compact-meta-line"><span><strong>Cancel requested:</strong> ${escapeHtml(formatDate(cancelRequestedAt))}</span><span><strong>Canceled:</strong> ${escapeHtml(formatDate(canceledAt))}</span><span><strong>Reason:</strong> ${escapeHtml(cancellationReason || 'n/a')}</span></p>
           <p class="compact-meta-line"><span><strong>Size:</strong> ${escapeHtml(dimensions)}</span><span><strong>Steps:</strong> ${escapeHtml(job.steps ?? payload.steps ?? 'n/a')}</span><span><strong>CFG:</strong> ${escapeHtml(job.cfgScale ?? payload.cfg_scale ?? 'n/a')}</span><span><strong>Seed requested:</strong> ${escapeHtml(requestedSeed)}</span><span><strong>Resolved seed:</strong> ${escapeHtml(resolvedSeed)}</span><span><strong>Sampler:</strong> ${escapeHtml(job.samplerName ?? payload.sampler_name ?? 'n/a')}</span><span><strong>Scheduler:</strong> ${escapeHtml(job.scheduler ?? payload.scheduler ?? 'n/a')}</span></p>
           <p class="compact-meta-line"><span><strong>Queue wait:</strong> ${escapeHtml(formatDurationMs(job.queueWaitMs ?? job.timings?.queueWaitMs))}</span><span><strong>Total:</strong> ${escapeHtml(formatDurationMs(job.totalMs ?? job.timings?.totalMs))}</span><span><strong>Execution:</strong> ${escapeHtml(formatDurationMs(job.executionMs ?? job.timings?.executionMs))}</span><span><strong>Artifact:</strong> ${escapeHtml(artifact?.id || 'n/a')}</span></p>
@@ -2454,7 +2641,11 @@ function favoriteDimensions(favorite) {
 }
 
 function favoriteModelLabel(favorite) {
-  return favorite?.model || payloadString(favorite?.requestPayload || {}, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']) || 'model n/a';
+  return favorite?.generationSourceLabel
+    || generationSourceLabelFromPayload(favorite?.requestPayload || {})
+    || favorite?.model
+    || payloadString(favorite?.requestPayload || {}, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName'])
+    || 'source n/a';
 }
 
 function favoriteSeedLabel(favorite) {
@@ -2532,7 +2723,7 @@ function renderAll() {
   renderLastResult();
 }
 
-async function refreshAll(message = '') {
+async function refreshAll(message = '', options = {}) {
   state.imageError = null;
   const publicHealth = await fetchJson('/health').catch((error) => {
     state.imageError = error;
@@ -2540,22 +2731,28 @@ async function refreshAll(message = '') {
   });
   if (publicHealth) state.imageHealth = publicHealth;
 
-  const [models, workflows, jobs, favorites] = await Promise.allSettled([
+  const [models, generationSourcesResult, workflows, jobs, favorites] = await Promise.allSettled([
     fetchJson('/api/v1/models'),
+    options.forceGenerationSourceRefresh
+      ? fetchJson('/api/v1/generation-sources/refresh', { method: 'POST' })
+      : fetchJson('/api/v1/generation-sources'),
     fetchJson('/api/v1/workflows'),
     loadGalleryData(),
     fetchJson('/api/v1/image-favorites?limit=50')
   ]);
 
   if (models.status === 'fulfilled') state.imageModels = models.value;
+  if (generationSourcesResult.status === 'fulfilled') state.generationSources = generationSourcesResult.value;
   if (workflows.status === 'fulfilled') state.imageWorkflows = workflows.value;
   if (jobs.status === 'fulfilled') state.imageJobs = jobs.value;
   if (favorites.status === 'fulfilled') state.imageFavorites = favorites.value;
 
-  const rejected = [models, workflows, jobs, favorites].find((result) => result.status === 'rejected');
+  const rejected = [models, generationSourcesResult, workflows, jobs, favorites].find((result) => result.status === 'rejected');
   if (rejected) {
     state.imageError = rejected.reason;
     setStatus(rejected.reason?.message || 'Unable to refresh image generator data.', false);
+  } else if (generationSourceStatusMessage()) {
+    setStatus(generationSourceStatusMessage(), true);
   } else if (message) {
     setStatus(message);
   }
@@ -2581,24 +2778,41 @@ async function refreshFavoritesOnly(message = '') {
 }
 
 async function refreshModelsOnly(message = '', options = {}) {
-  state.imageModels = await fetchJson('/api/v1/models/refresh', { method: 'POST' });
+  const [models, generationSourcesResult] = await Promise.all([
+    fetchJson('/api/v1/models/refresh', { method: 'POST' }),
+    options.forceProbe === true
+      ? fetchJson('/api/v1/generation-sources/refresh', { method: 'POST' })
+      : fetchJson('/api/v1/generation-sources')
+  ]);
+  state.imageModels = models;
+  state.generationSources = generationSourcesResult;
   if (options.renderControls === false) renderControlChrome();
   else renderControls();
+  scheduleGenerationSourceProbePoll();
   if (message) setStatus(message);
 }
 
 async function prewarmSelectedModel() {
-  const model = selectedModel();
+  const source = selectedGenerationSource();
+  if (!source) {
+    setStatus('Choose a generation source before prewarming.', false);
+    return false;
+  }
+  if (!selectedSourceRequiresPrewarm(source)) {
+    setStatus('Workflow generation sources are validated through their workflow registry and do not use checkpoint prewarm here.');
+    return true;
+  }
+  const model = source.checkpointName || source.label || '';
   if (!model) {
-    setStatus('Choose a checkpoint before prewarming.', false);
+    setStatus('Choose a checkpoint generation source before prewarming.', false);
     return false;
   }
   state.prewarmingModel = model;
   renderControls();
-  setStatus(`Prewarming ${model} for this generation workflow...`);
+  setStatus(`Prewarming checkpoint ${model} for this generation workflow...`);
   try {
     await fetchJson('/api/v1/models/preload', { method: 'POST', body: JSON.stringify({ model }) });
-    await refreshModelsOnly(`Prewarmed ${model} for this portal.`);
+    await refreshModelsOnly(`Prewarmed checkpoint ${model} for this portal.`);
     return true;
   } catch (error) {
     const message = `Prewarm failed: ${error.message}`;
@@ -2868,8 +3082,12 @@ function submitGenerationRequest(source = 'manual') {
   }
 
   const payload = clonePayload(buildGenerationPayload());
-  if (workflowUsesCheckpointModel() && !payload.model) {
-    return submissionValidationFailure(source, 'Choose a checkpoint before generating.');
+  const selectedSource = selectedGenerationSource();
+  if (!selectedSource || !payload.generation_source_id) {
+    return submissionValidationFailure(source, 'Choose a valid generation source before generating.');
+  }
+  if (selectedSource.type === 'checkpoint' && !payload.model) {
+    return submissionValidationFailure(source, 'Choose a checkpoint generation source before generating.');
   }
   if (!payload.prompt) {
     return submissionValidationFailure(source, 'Positive prompt is required.');
@@ -3046,8 +3264,7 @@ async function handleFavoriteClick(event) {
       const response = await fetchJson(`/api/v1/image-favorites/${encodeURIComponent(favoriteId)}`);
       const favorite = response.favorite;
       const warnings = applyGenerationPayloadToControls(favorite?.requestPayload || {});
-      const model = selectedModel();
-      if (model && warnings.every((warning) => !warning.startsWith('model '))) {
+      if (selectedSourceRequiresPrewarm() && warnings.every((warning) => !warning.includes('generation source') && !warning.startsWith('model '))) {
         await prewarmSelectedModel();
       }
       const warningText = warnings.length ? ` Restored what I could; check: ${warnings.join(', ')}.` : '';
@@ -3131,7 +3348,7 @@ function initResizableControls() {
 
 function wireEvents() {
   initResizableControls();
-  $('#image-lab-refresh')?.addEventListener('click', () => refreshAll('Image generator refreshed.'));
+  $('#image-lab-refresh')?.addEventListener('click', () => refreshAll('Image generator refreshed and generation sources are being rescanned.', { forceGenerationSourceRefresh: true }));
   $('#image-lab-generate')?.addEventListener('click', () => {
     if (state.autoGenerateEnabled) setAutoGenerateEnabled(false, { message: 'Auto-Generate turned off for manual generation.', ok: true });
   });
@@ -3160,7 +3377,7 @@ function wireEvents() {
     applyWorkflowDefaults(true);
     renderModelOptions();
     updatePayloadPreview();
-    if (workflowUsesCheckpointModel() && selectedModel()) await prewarmSelectedModel();
+    if (selectedSourceRequiresPrewarm()) await prewarmSelectedModel();
   });
   for (const config of RESOLUTION_PRESET_SELECTS.imageLab) {
     $(config.selector)?.addEventListener('change', () => {
@@ -3169,8 +3386,10 @@ function wireEvents() {
     });
   }
   $('#image-lab-model')?.addEventListener('change', async () => {
+    state.selectedWorkflowId = selectedGenerationSource()?.workflowId || state.selectedWorkflowId;
+    applyWorkflowDefaults(true);
     updatePayloadPreview();
-    if (workflowUsesCheckpointModel() && selectedModel()) await prewarmSelectedModel();
+    if (selectedSourceRequiresPrewarm()) await prewarmSelectedModel();
   });
   $('#image-lab-gallery-size')?.addEventListener('input', (event) => {
     state.galleryTileSize = Number(event.target.value) || DEFAULT_TILE_SIZE;

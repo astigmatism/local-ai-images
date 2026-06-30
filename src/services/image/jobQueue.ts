@@ -87,6 +87,9 @@ export class ImageJobQueue {
       providerJobId: null,
       workflowId: workflow.id,
       model: request.model,
+      generationSourceType: request.generationSourceType,
+      generationSourceId: request.generationSourceId,
+      generationSourceLabel: request.generationSourceLabel,
       artifacts: [],
       error: null,
       metadata: {}

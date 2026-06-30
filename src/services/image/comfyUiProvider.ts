@@ -58,6 +58,12 @@ export class ComfyUiProvider implements ImageGenerationProvider {
     }
   }
 
+
+  async listCheckpoints(): Promise<string[]> {
+    const response = await this.fetchJson('/object_info/CheckpointLoaderSimple', { method: 'GET' }, Math.min(this.requestTimeoutMs, 15000));
+    return extractCheckpointChoices(response);
+  }
+
   async generate(request: ProviderGenerationRequest): Promise<ProviderGenerationResult> {
     const clientId = `local-ai-images-${crypto.randomUUID()}`;
     const prompt = materializeComfyPrompt(request.workflow, request);
@@ -298,6 +304,35 @@ function findNodeId(prompt: Record<string, unknown>, classType: string, occurren
     seen += 1;
   }
   return undefined;
+}
+
+
+function extractCheckpointChoices(value: unknown): string[] {
+  const loader = isRecord(value) && isRecord(value.CheckpointLoaderSimple)
+    ? value.CheckpointLoaderSimple
+    : value;
+  if (!isRecord(loader)) return [];
+  const input = isRecord(loader.input) ? loader.input : null;
+  const required = isRecord(input?.required) ? input.required : null;
+  const ckptName = required?.ckpt_name;
+  return uniqueStrings(extractChoiceStrings(ckptName));
+}
+
+function extractChoiceStrings(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) {
+    const direct = value.filter((item): item is string => typeof item === 'string');
+    if (direct.length > 0) return direct;
+    return value.flatMap(extractChoiceStrings);
+  }
+  if (isRecord(value)) {
+    return extractChoiceStrings(value.choices ?? value.options ?? value.values ?? value.items);
+  }
+  return [];
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function readPromptId(value: unknown): string | null {

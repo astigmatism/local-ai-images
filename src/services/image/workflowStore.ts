@@ -3,10 +3,17 @@ import path from 'node:path';
 import { AppError } from '../../errors.ts';
 import type { WorkflowPreset } from '../../types.ts';
 
+export interface WorkflowStoreWarning {
+  filePath: string;
+  code: string;
+  message: string;
+}
+
 export class WorkflowStore {
   private readonly workflowPath: string;
   private readonly defaultWorkflowId: string;
   private cache: WorkflowPreset[] | null = null;
+  private loadWarnings: WorkflowStoreWarning[] = [];
 
   constructor(workflowPath: string, defaultWorkflowId: string) {
     this.workflowPath = workflowPath;
@@ -17,8 +24,17 @@ export class WorkflowStore {
     return this.cache ?? this.refresh();
   }
 
+  getCachedWorkflows(): WorkflowPreset[] {
+    return this.cache ?? builtinWorkflows();
+  }
+
+  getLoadWarnings(): WorkflowStoreWarning[] {
+    return this.loadWarnings.map((warning) => ({ ...warning }));
+  }
+
   async refresh(): Promise<WorkflowPreset[]> {
     const workflows = new Map<string, WorkflowPreset>();
+    this.loadWarnings = [];
     for (const preset of builtinWorkflows()) {
       workflows.set(preset.id, preset);
     }
@@ -39,8 +55,10 @@ export class WorkflowStore {
         const preset = normalizeWorkflowPreset(parsed, filePath);
         workflows.set(preset.id, preset);
       } catch (error: unknown) {
-        throw new AppError('WORKFLOW_PRESET_INVALID', `Unable to load workflow preset ${filePath}`, 500, {
-          cause: error instanceof Error ? error.message : String(error)
+        this.loadWarnings.push({
+          filePath,
+          code: 'WORKFLOW_PRESET_INVALID',
+          message: error instanceof Error ? error.message : String(error)
         });
       }
     }

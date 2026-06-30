@@ -42,6 +42,11 @@ const generationRequestSchema = {
   properties: {
     prompt: { type: 'string' },
     negative_prompt: { type: 'string' },
+    generation_source_type: { enum: ['checkpoint', 'workflow'], description: 'Discriminator for the selected generation source.' },
+    generation_source_id: { type: 'string', description: 'Structured selected source id from /api/v1/generation-sources.' },
+    generation_source_label: { type: 'string', description: 'Human-readable selected source label captured for history/favorites.' },
+    checkpoint_name: { type: 'string', description: 'Resolved checkpoint name when generation uses a checkpoint source or a workflow default checkpoint.' },
+    workflow_source_id: { type: 'string', description: 'Selected workflow generation-source id when generation uses a workflow source.' },
     model: { type: 'string', description: 'Optional checkpoint filename/name. If omitted, the persisted image_default_model is used when compatible with the workflow; otherwise the workflow default is used.' },
     workflow_id: { type: 'string' },
     width: { type: 'number' },
@@ -54,6 +59,61 @@ const generationRequestSchema = {
     output: { enum: ['metadata', 'url', 'base64', 'binary'] },
     sync_timeout_ms: { type: 'number' },
     metadata: { type: 'object', additionalProperties: true }
+  }
+} as const;
+
+const generationSourceSchema = {
+  type: 'object',
+  additionalProperties: true,
+  required: ['id', 'type', 'label', 'displayLabel', 'selectable', 'capabilityStatus', 'workflowId', 'capabilities'],
+  properties: {
+    id: { type: 'string' },
+    type: { enum: ['checkpoint', 'workflow'] },
+    label: { type: 'string' },
+    displayLabel: { type: 'string' },
+    selectable: { type: 'boolean' },
+    capabilityStatus: { enum: ['valid'] },
+    workflowId: { type: 'string' },
+    workflowName: { type: 'string' },
+    checkpointName: { type: 'string' },
+    checkpointId: { type: 'string' },
+    probeStatus: { enum: ['pending', 'valid', 'invalid', 'error'] },
+    source: { enum: ['checkpoint-probe', 'workflow-registry'] },
+    capabilities: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        textToImage: { const: true },
+        supportsSeed: { type: 'boolean' },
+        supportsCheckpoint: { type: 'boolean' },
+        sourceWorkflowId: { type: 'string' }
+      }
+    }
+  }
+} as const;
+
+const generationSourceListSchema = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    ok: { const: true },
+    refreshedAt: { type: 'string' },
+    sources: { type: 'array', items: generationSourceSchema },
+    sourceGroups: {
+      type: 'object',
+      properties: {
+        checkpoints: { type: 'array', items: generationSourceSchema },
+        workflows: { type: 'array', items: generationSourceSchema }
+      }
+    },
+    status: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        checkpointProbe: { type: 'object', additionalProperties: true },
+        workflows: { type: 'object', additionalProperties: true }
+      }
+    }
   }
 } as const;
 
@@ -73,6 +133,9 @@ const favoriteImagePromptSchema = {
     model: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     workflow: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     workflowId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    generationSourceType: { oneOf: [{ enum: ['checkpoint', 'workflow'] }, { type: 'null' }] },
+    generationSourceId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    generationSourceLabel: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     sampler: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     scheduler: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     width: { oneOf: [{ type: 'number' }, { type: 'null' }] },
@@ -285,6 +348,9 @@ const jobSchema = {
     providerJobId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     workflowId: { type: 'string' },
     model: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    generationSourceType: { enum: ['checkpoint', 'workflow'] },
+    generationSourceId: { type: 'string' },
+    generationSourceLabel: { type: 'string' },
     prompt: { type: 'string' },
     negativePrompt: { type: 'string' },
     seed: { type: 'number' },
@@ -433,6 +499,8 @@ export function buildOpenApiDocument() {
         Error: errorSchema,
         Gpu: gpuSchema,
         GenerationRequest: generationRequestSchema,
+        GenerationSource: generationSourceSchema,
+        GenerationSourceList: generationSourceListSchema,
         FavoriteImagePrompt: favoriteImagePromptSchema,
         FavoriteImagePromptCreateRequest: favoriteImagePromptCreateSchema,
         FavoriteImagePromptPatchRequest: favoriteImagePromptPatchSchema,
@@ -496,6 +564,22 @@ export function buildOpenApiDocument() {
           summary: 'Refresh local image model inventory',
           security: bearerSecurity,
           responses: { '200': { description: 'Refreshed model inventory', content: { 'application/json': { schema: modelInventoryResponseSchema } } }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/generation-sources': {
+        get: {
+          summary: 'List selectable generation sources',
+          description: 'Returns structured, selectable generation sources: checkpoints that passed the compatibility probe and compatible workflow presets from the workflow registry. Operational errors and failed probe messages are returned only in status fields, never as selectable labels.',
+          security: bearerSecurity,
+          responses: { '200': { description: 'Selectable generation sources grouped by checkpoint and workflow', content: { 'application/json': { schema: generationSourceListSchema } } }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/generation-sources/refresh': {
+        post: {
+          summary: 'Rescan and re-probe generation sources',
+          description: 'Refreshes model/workflow discovery, invalidates stale checkpoint probe cache entries, and starts a bounded background checkpoint compatibility probe queue.',
+          security: bearerSecurity,
+          responses: { '200': { description: 'Generation source list plus current probe status', content: { 'application/json': { schema: generationSourceListSchema } } }, ...authErrorResponses }
         }
       },
       '/api/v1/models/default': {

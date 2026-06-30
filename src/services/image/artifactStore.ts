@@ -47,6 +47,9 @@ export class ArtifactStore {
         provider: options.provider,
         workflowId: options.workflowId,
         model: options.request.model,
+        generationSourceType: options.request.generationSourceType,
+        generationSourceId: options.request.generationSourceId,
+        generationSourceLabel: options.request.generationSourceLabel,
         prompt: options.request.prompt,
         ...(options.request.negativePrompt ? { negativePrompt: options.request.negativePrompt } : {}),
         seed: options.request.seed,
@@ -140,6 +143,11 @@ function publicRequestMetadata(request: NormalizedGenerationRequest): Record<str
     negative_prompt: request.negativePrompt,
     model: request.model,
     workflow_id: request.workflowId,
+    generation_source_type: request.generationSourceType,
+    generation_source_id: request.generationSourceId,
+    generation_source_label: request.generationSourceLabel,
+    checkpoint_name: request.checkpointName,
+    workflow_source_id: request.workflowSourceId,
     width: request.width,
     height: request.height,
     steps: request.steps,
@@ -175,6 +183,9 @@ function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
     providerJobId: null,
     workflowId: first.workflowId,
     model: first.model,
+    generationSourceType: first.generationSourceType ?? stringField(requestPayload, 'generation_source_type') ?? stringField(request, 'generation_source_type') ?? null,
+    generationSourceId: first.generationSourceId ?? stringField(requestPayload, 'generation_source_id') ?? stringField(request, 'generation_source_id') ?? null,
+    generationSourceLabel: first.generationSourceLabel ?? stringField(requestPayload, 'generation_source_label') ?? stringField(request, 'generation_source_label') ?? null,
     prompt: first.prompt,
     negativePrompt: first.negativePrompt ?? '',
     seed: first.seed,
@@ -202,6 +213,10 @@ function durableJobSummary(jobId: string, artifacts: ArtifactMetadata[]) {
     error: null,
     durable: true
   };
+}
+
+function stringField(record: unknown, key: string): string | null {
+  return isRecord(record) && typeof record[key] === 'string' ? String(record[key]) : null;
 }
 
 function cloneRecord(record: Record<string, unknown>): Record<string, unknown> {

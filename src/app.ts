@@ -353,6 +353,16 @@ async function routeImageApiV1(
     return;
   }
 
+  if (method === 'GET' && pathName === '/api/v1/generation-sources') {
+    await handleImageApiGenerationSources(response, dependencies, false);
+    return;
+  }
+
+  if (method === 'POST' && pathName === '/api/v1/generation-sources/refresh') {
+    await handleImageApiGenerationSources(response, dependencies, true);
+    return;
+  }
+
   if (method === 'POST' && pathName === '/api/v1/models/default') {
     await handleImageApiSetDefaultModel(request, response, dependencies);
     return;
@@ -541,6 +551,7 @@ async function handleImageApiHealth(response: ServerResponse, dependencies: Reso
     engine,
     gpu: gpus,
     queue: imageRuntime.jobQueue.stats(),
+    generation_sources: imageRuntime.generationSources.cachedSourceList().status,
     models: {
       paths: runtimeConfig.imageModelPaths,
       cached_count: imageRuntime.modelScanner.getCachedInventory()?.models.length ?? null,
@@ -573,6 +584,7 @@ async function handleImageApiCapabilities(response: ServerResponse, dependencies
       health: '/api/v1/health',
       stats: '/api/v1/stats',
       models: '/api/v1/models',
+      generation_sources: '/api/v1/generation-sources',
       workflows: '/api/v1/workflows',
       generate: '/api/v1/generate',
       jobs: '/api/v1/jobs',
@@ -591,7 +603,7 @@ async function handleImageApiCapabilities(response: ServerResponse, dependencies
       sync_timeout: true,
       output_delivery: ['metadata', 'url', 'base64', 'binary'],
       max_prompt_chars: runtimeConfig.imageGenerationMaxPromptChars,
-      parameters: ['prompt', 'negative_prompt', 'model', 'workflow_id', 'width', 'height', 'steps', 'cfg_scale', 'seed', 'sampler_name', 'scheduler'],
+      parameters: ['prompt', 'negative_prompt', 'generation_source_type', 'generation_source_id', 'model', 'workflow_id', 'width', 'height', 'steps', 'cfg_scale', 'seed', 'sampler_name', 'scheduler'],
       default_model_source: 'config.image_default_model, when set and compatible with the selected workflow'
     },
     model_installs: {
@@ -634,6 +646,17 @@ async function handleImageApiModels(response: ServerResponse, dependencies: Reso
     sendJson(response, 200, await decorateModelInventory(inventory, dependencies));
   } catch (error: unknown) {
     sendJson(response, statusCodeForError(error), toErrorPayload(error, 'MODEL_SCAN_FAILED'));
+  }
+}
+
+async function handleImageApiGenerationSources(response: ServerResponse, dependencies: ResolvedAppDependencies, refresh: boolean): Promise<void> {
+  try {
+    const sources = refresh
+      ? await dependencies.imageRuntime.generationSources.refresh({ forceProbe: true })
+      : await dependencies.imageRuntime.generationSources.list();
+    sendJson(response, 200, sources);
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error, 503), toErrorPayload(error, 'GENERATION_SOURCES_FAILED'));
   }
 }
 
@@ -971,10 +994,14 @@ async function handleImageApiGenerate(request: IncomingMessage, response: Server
   }
 
   const body = await readJsonBody(request);
-  const workflows = await imageRuntime.workflowStore.list();
-  const config = await dependencies.configStore.readConfig();
+  const [workflows, generationSources, config] = await Promise.all([
+    imageRuntime.workflowStore.list(),
+    imageRuntime.generationSources.list(),
+    dependencies.configStore.readConfig()
+  ]);
   const parsed = validateAndNormalizeGenerationRequest(body, runtimeConfig, workflows, {
-    defaultImageModel: config.image_default_model || null
+    defaultImageModel: config.image_default_model || null,
+    generationSources: generationSources.sources
   });
   if (!parsed.ok) {
     sendJson(response, 422, parsed.response);
@@ -1305,6 +1332,9 @@ function publicFavoritePromptSummary(favorite: FavoriteImagePrompt) {
     model: favorite.model ?? null,
     workflow: favorite.workflow ?? null,
     workflowId: favorite.workflowId ?? favorite.workflow ?? null,
+    generationSourceType: favorite.generationSourceType ?? null,
+    generationSourceId: favorite.generationSourceId ?? null,
+    generationSourceLabel: favorite.generationSourceLabel ?? null,
     sampler: favorite.sampler ?? null,
     scheduler: favorite.scheduler ?? null,
     width: favorite.width ?? null,
@@ -1375,6 +1405,9 @@ function publicImageFavoriteSummary(favorite: ImageFavorite) {
     model: favorite.model ?? null,
     workflow: favorite.workflow ?? null,
     workflowId: favorite.workflowId ?? favorite.workflow ?? null,
+    generationSourceType: favorite.generationSourceType ?? null,
+    generationSourceId: favorite.generationSourceId ?? null,
+    generationSourceLabel: favorite.generationSourceLabel ?? null,
     sampler: favorite.sampler ?? null,
     scheduler: favorite.scheduler ?? null,
     width: favorite.width ?? null,
@@ -2083,7 +2116,7 @@ function renderImageGeneratorHtml(): string {
           -->
 
           <label class="image-lab-model-field">
-            <span class="field-label">Checkpoint <span class="field-help" tabindex="0" title="Choose an installed checkpoint for workflows that use checkpoint models. Workflows like Juggernaut Z load their own diffusion model and ignore this field.">?</span></span>
+            <span class="field-label">Generation source <span class="field-help" tabindex="0" title="Choose a validated checkpoint or a compatible ComfyUI workflow source. Failed probe/status messages are shown as status, not as selectable sources.">?</span></span>
             <select id="image-lab-model"></select>
           </label>
           

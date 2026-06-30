@@ -30,6 +30,36 @@ async function tempImageRuntimeConfig(overrides = {}) {
   });
 }
 
+type JsonObject = Record<string, unknown>;
+
+async function waitForGenerationSources(baseUrl: string, predicate: (body: JsonObject) => boolean, timeoutMs = 1500): Promise<JsonObject> {
+  const started = Date.now();
+  let last: JsonObject = {};
+  while (Date.now() - started <= timeoutMs) {
+    last = testRecord(await (await fetch(`${baseUrl}/api/v1/generation-sources`)).json());
+    if (predicate(last)) return last;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return last;
+}
+
+function testRecord(value: unknown): JsonObject {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {};
+}
+
+function testRecords(value: unknown): JsonObject[] {
+  return Array.isArray(value) ? value.filter((item): item is JsonObject => item !== null && typeof item === 'object' && !Array.isArray(item)) : [];
+}
+
+function generationSourceGroup(body: JsonObject, group: 'checkpoints' | 'workflows'): JsonObject[] {
+  return testRecords(testRecord(body.sourceGroups)[group]);
+}
+
+function stringField(record: JsonObject | undefined, key: string): string {
+  const value = record?.[key];
+  return typeof value === 'string' ? value : '';
+}
+
 test('GET /api/v1/health and /api/v1/stats report engine, GPU, and queue state', async () => {
   await withTestServer({
     runtimeConfig: await tempImageRuntimeConfig(),
@@ -100,6 +130,82 @@ test('GET /api/v1/workflows returns stable preset metadata without exposing raw 
     assert.equal(detail.workflow.id, 'sdxl-text-to-image');
     assert.equal(detail.workflow.comfyui, undefined);
     assert.ok(detail.workflow.mappings.positivePromptNode);
+  });
+});
+
+test('GET /api/v1/generation-sources probes checkpoints, groups workflow sources, and excludes invalid/status-like candidates', async () => {
+  const runtimeConfig = await tempImageRuntimeConfig({ imageDefaultSyncTimeoutMs: 1000, imageMockDelayMs: 1 });
+  const checkpointDir = path.join(runtimeConfig.imageModelPaths[0]!, 'checkpoints');
+  await fs.writeFile(path.join(checkpointDir, 'prewarm failed, ComfyUI prompt returned HTTP 400.safetensors'), 'not a model option');
+  await fs.writeFile(path.join(checkpointDir, 'demo.vae.safetensors'), 'vae-only');
+  await fs.writeFile(path.join(checkpointDir, 'notes.json'), '{}');
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    const initial = testRecord(await (await fetch(`${baseUrl}/api/v1/generation-sources`)).json());
+    assert.equal(initial.ok, true);
+    assert.ok(Number(testRecord(testRecord(initial.status).checkpointProbe).total) >= 1);
+
+    const list = await waitForGenerationSources(baseUrl, (body) => {
+      return generationSourceGroup(body, 'checkpoints').some((source) => source.checkpointName === 'demo.safetensors');
+    });
+    assert.equal(list.ok, true);
+    const labels = testRecords(list.sources).map((source) => stringField(source, 'label'));
+    assert.ok(labels.includes('demo.safetensors'));
+    assert.ok(!labels.some((label: string) => label.includes('prewarm failed')));
+    assert.ok(!labels.some((label: string) => label.includes('HTTP 400')));
+    assert.ok(!labels.includes('demo.vae.safetensors'));
+    assert.ok(generationSourceGroup(list, 'workflows').some((source) => source.id === 'workflow:sdxl-text-to-image'));
+
+    const checkpoint = generationSourceGroup(list, 'checkpoints').find((source) => source.checkpointName === 'demo.safetensors');
+    assert.ok(checkpoint);
+    assert.equal(checkpoint.type, 'checkpoint');
+    assert.equal(checkpoint.selectable, true);
+    assert.equal(checkpoint.probeStatus, 'valid');
+
+    const generatedWithCheckpoint = await (await fetch(`${baseUrl}/api/v1/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        prompt: 'validated checkpoint source',
+        generation_source_type: checkpoint.type,
+        generation_source_id: checkpoint.id,
+        output: 'url',
+        sync_timeout_ms: 1000
+      })
+    })).json();
+    assert.equal(generatedWithCheckpoint.ok, true);
+    assert.equal(generatedWithCheckpoint.job.generationSourceType, 'checkpoint');
+    assert.equal(generatedWithCheckpoint.job.generationSourceId, checkpoint.id);
+    assert.equal(generatedWithCheckpoint.job.model, 'demo.safetensors');
+    assert.equal(generatedWithCheckpoint.job.requestPayload.generation_source_type, 'checkpoint');
+
+    const workflow = generationSourceGroup(list, 'workflows').find((source) => source.id === 'workflow:sdxl-text-to-image');
+    assert.ok(workflow);
+    const generatedWithWorkflow = await (await fetch(`${baseUrl}/api/v1/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        prompt: 'registered workflow source',
+        generation_source_type: workflow.type,
+        generation_source_id: workflow.id,
+        width: 256,
+        height: 256,
+        steps: 2,
+        cfg_scale: 4,
+        seed: 42,
+        output: 'url',
+        sync_timeout_ms: 1000
+      })
+    })).json();
+    assert.equal(generatedWithWorkflow.ok, true);
+    assert.equal(generatedWithWorkflow.job.generationSourceType, 'workflow');
+    assert.equal(generatedWithWorkflow.job.generationSourceId, workflow.id);
+    assert.equal(generatedWithWorkflow.job.requestPayload.workflow_source_id, workflow.id);
   });
 });
 

@@ -186,6 +186,9 @@ interface DerivedFields {
   model: string | null;
   workflow: string | null;
   workflowId: string | null;
+  generationSourceType: ImageFavorite['generationSourceType'];
+  generationSourceId: string | null;
+  generationSourceLabel: string | null;
   sampler: string | null;
   scheduler: string | null;
   width: number | null;
@@ -328,6 +331,9 @@ function deriveFields(payload: Record<string, unknown>, maxPromptChars: number):
     model: firstString(payload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']),
     workflow: workflowId,
     workflowId,
+    generationSourceType: generationSourceTypeFromPayload(payload),
+    generationSourceId: firstString(payload, ['generation_source_id', 'generationSourceId', 'source_id', 'sourceId']),
+    generationSourceLabel: firstString(payload, ['generation_source_label', 'generationSourceLabel', 'source_label', 'sourceLabel']),
     sampler: firstString(payload, ['sampler_name', 'samplerName', 'sampler']),
     scheduler: firstString(payload, ['scheduler']),
     width: firstFiniteNumber(payload, ['width']),
@@ -336,6 +342,12 @@ function deriveFields(payload: Record<string, unknown>, maxPromptChars: number):
     cfgScale: firstFiniteNumber(payload, ['cfg_scale', 'cfgScale', 'guidance_scale', 'guidanceScale']),
     seed: firstSeed(payload, ['seed'])
   };
+}
+
+
+function generationSourceTypeFromPayload(payload: Record<string, unknown>): ImageFavorite['generationSourceType'] {
+  const value = firstString(payload, ['generation_source_type', 'generationSourceType', 'source_type', 'sourceType']);
+  return value === 'checkpoint' || value === 'workflow' ? value : null;
 }
 
 function readArtifact(body: Record<string, unknown>): Record<string, unknown> | null {
@@ -368,6 +380,9 @@ function normalizeStoredFavorite(value: unknown, maxPromptChars: number): ImageF
       model: null,
       workflow: null,
       workflowId: null,
+      generationSourceType: null,
+      generationSourceId: null,
+      generationSourceLabel: null,
       sampler: null,
       scheduler: null,
       width: null,

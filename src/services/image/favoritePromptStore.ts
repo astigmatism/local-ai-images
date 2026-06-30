@@ -168,6 +168,9 @@ interface DerivedFavoriteFields {
   model: string | null;
   workflow: string | null;
   workflowId: string | null;
+  generationSourceType: FavoriteImagePrompt['generationSourceType'];
+  generationSourceId: string | null;
+  generationSourceLabel: string | null;
   sampler: string | null;
   scheduler: string | null;
   width: number | null;
@@ -212,6 +215,9 @@ function deriveFavoriteFields(payload: Record<string, unknown>, maxPromptChars: 
     model: firstString(payload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']),
     workflow: workflowId,
     workflowId,
+    generationSourceType: generationSourceTypeFromPayload(payload),
+    generationSourceId: firstString(payload, ['generation_source_id', 'generationSourceId', 'source_id', 'sourceId']),
+    generationSourceLabel: firstString(payload, ['generation_source_label', 'generationSourceLabel', 'source_label', 'sourceLabel']),
     sampler: firstString(payload, ['sampler_name', 'samplerName', 'sampler']),
     scheduler: firstString(payload, ['scheduler']),
     width: firstFiniteNumber(payload, ['width']),
@@ -220,6 +226,12 @@ function deriveFavoriteFields(payload: Record<string, unknown>, maxPromptChars: 
     cfgScale: firstFiniteNumber(payload, ['cfg_scale', 'cfgScale', 'guidance_scale', 'guidanceScale']),
     seed: firstSeed(payload, ['seed'])
   };
+}
+
+
+function generationSourceTypeFromPayload(payload: Record<string, unknown>): FavoriteImagePrompt['generationSourceType'] {
+  const value = firstString(payload, ['generation_source_type', 'generationSourceType', 'source_type', 'sourceType']);
+  return value === 'checkpoint' || value === 'workflow' ? value : null;
 }
 
 function normalizeTitle(value: string | null, prompt: string): string {

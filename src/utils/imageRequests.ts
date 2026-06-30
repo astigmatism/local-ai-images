@@ -1,4 +1,4 @@
-import type { RuntimeConfig, NormalizedGenerationRequest, OutputDelivery, WorkflowPreset } from '../types.ts';
+import type { GenerationSourceSummary, GenerationSourceType, RuntimeConfig, NormalizedGenerationRequest, OutputDelivery, WorkflowPreset } from '../types.ts';
 import type { ValidationDetail, ValidationErrorResponse } from './validation.ts';
 
 const MIN_DIMENSION = 64;
@@ -13,7 +13,7 @@ export function validateAndNormalizeGenerationRequest(
   body: unknown,
   runtimeConfig: RuntimeConfig,
   workflows: WorkflowPreset[],
-  options: { defaultImageModel?: string | null } = {}
+  options: { defaultImageModel?: string | null; generationSources?: GenerationSourceSummary[] } = {}
 ): { ok: true; value: NormalizedGenerationRequest; workflow: WorkflowPreset } | { ok: false; response: ValidationErrorResponse } {
   const details: ValidationDetail[] = [];
 
@@ -32,14 +32,23 @@ export function validateAndNormalizeGenerationRequest(
     };
   }
 
+  const sourceType = validateGenerationSourceType(body.generation_source_type ?? body.generationSourceType ?? body.source_type ?? body.sourceType, details);
+  const sourceId = validateOptionalSourceId(body.generation_source_id ?? body.generationSourceId ?? body.source_id ?? body.sourceId, details);
+  const selectedSource = resolveGenerationSource(sourceType, sourceId, options.generationSources ?? [], details);
+
   const promptRaw = body.prompt ?? body.positive_prompt;
   const prompt = validateString(promptRaw, ['body', 'prompt'], 1, runtimeConfig.imageGenerationMaxPromptChars, details);
   const negativePrompt = validateString(body.negative_prompt ?? body.negativePrompt ?? '', ['body', 'negative_prompt'], 0, runtimeConfig.imageGenerationMaxPromptChars, details) ?? '';
-  const workflowId = validateWorkflowId(body.workflow_id ?? body.workflowId ?? runtimeConfig.imageDefaultWorkflowId, workflows, details);
+  const workflowId = validateWorkflowId(selectedSource?.workflowId ?? body.workflow_id ?? body.workflowId ?? runtimeConfig.imageDefaultWorkflowId, workflows, details);
   const workflow = workflows.find((item) => item.id === workflowId) ?? workflows[0]!;
 
   const defaultImageModel = workflow.comfyui.mappings.checkpointNode && options.defaultImageModel ? options.defaultImageModel : null;
-  const model = validateOptionalModel(body.model ?? defaultImageModel ?? workflow.defaults.checkpoint ?? null, details);
+  const explicitModel = body.model ?? body.checkpoint_name ?? body.checkpointName;
+  const sourceModel = selectedSource?.type === 'checkpoint'
+    ? selectedSource.checkpointName ?? selectedSource.label
+    : selectedSource?.checkpointName ?? null;
+  const modelInput = selectedSource?.type === 'checkpoint' ? sourceModel : explicitModel ?? sourceModel ?? defaultImageModel ?? workflow.defaults.checkpoint ?? null;
+  const model = validateOptionalModel(modelInput, details);
   const width = validateInteger(body.width, ['body', 'width'], MIN_DIMENSION, MAX_DIMENSION, workflow.defaults.width ?? 1024, details);
   const height = validateInteger(body.height, ['body', 'height'], MIN_DIMENSION, MAX_DIMENSION, workflow.defaults.height ?? 1024, details);
   const steps = validateInteger(body.steps, ['body', 'steps'], MIN_STEPS, MAX_STEPS, workflow.defaults.steps ?? 28, details);
@@ -50,6 +59,13 @@ export function validateAndNormalizeGenerationRequest(
   const output = validateOutputDelivery(body.output ?? body.output_delivery ?? body.outputDelivery, details);
   const syncTimeoutMs = validateSyncTimeout(body.sync_timeout_ms ?? body.syncTimeoutMs, runtimeConfig, details);
   const metadata = validateMetadata(body.metadata, details);
+
+  const inferredSource = selectedSource ?? inferGenerationSource(model, workflow, options.generationSources ?? []);
+  const generationSourceType = inferredSource?.type ?? (workflow.id === runtimeConfig.imageDefaultWorkflowId ? 'checkpoint' : 'workflow');
+  const generationSourceId = inferredSource?.id ?? fallbackGenerationSourceId(generationSourceType, workflow, model);
+  const generationSourceLabel = inferredSource?.label ?? fallbackGenerationSourceLabel(generationSourceType, workflow, model);
+  const checkpointName = generationSourceType === 'checkpoint' ? model : model ?? null;
+  const workflowSourceId = generationSourceType === 'workflow' ? generationSourceId : null;
 
   if (details.length > 0 || !prompt || !workflow) {
     return { ok: false, response: { detail: details } };
@@ -63,6 +79,11 @@ export function validateAndNormalizeGenerationRequest(
       negativePrompt,
       model,
       workflowId: workflow.id,
+      generationSourceType,
+      generationSourceId,
+      generationSourceLabel,
+      checkpointName,
+      workflowSourceId,
       width,
       height,
       steps,
@@ -77,7 +98,6 @@ export function validateAndNormalizeGenerationRequest(
   };
 }
 
-
 export function generationRequestToApiPayload(request: NormalizedGenerationRequest, sourcePayload: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     ...cloneRecord(sourcePayload),
@@ -85,6 +105,11 @@ export function generationRequestToApiPayload(request: NormalizedGenerationReque
     negative_prompt: request.negativePrompt,
     model: request.model,
     workflow_id: request.workflowId,
+    generation_source_type: request.generationSourceType,
+    generation_source_id: request.generationSourceId,
+    generation_source_label: request.generationSourceLabel,
+    checkpoint_name: request.checkpointName,
+    workflow_source_id: request.workflowSourceId,
     width: request.width,
     height: request.height,
     steps: request.steps,
@@ -135,6 +160,93 @@ function validateString(
   }
 
   return trimmed;
+}
+
+function validateGenerationSourceType(value: unknown, details: ValidationDetail[]): GenerationSourceType | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') {
+    details.push({ loc: ['body', 'generation_source_type'], msg: 'Generation source type must be checkpoint or workflow', type: 'string_type', input: value, ctx: {} });
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'checkpoint' || normalized === 'workflow') return normalized;
+  details.push({ loc: ['body', 'generation_source_type'], msg: 'Generation source type must be checkpoint or workflow', type: 'enum', input: value, ctx: { allowed: ['checkpoint', 'workflow'] } });
+  return null;
+}
+
+function validateOptionalSourceId(value: unknown, details: ValidationDetail[]): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') {
+    details.push({ loc: ['body', 'generation_source_id'], msg: 'Generation source ID must be a string', type: 'string_type', input: value, ctx: {} });
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 255 || /[\u0000-\u001f]/u.test(trimmed)) {
+    details.push({ loc: ['body', 'generation_source_id'], msg: 'Generation source ID should be 255 printable characters or fewer', type: 'string_pattern_mismatch', input: value, ctx: {} });
+    return null;
+  }
+  return trimmed;
+}
+
+function resolveGenerationSource(
+  sourceType: GenerationSourceType | null,
+  sourceId: string | null,
+  sources: GenerationSourceSummary[],
+  details: ValidationDetail[]
+): GenerationSourceSummary | null {
+  if (!sourceId && !sourceType) return null;
+  if (!sourceId) {
+    details.push({ loc: ['body', 'generation_source_id'], msg: 'generation_source_id is required when generation_source_type is provided', type: 'missing', input: sourceId, ctx: {} });
+    return null;
+  }
+
+  const source = sources.find((candidate) => candidate.id === sourceId && (!sourceType || candidate.type === sourceType));
+  if (!source || !source.selectable) {
+    details.push({
+      loc: ['body', 'generation_source_id'],
+      msg: `Generation source ${sourceId} is not available or is not selectable`,
+      type: 'value_error',
+      input: sourceId,
+      ctx: { available: sources.filter((candidate) => candidate.selectable).map((candidate) => ({ id: candidate.id, type: candidate.type })) }
+    });
+    return null;
+  }
+  return source;
+}
+
+function inferGenerationSource(model: string | null, workflow: WorkflowPreset, sources: GenerationSourceSummary[]): GenerationSourceSummary | null {
+  if (model) {
+    const checkpoint = sources.find((source) => source.type === 'checkpoint' && source.selectable && sourceMatchesModel(source, model));
+    if (checkpoint) return checkpoint;
+  }
+  return sources.find((source) => source.type === 'workflow' && source.workflowId === workflow.id && source.selectable) ?? null;
+}
+
+function sourceMatchesModel(source: GenerationSourceSummary, model: string): boolean {
+  const normalized = normalizeSourceValue(model);
+  if (!normalized) return false;
+  return [source.checkpointName, source.label, source.displayLabel, source.id]
+    .filter((value): value is string => typeof value === 'string')
+    .some((value) => normalizeSourceValue(value) === normalized);
+}
+
+function fallbackGenerationSourceId(sourceType: GenerationSourceType, workflow: WorkflowPreset, model: string | null): string {
+  if (sourceType === 'checkpoint' && model) return `checkpoint:${normalizeSourceId(model)}`;
+  return `workflow:${workflow.id}`;
+}
+
+function fallbackGenerationSourceLabel(sourceType: GenerationSourceType, workflow: WorkflowPreset, model: string | null): string {
+  if (sourceType === 'checkpoint' && model) return model;
+  return workflow.name || workflow.id;
+}
+
+function normalizeSourceValue(value: string): string {
+  return value.trim().replace(/\\/gu, '/').toLowerCase();
+}
+
+function normalizeSourceId(value: string): string {
+  return normalizeSourceValue(value).replace(/[^a-z0-9._/-]+/gu, '-').replace(/^-+|-+$/gu, '');
 }
 
 function validateWorkflowId(value: unknown, workflows: WorkflowPreset[], details: ValidationDetail[]): string {
