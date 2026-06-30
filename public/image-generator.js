@@ -854,6 +854,33 @@ function workflowUsesCheckpointModel(workflow = selectedWorkflow()) {
   return Boolean((workflow?.parameters || []).includes('model'));
 }
 
+function isWorkflowGenerationSource(source = selectedGenerationSource()) {
+  return Boolean(source && source.type === 'workflow');
+}
+
+function setNumberInputConstraint(selector, name, value) {
+  const input = $(selector);
+  if (!input) return;
+  if (value === null || value === undefined || value === '') input.removeAttribute(name);
+  else input.setAttribute(name, String(value));
+}
+
+function applyGenerationParameterConstraints() {
+  const workflowMode = isWorkflowGenerationSource();
+
+  setNumberInputConstraint('#image-lab-width', 'min', 64);
+  setNumberInputConstraint('#image-lab-width', 'max', 4096);
+  setNumberInputConstraint('#image-lab-width', 'step', workflowMode ? 16 : 64);
+
+  setNumberInputConstraint('#image-lab-height', 'min', 64);
+  setNumberInputConstraint('#image-lab-height', 'max', 4096);
+  setNumberInputConstraint('#image-lab-height', 'step', workflowMode ? 16 : 64);
+
+  setNumberInputConstraint('#image-lab-cfg', 'min', 0);
+  setNumberInputConstraint('#image-lab-cfg', 'max', 30);
+  setNumberInputConstraint('#image-lab-cfg', 'step', workflowMode ? 'any' : 0.5);
+}
+
 function renderWorkflowOptions() {
   const select = $('#image-lab-workflow');
   if (!select) return;
@@ -931,6 +958,7 @@ function applyWorkflowDefaults(overwrite = false) {
 function renderControls() {
   renderWorkflowOptions();
   renderModelOptions();
+  applyGenerationParameterConstraints();
   applyWorkflowDefaults(false);
   renderResolutionPresetGroup(RESOLUTION_PRESET_SELECTS.imageLab, '#image-lab-width', '#image-lab-height');
   const slider = $('#image-lab-gallery-size');
@@ -941,6 +969,7 @@ function renderControls() {
 }
 
 function renderControlChrome() {
+  applyGenerationParameterConstraints();
   const generateButton = $('#image-lab-generate');
   if (generateButton) {
     generateButton.disabled = Boolean(state.prewarmingModel) || generationSources().length === 0;
@@ -1113,6 +1142,8 @@ function applyGenerationPayloadToControls(payload) {
     const model = payloadString(requestPayload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']);
     warnings.push(sourceId ? `generation source ${sourceId}` : `model ${model || 'n/a'}`);
   }
+
+  applyGenerationParameterConstraints();
 
   setInputValue('#image-lab-width', payloadNumber(requestPayload, ['width']));
   setInputValue('#image-lab-height', payloadNumber(requestPayload, ['height']));
@@ -3056,6 +3087,7 @@ async function submitGenerationJob(clientId, payload, options = {}) {
 }
 
 function reportGenerationFormValidity() {
+  applyGenerationParameterConstraints();
   const form = $('#image-lab-form');
   if (!form || typeof form.checkValidity !== 'function') return true;
   if (form.checkValidity()) return true;
@@ -3376,6 +3408,7 @@ function wireEvents() {
   });
   $('#image-lab-workflow')?.addEventListener('change', async (event) => {
     state.selectedWorkflowId = event.target.value || null;
+    applyGenerationParameterConstraints();
     applyWorkflowDefaults(true);
     renderModelOptions();
     updatePayloadPreview();
@@ -3389,6 +3422,7 @@ function wireEvents() {
   }
   $('#image-lab-model')?.addEventListener('change', async () => {
     state.selectedWorkflowId = selectedGenerationSource()?.workflowId || state.selectedWorkflowId;
+    applyGenerationParameterConstraints();
     applyWorkflowDefaults(true);
     updatePayloadPreview();
     if (selectedSourceRequiresPrewarm()) await prewarmSelectedModel();

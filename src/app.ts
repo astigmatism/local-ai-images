@@ -2159,18 +2159,18 @@ function renderImageGeneratorHtml(): string {
             <div class="image-lab-parameter-grid">
               <label>
                 <span class="field-label">Width <span class="field-help" tabindex="0" title="Larger width increases image size and VRAM/memory use. Reduce it if generation is too slow or memory runs out.">?</span></span>
-                <input id="image-lab-width" type="number" min="64" max="4096" step="64" required>
+                <input id="image-lab-width" type="number" min="64" max="4096" step="16" required>
               </label>
               <label>
                 <span class="field-label">Height <span class="field-help" tabindex="0" title="Larger height increases image size and VRAM/memory use. Reduce it if the image is too large, slow, or causing memory failures.">?</span></span>
-                <input id="image-lab-height" type="number" min="64" max="4096" step="64" required>
+                <input id="image-lab-height" type="number" min="64" max="4096" step="16" required>
               </label>
               <label class="image-lab-resolution-preset-label">
-                <span class="field-label">Portrait preset <span class="field-help" tabindex="0" title="Height-greater-than-width 64-aligned size suggestions, grouped by the same tier ladder. Width and height stay editable for custom sizes.">?</span></span>
+                <span class="field-label">Portrait preset <span class="field-help" tabindex="0" title="Height-greater-than-width preset suggestions, grouped by the same tier ladder. Width and height stay editable for custom workflow sizes.">?</span></span>
                 <select id="image-lab-portrait-size-preset" aria-label="Portrait image size preset"></select>
               </label>
               <label class="image-lab-resolution-preset-label">
-                <span class="field-label">Landscape preset <span class="field-help" tabindex="0" title="Width-greater-than-height 64-aligned size suggestions, grouped by the same tier ladder. Width and height stay editable for custom sizes.">?</span></span>
+                <span class="field-label">Landscape preset <span class="field-help" tabindex="0" title="Width-greater-than-height preset suggestions, grouped by the same tier ladder. Width and height stay editable for custom workflow sizes.">?</span></span>
                 <select id="image-lab-landscape-size-preset" aria-label="Landscape image size preset"></select>
               </label>
               <label>
@@ -2179,7 +2179,7 @@ function renderImageGeneratorHtml(): string {
               </label>
               <label>
                 <span class="field-label">CFG <span class="field-help" tabindex="0" title="Higher CFG usually follows the prompt more strongly; lower CFG gives the model more freedom. Very high CFG can look harsh, overcooked, or less natural.">?</span></span>
-                <input id="image-lab-cfg" type="number" min="0" max="30" step="0.5" required>
+                <input id="image-lab-cfg" type="number" min="0" max="30" step="any" required>
               </label>
               <label>
                 <span class="field-label">Seed <span class="field-help" tabindex="0" title="Use the same seed with the same model and settings to reproduce a result more closely. Leave blank for the backend's random-seed behavior; the actual seed is shown on the completed job.">?</span></span>
