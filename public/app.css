@@ -2454,13 +2454,20 @@ body.image-lab-slideshow-open {
   border: 0;
   border-radius: 0;
   object-fit: contain;
+  object-position: center center;
   background: #000;
   user-select: none;
   pointer-events: none;
   -webkit-user-drag: none;
 }
 
-.image-lab-slideshow-overlay.is-fill .image-lab-slideshow-image {
+.image-lab-slideshow-overlay.is-fit .image-lab-slideshow-image,
+.image-lab-slideshow-image.is-fit {
+  object-fit: contain;
+}
+
+.image-lab-slideshow-overlay.is-fill .image-lab-slideshow-image,
+.image-lab-slideshow-image.is-fill {
   object-fit: cover;
 }
 
