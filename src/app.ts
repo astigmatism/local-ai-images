@@ -2279,7 +2279,13 @@ function renderImageGeneratorHtml(): string {
             <details id="image-lab-llm-guidance-drawer" class="image-lab-llm-guidance-drawer compact-details">
               <summary><span class="field-label">Large Language Model Image Prompt Guidance <span class="field-help" tabindex="0" title="Send guidance to the configured local LLM endpoint to build a positive image prompt. This only fills the positive prompt box; it does not generate an image or select/load an Ollama model.">?</span></span></summary>
               <div class="image-lab-llm-guidance-field">
-                <label class="field-label" for="image-lab-llm-guidance">Guidance for prompt builder</label>
+                <div class="image-lab-llm-guidance-header">
+                  <label class="field-label visually-hidden" for="image-lab-llm-guidance">Large Language Model Image Prompt Guidance</label>
+                  <div class="image-lab-prompt-actions" aria-label="LLM image prompt guidance clipboard controls">
+                    <button type="button" class="secondary" data-prompt-clipboard-action="copy" data-prompt-clipboard-target="image-lab-llm-guidance" data-prompt-clipboard-label="LLM image prompt guidance">Copy</button>
+                    <button type="button" class="secondary" data-prompt-clipboard-action="paste" data-prompt-clipboard-target="image-lab-llm-guidance" data-prompt-clipboard-label="LLM image prompt guidance">Paste</button>
+                  </div>
+                </div>
                 <textarea id="image-lab-llm-guidance" rows="3" placeholder="Describe the positive image prompt you want the local LLM to build..."></textarea>
                 <div class="image-lab-llm-guidance-actions">
                   <button id="image-lab-llm-send" type="button" class="secondary">Send</button>

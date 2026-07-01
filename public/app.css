@@ -1281,7 +1281,8 @@ summary {
 }
 
 .image-lab-prompt-header,
-.image-lab-negative-field-header {
+.image-lab-negative-field-header,
+.image-lab-llm-guidance-header {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -1335,12 +1336,28 @@ summary {
 }
 
 .image-lab-llm-guidance-field {
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "header header"
+    "textarea textarea"
+    "actions status";
+  align-items: center;
+  column-gap: 6px;
+}
+
+.image-lab-llm-guidance-header {
+  grid-area: header;
+}
+
+.image-lab-llm-guidance-field textarea {
+  grid-area: textarea;
 }
 
 .image-lab-llm-guidance-actions {
+  grid-area: actions;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
 }
@@ -1354,6 +1371,8 @@ summary {
 }
 
 .image-lab-llm-status {
+  grid-area: status;
+  min-width: 0;
   min-height: 1.2em;
   color: var(--muted);
   font-size: 0.7rem;
@@ -1366,6 +1385,54 @@ summary {
 
 .image-lab-llm-status.error {
   color: var(--danger);
+}
+
+.image-lab-clipboard-paste-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(2, 6, 23, 0.74);
+}
+
+.image-lab-clipboard-paste-panel {
+  display: grid;
+  gap: 10px;
+  width: min(680px, 100%);
+  max-height: min(620px, 92vh);
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.98);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
+}
+
+.image-lab-clipboard-paste-panel h3,
+.image-lab-clipboard-paste-panel p {
+  margin: 0;
+}
+
+.image-lab-clipboard-paste-panel h3 {
+  font-size: 1rem;
+}
+
+.image-lab-clipboard-paste-panel p {
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+
+.image-lab-clipboard-paste-panel textarea {
+  min-height: 180px;
+  resize: vertical;
+}
+
+.image-lab-clipboard-paste-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .image-lab-parameter-column {
@@ -2420,9 +2487,12 @@ body.image-lab-slideshow-open {
   }
 
   .image-lab-positive-field,
-  .image-lab-negative-field,
-  .image-lab-llm-guidance-field {
+  .image-lab-negative-field {
     grid-template-rows: auto minmax(92px, 1fr) auto auto;
+  }
+
+  .image-lab-llm-guidance-field {
+    grid-template-rows: auto minmax(92px, 1fr) auto;
   }
 
   .image-lab-positive-field textarea,

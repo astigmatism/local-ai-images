@@ -1095,11 +1095,110 @@ async function writeTextToClipboard(text) {
   }
 }
 
-async function readTextFromClipboard() {
-  if (!navigator.clipboard?.readText) {
-    throw new Error('Clipboard paste is not available in this browser or page context.');
+function tryLegacyPasteRead() {
+  if (typeof document.execCommand !== 'function') return null;
+  const helper = document.createElement('textarea');
+  helper.setAttribute('aria-hidden', 'true');
+  helper.style.position = 'fixed';
+  helper.style.left = '-9999px';
+  helper.style.top = '0';
+  document.body.appendChild(helper);
+  helper.focus();
+  try {
+    const pasted = document.execCommand('paste');
+    if (!pasted) return null;
+    return helper.value || '';
+  } catch {
+    return null;
+  } finally {
+    helper.remove();
   }
-  return navigator.clipboard.readText();
+}
+
+function requestManualPasteText(label, clipboardError) {
+  return new Promise((resolve, reject) => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const overlay = document.createElement('div');
+    overlay.className = 'image-lab-clipboard-paste-modal';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'image-lab-clipboard-paste-title');
+
+    const panel = document.createElement('div');
+    panel.className = 'image-lab-clipboard-paste-panel';
+
+    const title = document.createElement('h3');
+    title.id = 'image-lab-clipboard-paste-title';
+    title.textContent = `Paste ${label}`;
+
+    const message = document.createElement('p');
+    message.textContent = clipboardError
+      ? 'The browser blocked direct clipboard reads for this page. Paste the text below, then use it.'
+      : 'Direct clipboard reads are not available in this browser or page context. Paste the text below, then use it.';
+
+    const textarea = document.createElement('textarea');
+    textarea.rows = 8;
+    textarea.placeholder = 'Press Ctrl+V or Cmd+V here.';
+    textarea.setAttribute('aria-label', `${label} paste text`);
+
+    const actions = document.createElement('div');
+    actions.className = 'image-lab-clipboard-paste-actions';
+
+    const useButton = document.createElement('button');
+    useButton.type = 'button';
+    useButton.textContent = 'Use pasted text';
+
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.className = 'secondary';
+    cancelButton.textContent = 'Cancel';
+
+    actions.append(useButton, cancelButton);
+    panel.append(title, message, textarea, actions);
+    overlay.append(panel);
+    document.body.append(overlay);
+
+    let settled = false;
+    const cleanup = () => {
+      document.removeEventListener('keydown', handleKeydown);
+      overlay.remove();
+      if (previousFocus?.focus) previousFocus.focus();
+    };
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      const value = textarea.value || '';
+      cleanup();
+      if (ok) resolve(value);
+      else reject(new Error('Clipboard paste was canceled.'));
+    };
+    function handleKeydown(event) {
+      if (event.key === 'Escape') finish(false);
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') finish(true);
+    }
+
+    useButton.addEventListener('click', () => finish(true));
+    cancelButton.addEventListener('click', () => finish(false));
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) finish(false);
+    });
+    document.addEventListener('keydown', handleKeydown);
+    window.setTimeout(() => textarea.focus(), 0);
+  });
+}
+
+async function readTextFromClipboard(label = 'Prompt') {
+  let clipboardError = null;
+  if (navigator.clipboard?.readText) {
+    try {
+      return await navigator.clipboard.readText();
+    } catch (error) {
+      clipboardError = error;
+    }
+  }
+  const legacyText = tryLegacyPasteRead();
+  if (legacyText !== null) return legacyText;
+  return requestManualPasteText(label, clipboardError);
 }
 
 function dispatchPromptInputChanged(textarea) {
@@ -1132,7 +1231,7 @@ async function handlePromptClipboardClick(event) {
       return;
     }
     if (action === 'paste') {
-      const text = await readTextFromClipboard();
+      const text = await readTextFromClipboard(target.label);
       target.textarea.value = text || '';
       dispatchPromptInputChanged(target.textarea);
       setStatus(text ? `${target.label} replaced from clipboard.` : `${target.label} cleared because the clipboard did not contain text.`);
