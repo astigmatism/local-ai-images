@@ -1565,10 +1565,16 @@ function renderControlChrome() {
   renderLlmAutoGenerateChrome();
   const slideshowButton = $('#image-lab-slideshow-start');
   if (slideshowButton) {
-    const showSlideshowControl = anyAutoGenerateEnabled();
-    slideshowButton.hidden = !showSlideshowControl;
-    slideshowButton.disabled = !showSlideshowControl;
-    slideshowButton.setAttribute('aria-hidden', showSlideshowControl ? 'false' : 'true');
+    const slideshowAvailable = anyAutoGenerateEnabled();
+    slideshowButton.hidden = false;
+    slideshowButton.disabled = !slideshowAvailable;
+    slideshowButton.setAttribute('aria-hidden', 'false');
+    slideshowButton.setAttribute('aria-disabled', slideshowAvailable ? 'false' : 'true');
+    slideshowButton.classList.toggle('is-enabled', slideshowAvailable);
+    slideshowButton.classList.toggle('is-disabled', !slideshowAvailable);
+    slideshowButton.title = slideshowAvailable
+      ? 'Open the auto-generation slideshow.'
+      : 'Turn on Auto-Generate or LLM Auto to enable slideshow.';
   }
   applyControlsHeight();
   updatePayloadPreview();
@@ -2992,6 +2998,11 @@ function handleImageLabSlideshowKeydown(event) {
 
 function openImageLabSlideshow() {
   if (imageSlideshow.isOpen) return;
+  if (!anyAutoGenerateEnabled()) {
+    setStatus('Turn on Auto-Generate or LLM Auto before opening slideshow.', false);
+    renderControlChrome();
+    return;
+  }
   closeImageViewer();
   const overlay = createImageLabSlideshowOverlay();
   document.body.appendChild(overlay);

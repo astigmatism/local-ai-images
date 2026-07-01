@@ -1513,16 +1513,24 @@ summary {
 
 .image-lab-auto-generate-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: stretch;
   justify-items: stretch;
-  gap: 5px;
-  width: min(100%, 230px);
+  gap: 8px;
+  width: min(100%, 320px);
   min-height: 24px;
   padding: 6px 8px;
   border: 1px solid rgba(55, 65, 81, 0.72);
   border-radius: 10px;
   background: rgba(15, 23, 42, 0.24);
+}
+
+.image-lab-auto-generate-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 5px;
+  min-width: 0;
 }
 
 .image-lab-action-panel .image-lab-auto-generate-switch {
@@ -1621,22 +1629,39 @@ summary {
 }
 
 .image-lab-slideshow-start {
-  justify-self: center;
+  align-self: start;
+  justify-self: start;
   min-width: 0 !important;
-  padding: 3px 8px;
+  padding: 4px 9px;
   border-color: rgba(96, 165, 250, 0.42);
   border-radius: 999px;
   color: var(--accent);
   font-size: 0.7rem;
   line-height: 1.2;
+  transition: border-color 0.16s ease, color 0.16s ease, opacity 0.16s ease, background 0.16s ease;
 }
 
 .image-lab-slideshow-start[hidden] {
   display: none;
 }
 
+.image-lab-slideshow-start.is-enabled:not(:disabled) {
+  border-color: rgba(134, 239, 172, 0.72);
+  background: rgba(22, 163, 74, 0.16);
+  color: var(--ok);
+}
+
+.image-lab-slideshow-start.is-disabled,
+.image-lab-slideshow-start:disabled {
+  border-color: rgba(100, 116, 139, 0.38);
+  background: rgba(15, 23, 42, 0.18);
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .image-lab-llm-auto-status {
-  width: min(100%, 230px);
+  width: 100%;
   min-height: 1.2em;
   max-width: 100%;
   color: var(--muted);
