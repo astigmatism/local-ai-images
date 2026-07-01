@@ -1513,8 +1513,8 @@ summary {
 
 .image-lab-auto-generate-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   justify-items: stretch;
   gap: 8px;
   width: min(100%, 320px);
@@ -1527,6 +1527,8 @@ summary {
 
 .image-lab-auto-generate-controls {
   display: grid;
+  grid-column: 1;
+  grid-row: 1;
   grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   gap: 5px;
@@ -1629,8 +1631,10 @@ summary {
 }
 
 .image-lab-slideshow-start {
-  align-self: start;
-  justify-self: start;
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  justify-self: center;
   min-width: 0 !important;
   padding: 4px 9px;
   border-color: rgba(96, 165, 250, 0.42);
