@@ -374,8 +374,10 @@ export interface FavoriteImagePrompt {
   requestPayload: Record<string, unknown>;
   prompt: string;
   negativePrompt?: string | null;
+  llmImagePromptGuidance?: string | null;
   promptPreview: string;
   negativePromptPreview?: string | null;
+  llmImagePromptGuidancePreview?: string | null;
   model?: string | null;
   workflow?: string | null;
   workflowId?: string | null;
@@ -401,8 +403,10 @@ export interface ImageFavorite {
   requestPayload: Record<string, unknown>;
   prompt: string;
   negativePrompt?: string | null;
+  llmImagePromptGuidance?: string | null;
   promptPreview: string;
   negativePromptPreview?: string | null;
+  llmImagePromptGuidancePreview?: string | null;
   model?: string | null;
   workflow?: string | null;
   workflowId?: string | null;

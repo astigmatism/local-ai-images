@@ -181,8 +181,10 @@ export class ImageFavoriteStore {
 interface DerivedFields {
   prompt: string;
   negativePrompt: string | null;
+  llmImagePromptGuidance: string | null;
   promptPreview: string;
   negativePromptPreview: string | null;
+  llmImagePromptGuidancePreview: string | null;
   model: string | null;
   workflow: string | null;
   workflowId: string | null;
@@ -238,6 +240,7 @@ function readRequestPayload(body: Record<string, unknown>): Record<string, unkno
 }
 
 const ACTUAL_SEED_KEYS = ['actualSeed', 'actual_seed', 'seedUsed', 'seed_used', 'resolvedSeed', 'resolved_seed'];
+const LLM_GUIDANCE_KEYS = ['llm_image_prompt_guidance', 'llmImagePromptGuidance', 'llm_guidance', 'llmGuidance', 'image_prompt_guidance', 'imagePromptGuidance'];
 
 function actualSeedFromFavoriteInput(body: Record<string, unknown>, requestPayload: Record<string, unknown>): number | null {
   const job = isRecord(body.job) ? body.job : null;
@@ -321,13 +324,19 @@ function deriveFields(payload: Record<string, unknown>, maxPromptChars: number):
   if (negativePrompt && negativePrompt.length > maxPromptChars) {
     throw new AppError('IMAGE_FAVORITE_NEGATIVE_TOO_LONG', `Negative prompt must be ${maxPromptChars} characters or fewer.`, 422, { max_prompt_chars: maxPromptChars });
   }
+  const llmImagePromptGuidance = llmGuidanceFromPayload(payload);
+  if (llmImagePromptGuidance && llmImagePromptGuidance.length > maxPromptChars) {
+    throw new AppError('IMAGE_FAVORITE_LLM_GUIDANCE_TOO_LONG', `LLM image prompt guidance must be ${maxPromptChars} characters or fewer.`, 422, { max_prompt_chars: maxPromptChars });
+  }
 
   const workflowId = firstString(payload, ['workflow_id', 'workflowId', 'workflow']) ?? null;
   return {
     prompt,
     negativePrompt,
+    llmImagePromptGuidance,
     promptPreview: previewText(prompt),
     negativePromptPreview: negativePrompt ? previewText(negativePrompt) : null,
+    llmImagePromptGuidancePreview: llmImagePromptGuidance ? previewText(llmImagePromptGuidance) : null,
     model: firstString(payload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']),
     workflow: workflowId,
     workflowId,
@@ -344,6 +353,13 @@ function deriveFields(payload: Record<string, unknown>, maxPromptChars: number):
   };
 }
 
+
+function llmGuidanceFromPayload(payload: Record<string, unknown>): string | null {
+  const direct = firstString(payload, LLM_GUIDANCE_KEYS);
+  if (direct !== null) return direct;
+  const metadata = isRecord(payload.metadata) ? payload.metadata : null;
+  return metadata ? firstString(metadata, LLM_GUIDANCE_KEYS) : null;
+}
 
 function generationSourceTypeFromPayload(payload: Record<string, unknown>): ImageFavorite['generationSourceType'] {
   const value = firstString(payload, ['generation_source_type', 'generationSourceType', 'source_type', 'sourceType']);
@@ -375,8 +391,10 @@ function normalizeStoredFavorite(value: unknown, maxPromptChars: number): ImageF
     derived = {
       prompt: typeof value.prompt === 'string' ? value.prompt : '',
       negativePrompt: typeof value.negativePrompt === 'string' ? value.negativePrompt : null,
+      llmImagePromptGuidance: typeof value.llmImagePromptGuidance === 'string' ? value.llmImagePromptGuidance : null,
       promptPreview: typeof value.promptPreview === 'string' ? value.promptPreview : '',
       negativePromptPreview: typeof value.negativePromptPreview === 'string' ? value.negativePromptPreview : null,
+      llmImagePromptGuidancePreview: typeof value.llmImagePromptGuidancePreview === 'string' ? value.llmImagePromptGuidancePreview : null,
       model: null,
       workflow: null,
       workflowId: null,

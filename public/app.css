@@ -1173,7 +1173,7 @@ summary {
 }
 
 .image-lab-model-field,
-.image-lab-prompt-column,
+.image-lab-positive-field,
 .image-lab-negative-field,
 .image-lab-llm-guidance-field,
 .image-lab-gallery-size-control {
@@ -1234,89 +1234,44 @@ summary {
 }
 
 .image-lab-prompt-stack {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
   min-width: 0;
   min-height: 0;
   max-height: 100%;
   align-self: stretch;
-  overflow: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
-.image-lab-prompt-stack.has-negative-open {
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
-}
-
-.image-lab-prompt-stack.has-llm-open {
-  grid-template-rows: minmax(0, 1fr) auto minmax(0, 0.9fr);
-}
-
-.image-lab-prompt-stack.has-negative-open.has-llm-open {
-  grid-template-rows: minmax(70px, 1fr) minmax(0, 0.8fr) minmax(0, 0.9fr);
-}
-
-.image-lab-prompt-column {
-  grid-template-rows: auto minmax(0, 1fr);
-  min-height: 0;
-}
-
-.image-lab-prompt-stack.has-negative-open .image-lab-prompt-column {
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.image-lab-prompt-header,
-.image-lab-negative-field-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.image-lab-prompt-header .field-label,
-.image-lab-negative-field-header .field-label {
-  min-width: 0;
-}
-
-.image-lab-prompt-actions {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex: 0 0 auto;
-  gap: 4px;
-}
-
-.image-lab-prompt-actions button {
-  min-width: 0;
-  padding: 2px 7px;
-  border-radius: 7px;
-  border-color: rgba(96, 165, 250, 0.46);
-  background: transparent;
-  color: var(--accent);
-  font-size: 0.68rem;
-  line-height: 1.2;
-}
-
-.image-lab-prompt-actions button:hover,
-.image-lab-prompt-actions button:focus-visible {
-  background: rgba(96, 165, 250, 0.12);
-}
-
+.image-lab-positive-drawer,
 .image-lab-negative-drawer,
 .image-lab-llm-guidance-drawer {
   display: grid;
   grid-template-rows: auto;
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
+.image-lab-positive-drawer[open],
 .image-lab-negative-drawer[open],
 .image-lab-llm-guidance-drawer[open] {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.image-lab-positive-drawer[open] {
+  flex: 1 1 150px;
+}
+
+.image-lab-negative-drawer[open],
+.image-lab-llm-guidance-drawer[open] {
+  flex: 1 1 120px;
+}
+
+.image-lab-positive-drawer > summary,
 .image-lab-negative-drawer > summary,
 .image-lab-llm-guidance-drawer > summary {
   list-style-position: inside;
@@ -1325,6 +1280,7 @@ summary {
   font-weight: 800;
 }
 
+.image-lab-positive-field,
 .image-lab-negative-field,
 .image-lab-llm-guidance-field {
   grid-template-rows: auto minmax(0, 1fr);
@@ -1333,6 +1289,7 @@ summary {
   margin-top: 6px;
 }
 
+.image-lab-positive-field textarea,
 .image-lab-negative-field textarea,
 .image-lab-llm-guidance-field textarea {
   height: 100%;
@@ -1562,6 +1519,32 @@ summary {
   display: none;
 }
 
+.image-lab-llm-auto-status {
+  min-height: 1.2em;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.image-lab-llm-auto-status.ok {
+  color: var(--ok);
+}
+
+.image-lab-llm-auto-status.error {
+  color: var(--danger);
+}
+
+.image-lab-llm-auto-status.canceled {
+  color: var(--muted);
+}
+
+.image-lab-auto-generate-switch.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .image-lab-gallery-size-control {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -1599,7 +1582,7 @@ summary {
   line-height: 1.25;
 }
 
-.image-lab-prompt-column textarea {
+.image-lab-positive-field textarea {
   height: 100%;
 }
 
@@ -2394,19 +2377,23 @@ body.image-lab-slideshow-open {
     overflow-y: auto;
   }
 
-  .image-lab-prompt-stack,
-  .image-lab-prompt-stack.has-negative-open,
-  .image-lab-prompt-stack.has-llm-open,
-  .image-lab-prompt-stack.has-negative-open.has-llm-open {
-    grid-template-rows: auto auto auto;
+  .image-lab-prompt-stack {
     overflow: visible;
   }
 
+  .image-lab-positive-drawer[open],
+  .image-lab-negative-drawer[open],
+  .image-lab-llm-guidance-drawer[open] {
+    flex-basis: auto;
+  }
+
+  .image-lab-positive-field,
   .image-lab-negative-field,
   .image-lab-llm-guidance-field {
     grid-template-rows: auto minmax(92px, 1fr) auto auto;
   }
 
+  .image-lab-positive-field textarea,
   .image-lab-negative-field textarea,
   .image-lab-llm-guidance-field textarea {
     min-height: 92px;

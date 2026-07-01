@@ -92,7 +92,7 @@ export class ImageJobQueue {
       generationSourceLabel: request.generationSourceLabel,
       artifacts: [],
       error: null,
-      metadata: {}
+      metadata: cloneRecord(request.metadata ?? {})
     };
 
     this.jobs.set(job.id, job);
@@ -315,6 +315,7 @@ export class ImageJobQueue {
     job.status = 'succeeded';
     job.artifacts = artifacts;
     job.metadata = {
+      ...job.metadata,
       ...metadata,
       actualSeed: job.request.seed,
       seed: job.request.seed,

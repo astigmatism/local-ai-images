@@ -44,6 +44,7 @@ test('image favorite endpoints persist generated artifacts and full request payl
       body: JSON.stringify({
         prompt: 'a favorite crystal observatory',
         negative_prompt: 'blur, low detail',
+        llm_image_prompt_guidance: 'make it crystalline, cinematic, and observatory-themed',
         model: 'demo.safetensors',
         workflow_id: 'sdxl-text-to-image',
         width: 1024,
@@ -55,6 +56,7 @@ test('image favorite endpoints persist generated artifacts and full request payl
         scheduler: 'normal',
         output: 'url',
         sync_timeout_ms: 1000,
+        metadata: { llmImagePromptGuidance: 'make it crystalline, cinematic, and observatory-themed' },
         future_provider_field: { preserved: true }
       })
     })).json();
@@ -62,6 +64,8 @@ test('image favorite endpoints persist generated artifacts and full request payl
     assert.equal(generated.ok, true);
     assert.equal(generated.job.status, 'succeeded');
     assert.equal(generated.job.requestPayload.prompt, 'a favorite crystal observatory');
+    assert.equal(generated.job.requestPayload.llm_image_prompt_guidance, 'make it crystalline, cinematic, and observatory-themed');
+    assert.equal(generated.job.metadata.llmImagePromptGuidance, 'make it crystalline, cinematic, and observatory-themed');
     assert.notEqual(generated.job.requestPayload.seed, -1);
     assert.ok(generated.artifacts[0].url.startsWith('/api/v1/artifacts/'));
 
@@ -87,6 +91,8 @@ test('image favorite endpoints persist generated artifacts and full request payl
     assert.equal(created.favorite.title, 'Crystal observatory favorite');
     assert.equal(created.favorite.prompt, 'a favorite crystal observatory');
     assert.equal(created.favorite.negativePrompt, 'blur, low detail');
+    assert.equal(created.favorite.llmImagePromptGuidance, 'make it crystalline, cinematic, and observatory-themed');
+    assert.equal(created.favorite.llmImagePromptGuidancePreview, 'make it crystalline, cinematic, and observatory-themed');
     assert.equal(created.favorite.model, 'demo.safetensors');
     assert.equal(created.favorite.width, 1024);
     assert.equal(created.favorite.height, 1024);
@@ -98,16 +104,19 @@ test('image favorite endpoints persist generated artifacts and full request payl
     assert.equal(created.favorite.artifactId, generated.artifacts[0].id);
     assert.equal(created.favorite.imageUrl, generated.artifacts[0].url);
     assert.deepEqual(created.favorite.requestPayload.future_provider_field, { preserved: true });
+    assert.equal(created.favorite.requestPayload.llm_image_prompt_guidance, 'make it crystalline, cinematic, and observatory-themed');
 
     const list = await (await fetch(`${baseUrl}/api/v1/image-favorites?limit=10`)).json();
     assert.equal(list.ok, true);
     assert.equal(list.favorites.length, 1);
     assert.equal(list.favorites[0].requestPayload, undefined);
+    assert.equal(list.favorites[0].llmImagePromptGuidance, 'make it crystalline, cinematic, and observatory-themed');
     assert.equal(list.favorites[0].artifactId, generated.artifacts[0].id);
 
     const single = await (await fetch(`${baseUrl}/api/v1/image-favorites/${created.favorite.id}`)).json();
     assert.equal(single.ok, true);
     assert.equal(single.favorite.requestPayload.prompt, 'a favorite crystal observatory');
+    assert.equal(single.favorite.requestPayload.llm_image_prompt_guidance, 'make it crystalline, cinematic, and observatory-themed');
     assert.equal(single.favorite.job.id, generated.job.id);
 
     const patched = await (await fetch(`${baseUrl}/api/v1/image-favorites/${created.favorite.id}`, {
@@ -246,6 +255,54 @@ test('image favorites resolve stale random request payload seeds from completed 
     assert.equal(missingSeed.status, 422);
     const missingSeedBody = await missingSeed.json();
     assert.equal(missingSeedBody.error.code, 'IMAGE_FAVORITE_ACTUAL_SEED_REQUIRED');
+  });
+});
+
+test('image favorites without LLM guidance remain backward compatible', async () => {
+  const runtimeConfig = await tempGeneratorRuntimeConfig();
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    const created = await (await fetch(`${baseUrl}/api/v1/image-favorites`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Legacy favorite without guidance',
+        request_payload: {
+          prompt: 'legacy favorite prompt',
+          negative_prompt: 'legacy negative',
+          model: 'demo.safetensors',
+          workflow_id: 'sdxl-text-to-image',
+          width: 512,
+          height: 512,
+          steps: 12,
+          cfg_scale: 6,
+          seed: 12345,
+          sampler_name: 'euler',
+          scheduler: 'normal',
+          output: 'url',
+          sync_timeout_ms: 0
+        },
+        image_url: '/api/v1/artifacts/legacy-no-guidance',
+        artifact_id: 'legacy-no-guidance'
+      })
+    })).json();
+
+    assert.equal(created.ok, true);
+    assert.equal(created.favorite.prompt, 'legacy favorite prompt');
+    assert.equal(created.favorite.negativePrompt, 'legacy negative');
+    assert.equal(created.favorite.llmImagePromptGuidance, null);
+    assert.equal(created.favorite.llmImagePromptGuidancePreview, null);
+
+    const single = await (await fetch(`${baseUrl}/api/v1/image-favorites/${created.favorite.id}`)).json();
+    assert.equal(single.ok, true);
+    assert.equal(single.favorite.requestPayload.prompt, 'legacy favorite prompt');
+    assert.equal(single.favorite.requestPayload.llm_image_prompt_guidance, undefined);
+    assert.equal(single.favorite.llmImagePromptGuidance, null);
   });
 });
 
