@@ -1495,7 +1495,7 @@ summary {
 
 .image-lab-action-panel {
   display: grid;
-  grid-template-rows: auto auto;
+  grid-template-rows: auto auto auto;
   justify-items: center;
   align-self: end;
   gap: 6px;
@@ -1507,19 +1507,30 @@ summary {
   min-width: 132px;
 }
 
+.image-lab-action-panel #image-lab-generate {
+  margin-top: 4px;
+}
+
 .image-lab-auto-generate-row {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 6px 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  justify-items: stretch;
+  gap: 5px;
+  width: min(100%, 230px);
   min-height: 24px;
+  padding: 6px 8px;
+  border: 1px solid rgba(55, 65, 81, 0.72);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.24);
 }
 
 .image-lab-action-panel .image-lab-auto-generate-switch {
   position: relative;
   display: inline-flex;
   align-items: center;
+  justify-content: stretch;
+  width: 100%;
   min-height: 24px;
   padding: 0;
   border: 0;
@@ -1548,9 +1559,10 @@ summary {
 
 .image-lab-auto-generate-shell {
   display: grid;
-  grid-template-columns: minmax(0, max-content) auto minmax(22px, auto);
+  grid-template-columns: minmax(0, 1fr) auto minmax(22px, auto);
   align-items: center;
   gap: 6px;
+  width: 100%;
 }
 
 .image-lab-auto-generate-label {
@@ -1609,6 +1621,7 @@ summary {
 }
 
 .image-lab-slideshow-start {
+  justify-self: center;
   min-width: 0 !important;
   padding: 3px 8px;
   border-color: rgba(96, 165, 250, 0.42);
@@ -1623,6 +1636,7 @@ summary {
 }
 
 .image-lab-llm-auto-status {
+  width: min(100%, 230px);
   min-height: 1.2em;
   max-width: 100%;
   color: var(--muted);
@@ -2535,7 +2549,10 @@ body.image-lab-slideshow-open {
     width: min(100%, 220px);
   }
 
-  .image-lab-action-panel .image-lab-auto-generate-switch,
+  .image-lab-action-panel .image-lab-auto-generate-switch {
+    width: 100%;
+  }
+
   .image-lab-action-panel .image-lab-slideshow-start {
     width: auto;
   }
