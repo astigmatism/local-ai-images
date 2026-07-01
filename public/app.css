@@ -433,6 +433,10 @@ pre code {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.form-grid.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .playground-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
@@ -522,7 +526,8 @@ pre code {
 @media (max-width: 980px) {
   .playground-layout,
   .form-grid,
-  .form-grid.three {
+  .form-grid.three,
+  .form-grid.four {
     grid-template-columns: 1fr;
   }
 
@@ -539,6 +544,19 @@ pre code {
 
 #image-auth-help {
   margin: 10px 0 0;
+}
+
+.llm-integration-card .hint {
+  max-width: 1100px;
+}
+
+.llm-settings-form textarea {
+  min-height: 112px;
+}
+
+#llm-image-prompt-status {
+  min-width: 160px;
+  text-align: right;
 }
 
 .image-job-list {
@@ -1157,6 +1175,7 @@ summary {
 .image-lab-model-field,
 .image-lab-prompt-column,
 .image-lab-negative-field,
+.image-lab-llm-guidance-field,
 .image-lab-gallery-size-control {
   display: grid;
   min-width: 0;
@@ -1216,7 +1235,7 @@ summary {
 
 .image-lab-prompt-stack {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   gap: 6px;
   min-width: 0;
   min-height: 0;
@@ -1226,7 +1245,15 @@ summary {
 }
 
 .image-lab-prompt-stack.has-negative-open {
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+.image-lab-prompt-stack.has-llm-open {
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 0.9fr);
+}
+
+.image-lab-prompt-stack.has-negative-open.has-llm-open {
+  grid-template-rows: minmax(70px, 1fr) minmax(0, 0.8fr) minmax(0, 0.9fr);
 }
 
 .image-lab-prompt-column {
@@ -1276,7 +1303,8 @@ summary {
   background: rgba(96, 165, 250, 0.12);
 }
 
-.image-lab-negative-drawer {
+.image-lab-negative-drawer,
+.image-lab-llm-guidance-drawer {
   display: grid;
   grid-template-rows: auto;
   min-width: 0;
@@ -1284,27 +1312,67 @@ summary {
   overflow: hidden;
 }
 
-.image-lab-negative-drawer[open] {
+.image-lab-negative-drawer[open],
+.image-lab-llm-guidance-drawer[open] {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-.image-lab-negative-drawer > summary {
+.image-lab-negative-drawer > summary,
+.image-lab-llm-guidance-drawer > summary {
   list-style-position: inside;
   cursor: pointer;
   font-size: 0.84rem;
   font-weight: 800;
 }
 
-.image-lab-negative-field {
+.image-lab-negative-field,
+.image-lab-llm-guidance-field {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 4px;
   min-height: 0;
   margin-top: 6px;
 }
 
-.image-lab-negative-field textarea {
+.image-lab-negative-field textarea,
+.image-lab-llm-guidance-field textarea {
   height: 100%;
   min-height: 0;
+}
+
+.image-lab-llm-guidance-field {
+  grid-template-rows: auto minmax(64px, 1fr) auto auto;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.image-lab-llm-guidance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.image-lab-llm-guidance-actions button {
+  min-width: 0;
+  padding: 3px 8px;
+  border-radius: 7px;
+  font-size: 0.7rem;
+  line-height: 1.2;
+}
+
+.image-lab-llm-status {
+  min-height: 1.2em;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.2;
+}
+
+.image-lab-llm-status.ok {
+  color: var(--ok);
+}
+
+.image-lab-llm-status.error {
+  color: var(--danger);
 }
 
 .image-lab-parameter-column {
@@ -2327,16 +2395,20 @@ body.image-lab-slideshow-open {
   }
 
   .image-lab-prompt-stack,
-  .image-lab-prompt-stack.has-negative-open {
-    grid-template-rows: auto auto;
+  .image-lab-prompt-stack.has-negative-open,
+  .image-lab-prompt-stack.has-llm-open,
+  .image-lab-prompt-stack.has-negative-open.has-llm-open {
+    grid-template-rows: auto auto auto;
     overflow: visible;
   }
 
-  .image-lab-negative-field {
-    grid-template-rows: auto minmax(92px, 1fr);
+  .image-lab-negative-field,
+  .image-lab-llm-guidance-field {
+    grid-template-rows: auto minmax(92px, 1fr) auto auto;
   }
 
-  .image-lab-negative-field textarea {
+  .image-lab-negative-field textarea,
+  .image-lab-llm-guidance-field textarea {
     min-height: 92px;
   }
 

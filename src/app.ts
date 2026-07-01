@@ -7,8 +7,9 @@ import type { Logger } from './logger.ts';
 import { buildOpenApiDocument } from './openapi.ts';
 import { toLegacyGpu } from './services/gpuService.ts';
 import { createImageRuntime, type ImageRuntime } from './services/image/runtime.ts';
+import { buildImagePromptWithLlm, effectiveImagePromptLlmSettings, testImagePromptLlmConnection, validateImagePromptLlmSettings } from './services/llmPromptBuilder.ts';
 import { findInventoryModel, modelMatchesDefault } from './services/image/modelIdentity.ts';
-import type { AppConfig, ArtifactMetadata, FavoriteImagePrompt, ImageFavorite, GpuServiceLike, ImageJob, ModelInventory, ModelInventoryItem, OllamaClientLike, OllamaImageGenerateOptions, OutputDelivery, RuntimeConfig, WorkflowPreset } from './types.ts';
+import type { AppConfig, ArtifactMetadata, FavoriteImagePrompt, ImageFavorite, GpuServiceLike, ImageJob, ModelInventory, ModelInventoryItem, ImagePromptLlmSettings, OllamaClientLike, OllamaImageGenerateOptions, OutputDelivery, RuntimeConfig, WorkflowPreset } from './types.ts';
 import { validateModelLoadRequest, validateModelName } from './utils/validation.ts';
 import { authenticateImageApiRequest } from './utils/auth.ts';
 import { generationRequestToApiPayload, normalizeResultDelivery, validateAndNormalizeGenerationRequest } from './utils/imageRequests.ts';
@@ -343,6 +344,26 @@ async function routeImageApiV1(
     return;
   }
 
+  if (method === 'GET' && pathName === '/api/v1/llm/image-prompt/settings') {
+    await handleImagePromptLlmSettings(response, dependencies);
+    return;
+  }
+
+  if ((method === 'PUT' || method === 'POST') && pathName === '/api/v1/llm/image-prompt/settings') {
+    await handleImagePromptLlmSettingsUpdate(request, response, dependencies);
+    return;
+  }
+
+  if (method === 'POST' && pathName === '/api/v1/llm/image-prompt/test') {
+    await handleImagePromptLlmTest(response, dependencies);
+    return;
+  }
+
+  if (method === 'POST' && pathName === '/api/v1/llm/image-prompt') {
+    await handleImagePromptLlmBuild(request, response, dependencies);
+    return;
+  }
+
   if (method === 'GET' && pathName === '/api/v1/models') {
     await handleImageApiModels(response, dependencies, false);
     return;
@@ -565,6 +586,7 @@ async function handleImageApiHealth(response: ServerResponse, dependencies: Reso
       default_workflow_id: runtimeConfig.imageDefaultWorkflowId,
       count: workflows.length
     },
+    llm_image_prompt: publicImagePromptLlmSettings(effectiveImagePromptLlmSettings(runtimeConfig, appConfig.llm_image_prompt ?? null)),
     auth: authStatus(runtimeConfig)
   });
 }
@@ -583,6 +605,9 @@ async function handleImageApiCapabilities(response: ServerResponse, dependencies
     endpoints: {
       health: '/api/v1/health',
       stats: '/api/v1/stats',
+      llm_image_prompt: '/api/v1/llm/image-prompt',
+      llm_image_prompt_settings: '/api/v1/llm/image-prompt/settings',
+      llm_image_prompt_test: '/api/v1/llm/image-prompt/test',
       models: '/api/v1/models',
       generation_sources: '/api/v1/generation-sources',
       workflows: '/api/v1/workflows',
@@ -597,6 +622,11 @@ async function handleImageApiCapabilities(response: ServerResponse, dependencies
       model_preload: '/api/v1/models/preload',
       model_preload_startup: '/api/v1/models/preload/startup',
       model_delete: '/api/v1/models/{modelId}'
+    },
+    llm_image_prompt: {
+      purpose: 'Builds a positive image prompt from user guidance through a configured local LLM endpoint.',
+      model_selection: 'This service does not send, select, load, or swap Ollama model names for prompt building; use an active-model gateway/endpoint if your LLM backend requires that abstraction.',
+      endpoint: '/api/v1/llm/image-prompt'
     },
     generation: {
       async_jobs: true,
@@ -636,6 +666,91 @@ async function handleImageApiStats(response: ServerResponse, dependencies: Resol
     queue: imageRuntime.jobQueue.stats(),
     recent_jobs: imageRuntime.jobQueue.listJobs(10)
   });
+}
+
+
+async function handleImagePromptLlmSettings(response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    const settings = await resolveImagePromptLlmSettings(dependencies);
+    sendJson(response, 200, {
+      ok: true,
+      settings,
+      path: dependencies.configStore.path,
+      request_formats: ['openai_chat', 'ollama_chat', 'ollama_generate', 'simple_json'],
+      help: {
+        purpose: 'Converts user guidance into a positive text-to-image prompt. It does not generate an image by itself.',
+        model_policy: 'No Ollama model name is sent by this feature. The active/preloaded model is expected to be managed by the configured local LLM endpoint or gateway.',
+        endpoint_url: 'Configure an HTTP endpoint that can accept the selected request format without this app providing a model name.',
+        test: 'The Test action checks reachability or the optional health URL without sending an image-generation request.'
+      }
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'LLM_IMAGE_PROMPT_SETTINGS_FAILED'));
+  }
+}
+
+async function handleImagePromptLlmSettingsUpdate(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  const body = await readJsonBody(request);
+  try {
+    const current = await resolveImagePromptLlmSettings(dependencies);
+    const settings = validateImagePromptLlmSettings(body, current);
+    const config = await dependencies.configStore.updateImagePromptLlmSettings(settings);
+    const effective = effectiveImagePromptLlmSettings(dependencies.runtimeConfig, config.llm_image_prompt ?? null);
+    sendJson(response, 200, {
+      ok: true,
+      settings: effective,
+      config,
+      path: dependencies.configStore.path
+    });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'LLM_IMAGE_PROMPT_SETTINGS_UPDATE_FAILED'));
+  }
+}
+
+async function handleImagePromptLlmTest(response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    const settings = await resolveImagePromptLlmSettings(dependencies);
+    const result = await testImagePromptLlmConnection(settings);
+    sendJson(response, 200, result);
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error, 503), toErrorPayload(error, 'LLM_IMAGE_PROMPT_TEST_FAILED'));
+  }
+}
+
+async function handleImagePromptLlmBuild(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  const body = await readJsonBody(request);
+  const guidance = readBodyString(body, 'guidance');
+  if (!guidance) {
+    sendJson(response, 422, validationDetail(['body', 'guidance'], 'Guidance must be a non-empty string.', 'string_too_short'));
+    return;
+  }
+
+  try {
+    const settings = await resolveImagePromptLlmSettings(dependencies);
+    const result = await buildImagePromptWithLlm(settings, guidance);
+    sendJson(response, 200, { ok: true, ...result });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error, 502), toErrorPayload(error, 'LLM_IMAGE_PROMPT_BUILD_FAILED'));
+  }
+}
+
+async function resolveImagePromptLlmSettings(dependencies: ResolvedAppDependencies): Promise<ImagePromptLlmSettings> {
+  const config = await dependencies.configStore.readConfig();
+  return effectiveImagePromptLlmSettings(dependencies.runtimeConfig, config.llm_image_prompt ?? null);
+}
+
+function publicImagePromptLlmSettings(settings: ImagePromptLlmSettings) {
+  return {
+    enabled: settings.enabled,
+    configured: Boolean(settings.endpoint_url),
+    endpoint_url: settings.endpoint_url || null,
+    health_url: settings.health_url || null,
+    request_timeout_ms: settings.request_timeout_ms,
+    request_format: settings.request_format,
+    temperature: settings.temperature,
+    max_tokens: settings.max_tokens,
+    instruction_configured: Boolean(settings.instruction.trim())
+  };
 }
 
 async function handleImageApiModels(response: ServerResponse, dependencies: ResolvedAppDependencies, refresh: boolean): Promise<void> {
@@ -2153,6 +2268,19 @@ function renderImageGeneratorHtml(): string {
                 <textarea id="image-lab-negative" rows="4" placeholder="What should the model avoid?"></textarea>
               </div>
             </details>
+
+            <details id="image-lab-llm-guidance-drawer" class="image-lab-llm-guidance-drawer compact-details">
+              <summary><span class="field-label">Large Language Model Image Prompt Guidance <span class="field-help" tabindex="0" title="Send guidance to the configured local LLM endpoint to build a positive image prompt. This only fills the positive prompt box; it does not generate an image or select/load an Ollama model.">?</span></span></summary>
+              <div class="image-lab-llm-guidance-field">
+                <label class="field-label" for="image-lab-llm-guidance">Guidance for prompt builder</label>
+                <textarea id="image-lab-llm-guidance" rows="3" placeholder="Describe the positive image prompt you want the local LLM to build..."></textarea>
+                <div class="image-lab-llm-guidance-actions">
+                  <button id="image-lab-llm-send" type="button" class="secondary">Send</button>
+                  <button id="image-lab-llm-apply-returned" type="button" class="secondary" hidden>Apply returned prompt</button>
+                </div>
+                <div id="image-lab-llm-status" class="image-lab-llm-status" aria-live="polite">Enter image-prompt guidance, then send it to the configured local LLM.</div>
+              </div>
+            </details>
           </section>
 
           <div class="image-lab-parameter-column" aria-label="Generation parameters">
@@ -2312,6 +2440,61 @@ function renderPortalHtml(): string {
       </form>
       <p id="image-auth-help" class="hint"></p>
       <div id="image-feedback" class="feedback" aria-live="polite"></div>
+    </section>
+
+    <section class="card llm-integration-card">
+      <div class="section-heading">
+        <div>
+          <h2>Ollama / local LLM image-prompt builder</h2>
+          <p class="hint">Configure the local LLM endpoint used by the image generator guidance drawer. It converts guidance into positive prompt text only; it does not generate an image, choose a model, load a model, or swap the active Ollama model.</p>
+        </div>
+        <div id="llm-image-prompt-status" class="mini-status"></div>
+      </div>
+      <form id="llm-image-prompt-form" class="stack llm-settings-form">
+        <label class="checkbox-label"><input id="llm-image-prompt-enabled" type="checkbox"> Enable local LLM prompt builder</label>
+        <div class="form-grid">
+          <label>
+            Endpoint URL
+            <input id="llm-image-prompt-endpoint-url" type="url" placeholder="http://127.0.0.1:11434/api/chat or active-model gateway endpoint" autocomplete="off">
+          </label>
+          <label>
+            Health/test URL (optional)
+            <input id="llm-image-prompt-health-url" type="url" placeholder="http://127.0.0.1:11434/api/version" autocomplete="off">
+          </label>
+        </div>
+        <div class="form-grid four">
+          <label>
+            Request format
+            <select id="llm-image-prompt-request-format">
+              <option value="openai_chat">OpenAI-compatible chat JSON</option>
+              <option value="ollama_chat">Ollama chat-compatible JSON without model</option>
+              <option value="ollama_generate">Ollama generate-compatible JSON without model</option>
+              <option value="simple_json">Simple instruction/guidance JSON</option>
+            </select>
+          </label>
+          <label>
+            Timeout ms
+            <input id="llm-image-prompt-timeout-ms" type="number" min="1000" max="600000" step="1000">
+          </label>
+          <label>
+            Temperature (optional)
+            <input id="llm-image-prompt-temperature" type="number" min="0" max="2" step="0.1" placeholder="blank = provider default">
+          </label>
+          <label>
+            Max tokens (optional)
+            <input id="llm-image-prompt-max-tokens" type="number" min="1" max="32768" step="1" placeholder="blank = provider default">
+          </label>
+        </div>
+        <label>
+          Prompt-building instruction
+          <textarea id="llm-image-prompt-instruction" rows="5" placeholder="Tell the local LLM to return only positive image prompt text."></textarea>
+        </label>
+        <p class="hint">Use an endpoint or gateway that already knows the active/preloaded model. This app intentionally sends no model name for this feature, so a native Ollama endpoint that requires a model field should be fronted by an active-model router/gateway.</p>
+        <div class="button-row">
+          <button id="llm-image-prompt-save" type="submit">Save LLM settings</button>
+          <button id="llm-image-prompt-test" class="secondary" type="button">Test connection</button>
+        </div>
+      </form>
     </section>
 
     <section class="grid three">

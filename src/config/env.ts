@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ImageBackendName, ModelInstallType, RuntimeConfig } from '../types.ts';
+import type { ImageBackendName, ImagePromptLlmRequestFormat, ModelInstallType, RuntimeConfig } from '../types.ts';
+import { DEFAULT_IMAGE_PROMPT_INSTRUCTION, isImagePromptLlmRequestFormat } from '../services/llmPromptBuilder.ts';
 
 loadDotEnvFile(path.resolve(process.cwd(), '.env'));
 
@@ -61,6 +62,33 @@ function readPositiveInteger(name: string, fallback: number): number {
     throw new Error(`${name} must be a positive integer`);
   }
   return value;
+}
+
+
+function readNullableNumber(name: string): number | null {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return null;
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${name} must be a number when configured`);
+  }
+  return parsed;
+}
+
+function readNullablePositiveInteger(name: string): number | null {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return null;
+  const parsed = Number(raw.trim());
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer when configured`);
+  }
+  return parsed;
+}
+
+function readImagePromptLlmRequestFormat(): ImagePromptLlmRequestFormat {
+  const value = readString('LLM_IMAGE_PROMPT_REQUEST_FORMAT', 'openai_chat').toLowerCase();
+  if (isImagePromptLlmRequestFormat(value)) return value;
+  throw new Error('LLM_IMAGE_PROMPT_REQUEST_FORMAT must be one of openai_chat, ollama_chat, ollama_generate, or simple_json');
 }
 
 function readBoolean(name: string, fallback: boolean): boolean {
@@ -202,6 +230,15 @@ export function loadRuntimeConfig(): RuntimeConfig {
     modelInstallAllowCkpt: readBoolean('MODEL_INSTALL_ALLOW_CKPT', false),
     modelCatalogPath: readPath('MODEL_CATALOG_PATH', './config/model-catalog.json'),
     modelDownloadMetadataPath: readPath('MODEL_DOWNLOAD_METADATA_PATH', path.join(path.dirname(configPath), 'model-downloads.json')),
-    modelInstallDirectories
+    modelInstallDirectories,
+
+    llmImagePromptEnabled: readBoolean('LLM_IMAGE_PROMPT_ENABLED', false),
+    llmImagePromptEndpointUrl: normalizeBaseUrl(readOptionalString('LLM_IMAGE_PROMPT_ENDPOINT_URL')),
+    llmImagePromptHealthUrl: normalizeBaseUrl(readOptionalString('LLM_IMAGE_PROMPT_HEALTH_URL')),
+    llmImagePromptRequestTimeoutMs: readNumber('LLM_IMAGE_PROMPT_REQUEST_TIMEOUT_MS', 30000),
+    llmImagePromptRequestFormat: readImagePromptLlmRequestFormat(),
+    llmImagePromptInstruction: readString('LLM_IMAGE_PROMPT_INSTRUCTION', DEFAULT_IMAGE_PROMPT_INSTRUCTION),
+    llmImagePromptTemperature: readNullableNumber('LLM_IMAGE_PROMPT_TEMPERATURE'),
+    llmImagePromptMaxTokens: readNullablePositiveInteger('LLM_IMAGE_PROMPT_MAX_TOKENS')
   };
 }

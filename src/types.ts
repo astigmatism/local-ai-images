@@ -5,6 +5,18 @@ export type ModelInstallType = 'checkpoint' | 'lora' | 'vae' | 'controlnet' | 'u
 export type ModelDownloadStatus = 'queued' | 'downloading' | 'succeeded' | 'failed' | 'canceled';
 export type GenerationSourceType = 'checkpoint' | 'workflow';
 export type CheckpointProbeStatus = 'pending' | 'valid' | 'invalid' | 'error';
+export type ImagePromptLlmRequestFormat = 'openai_chat' | 'ollama_chat' | 'ollama_generate' | 'simple_json';
+
+export interface ImagePromptLlmSettings {
+  enabled: boolean;
+  endpoint_url: string;
+  health_url: string;
+  request_timeout_ms: number;
+  request_format: ImagePromptLlmRequestFormat;
+  instruction: string;
+  temperature: number | null;
+  max_tokens: number | null;
+}
 
 
 export interface RuntimeConfig {
@@ -57,6 +69,15 @@ export interface RuntimeConfig {
   modelCatalogPath: string;
   modelDownloadMetadataPath: string;
   modelInstallDirectories: Record<ModelInstallType, string>;
+
+  llmImagePromptEnabled: boolean;
+  llmImagePromptEndpointUrl: string;
+  llmImagePromptHealthUrl: string;
+  llmImagePromptRequestTimeoutMs: number;
+  llmImagePromptRequestFormat: ImagePromptLlmRequestFormat;
+  llmImagePromptInstruction: string;
+  llmImagePromptTemperature: number | null;
+  llmImagePromptMaxTokens: number | null;
 }
 
 
@@ -64,6 +85,7 @@ export interface AppConfig {
   default_model: string;
   image_default_model?: string;
   image_preload_default_on_startup?: boolean;
+  llm_image_prompt?: ImagePromptLlmSettings;
 }
 
 
@@ -176,6 +198,16 @@ export interface OllamaClientLike {
   showModel(model: string): Promise<OllamaModelInformation>;
   prewarmModel(model: string, keepAlive: string | number, timeoutMs?: number): Promise<PrewarmResult>;
   generateImage(request: OllamaImageGenerateRequest): Promise<OllamaImageGenerateResult>;
+}
+
+export interface BuildImagePromptRequest {
+  guidance: string;
+}
+
+export interface BuildImagePromptResponse {
+  prompt: string;
+  modelInfo?: string | null;
+  elapsedMs?: number;
 }
 
 export interface GpuServiceLike {

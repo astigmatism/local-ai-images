@@ -17,6 +17,12 @@ const state = {
   favoritePrompts: null,
   modelDownloads: null,
   modelCatalog: null,
+  llmImagePromptSettings: null,
+  llmImagePromptError: null,
+  llmImagePromptSaving: false,
+  llmImagePromptTesting: false,
+  llmImagePromptStatusMessage: '',
+  llmImagePromptStatusOk: true,
   imageError: null,
   activeJobId: null,
   loadedFavoritePayloadBase: null
@@ -379,6 +385,140 @@ function selectedPlaygroundModel() {
 function imageApiAuthRequiredWithoutKey() {
   const auth = state.imageHealth?.auth;
   return Boolean(auth?.enabled && !state.imageApiKey);
+}
+
+function setElementValue(selector, value) {
+  const element = $(selector);
+  if (element) element.value = value ?? '';
+}
+
+function setElementChecked(selector, checked) {
+  const element = $(selector);
+  if (element) element.checked = Boolean(checked);
+}
+
+function llmRequestFormatLabel(format) {
+  const labels = {
+    openai_chat: 'OpenAI-compatible chat JSON',
+    ollama_chat: 'Ollama chat-compatible JSON without model',
+    ollama_generate: 'Ollama generate-compatible JSON without model',
+    simple_json: 'Simple instruction/guidance JSON'
+  };
+  return labels[format] || format;
+}
+
+function setLlmImagePromptStatus(message, ok = true) {
+  state.llmImagePromptStatusMessage = message;
+  state.llmImagePromptStatusOk = ok;
+  const target = $('#llm-image-prompt-status');
+  if (target) target.innerHTML = message ? `<span class="status-pill ${ok ? 'ok' : 'bad'}">${escapeHtml(message)}</span>` : '';
+}
+
+function renderLlmImagePromptSettings() {
+  const form = $('#llm-image-prompt-form');
+  const statusTarget = $('#llm-image-prompt-status');
+  if (!form || !statusTarget) return;
+
+  const response = state.llmImagePromptSettings;
+  const settings = response?.settings || null;
+  const activeInForm = form.contains(document.activeElement);
+
+  if (settings && !activeInForm && !state.llmImagePromptSaving && !state.llmImagePromptTesting) {
+    setElementChecked('#llm-image-prompt-enabled', settings.enabled);
+    setElementValue('#llm-image-prompt-endpoint-url', settings.endpoint_url || '');
+    setElementValue('#llm-image-prompt-health-url', settings.health_url || '');
+    setElementValue('#llm-image-prompt-timeout-ms', settings.request_timeout_ms || 30000);
+    setElementValue('#llm-image-prompt-request-format', settings.request_format || 'openai_chat');
+    setElementValue('#llm-image-prompt-temperature', settings.temperature ?? '');
+    setElementValue('#llm-image-prompt-max-tokens', settings.max_tokens ?? '');
+    setElementValue('#llm-image-prompt-instruction', settings.instruction || '');
+  }
+
+  const requestFormatSelect = $('#llm-image-prompt-request-format');
+  const formats = response?.request_formats || ['openai_chat', 'ollama_chat', 'ollama_generate', 'simple_json'];
+  if (requestFormatSelect && !activeInForm) {
+    const selected = settings?.request_format || requestFormatSelect.value || 'openai_chat';
+    requestFormatSelect.innerHTML = formats.map((format) => `<option value="${escapeHtml(format)}">${escapeHtml(llmRequestFormatLabel(format))}</option>`).join('');
+    requestFormatSelect.value = formats.includes(selected) ? selected : 'openai_chat';
+  }
+
+  $('#llm-image-prompt-save').disabled = state.llmImagePromptSaving || state.llmImagePromptTesting;
+  $('#llm-image-prompt-test').disabled = state.llmImagePromptSaving || state.llmImagePromptTesting || !settings?.enabled;
+
+  if (state.llmImagePromptSaving) {
+    statusTarget.innerHTML = '<span class="status-pill warn">Saving</span>';
+  } else if (state.llmImagePromptTesting) {
+    statusTarget.innerHTML = '<span class="status-pill warn">Testing</span>';
+  } else if (state.llmImagePromptStatusMessage) {
+    statusTarget.innerHTML = `<span class="status-pill ${state.llmImagePromptStatusOk ? 'ok' : 'bad'}">${escapeHtml(state.llmImagePromptStatusMessage)}</span>`;
+  } else if (state.llmImagePromptError) {
+    statusTarget.innerHTML = `<span class="status-pill bad">${escapeHtml(state.llmImagePromptError.message || 'Unavailable')}</span>`;
+  } else if (!settings) {
+    statusTarget.innerHTML = '<span class="status-pill warn">Loading</span>';
+  } else if (settings.enabled && settings.endpoint_url) {
+    statusTarget.innerHTML = '<span class="status-pill ok">Enabled</span>';
+  } else if (settings.enabled) {
+    statusTarget.innerHTML = '<span class="status-pill bad">Needs endpoint</span>';
+  } else {
+    statusTarget.innerHTML = '<span class="status-pill warn">Disabled</span>';
+  }
+}
+
+function llmImagePromptSettingsPayloadFromForm() {
+  const temperature = $('#llm-image-prompt-temperature')?.value.trim() || '';
+  const maxTokens = $('#llm-image-prompt-max-tokens')?.value.trim() || '';
+  return {
+    enabled: Boolean($('#llm-image-prompt-enabled')?.checked),
+    endpoint_url: $('#llm-image-prompt-endpoint-url')?.value.trim() || '',
+    health_url: $('#llm-image-prompt-health-url')?.value.trim() || '',
+    request_timeout_ms: Number($('#llm-image-prompt-timeout-ms')?.value || 30000),
+    request_format: $('#llm-image-prompt-request-format')?.value || 'openai_chat',
+    instruction: $('#llm-image-prompt-instruction')?.value.trim() || '',
+    temperature: temperature === '' ? null : Number(temperature),
+    max_tokens: maxTokens === '' ? null : Number(maxTokens)
+  };
+}
+
+async function handleLlmImagePromptSettingsSubmit(event) {
+  event.preventDefault();
+  state.llmImagePromptSaving = true;
+  state.llmImagePromptStatusMessage = '';
+  renderLlmImagePromptSettings();
+  try {
+    const result = await fetchJson('/api/v1/llm/image-prompt/settings', {
+      method: 'PUT',
+      body: JSON.stringify(llmImagePromptSettingsPayloadFromForm())
+    });
+    state.llmImagePromptSettings = { ...state.llmImagePromptSettings, ...result };
+    state.llmImagePromptError = null;
+    setLlmImagePromptStatus('Saved', true);
+    setImageFeedback('Saved local LLM image-prompt builder settings. The image generator can use them immediately.');
+  } catch (error) {
+    state.llmImagePromptError = error;
+    setLlmImagePromptStatus(error.message || 'Save failed', false);
+    setImageFeedback(`Unable to save local LLM settings: ${error.message}`, false);
+  } finally {
+    state.llmImagePromptSaving = false;
+    renderLlmImagePromptSettings();
+  }
+}
+
+async function handleLlmImagePromptTest() {
+  state.llmImagePromptTesting = true;
+  state.llmImagePromptStatusMessage = '';
+  renderLlmImagePromptSettings();
+  try {
+    const result = await fetchJson('/api/v1/llm/image-prompt/test', { method: 'POST' });
+    setLlmImagePromptStatus('Reachable', true);
+    setImageFeedback(result.message || 'Local LLM endpoint is reachable. No model name was sent by this test.');
+  } catch (error) {
+    state.llmImagePromptError = error;
+    setLlmImagePromptStatus(error.message || 'Test failed', false);
+    setImageFeedback(`Local LLM test failed: ${error.message}`, false);
+  } finally {
+    state.llmImagePromptTesting = false;
+    renderLlmImagePromptSettings();
+  }
 }
 
 function renderImageAuth() {
@@ -1169,6 +1309,7 @@ function renderAll() {
   renderGpus();
   renderModelDownloads();
   renderModelCatalog();
+  renderLlmImagePromptSettings();
 }
 
 async function refreshImageApi() {
@@ -1190,19 +1331,22 @@ async function refreshImageApi() {
     state.favoritePrompts = null;
     state.modelDownloads = null;
     state.modelCatalog = null;
+    state.llmImagePromptSettings = null;
+    state.llmImagePromptError = null;
     state.imageError = new Error('Dashboard API key required for protected /api/v1 calls. Paste one IMAGE_API_KEYS value above.');
     state.imageError.status = 401;
     return;
   }
 
-  const [stats, models, workflows, jobs, favorites, downloads, catalog] = await Promise.allSettled([
+  const [stats, models, workflows, jobs, favorites, downloads, catalog, llmSettings] = await Promise.allSettled([
     fetchJson('/api/v1/stats'),
     fetchJson('/api/v1/models'),
     fetchJson('/api/v1/workflows'),
     loadImageJobsPage(),
     fetchJson('/api/v1/favorite-prompts?limit=50'),
     fetchJson('/api/v1/model-downloads?limit=20'),
-    fetchJson('/api/v1/model-catalog')
+    fetchJson('/api/v1/model-catalog'),
+    fetchJson('/api/v1/llm/image-prompt/settings')
   ]);
 
   if (stats.status === 'fulfilled') state.imageStats = stats.value;
@@ -1212,8 +1356,14 @@ async function refreshImageApi() {
   if (favorites.status === 'fulfilled') state.favoritePrompts = favorites.value;
   if (downloads.status === 'fulfilled') state.modelDownloads = downloads.value;
   if (catalog.status === 'fulfilled') state.modelCatalog = catalog.value;
+  if (llmSettings.status === 'fulfilled') {
+    state.llmImagePromptSettings = llmSettings.value;
+    state.llmImagePromptError = null;
+  } else {
+    state.llmImagePromptError = llmSettings.reason;
+  }
 
-  const rejected = [stats, models, workflows, jobs, favorites, downloads, catalog].find((result) => result.status === 'rejected');
+  const rejected = [stats, models, workflows, jobs, favorites, downloads, catalog, llmSettings].find((result) => result.status === 'rejected');
   if (rejected) {
     state.imageError = rejected.reason;
     console.warn(rejected.reason);
@@ -1659,6 +1809,9 @@ async function handleDownloadSubmit(event) {
 
 function wireEvents() {
   $('#refresh-button').addEventListener('click', refresh);
+
+  $('#llm-image-prompt-form')?.addEventListener('submit', handleLlmImagePromptSettingsSubmit);
+  $('#llm-image-prompt-test')?.addEventListener('click', handleLlmImagePromptTest);
 
   $('#api-key-form').addEventListener('submit', async (event) => {
     event.preventDefault();

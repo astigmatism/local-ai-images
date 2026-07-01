@@ -7,6 +7,7 @@ import { createLogger } from './logger.ts';
 import { NvidiaSmiGpuService } from './services/gpuService.ts';
 import { createImageRuntime } from './services/image/runtime.ts';
 import { OllamaClient } from './services/ollamaClient.ts';
+import { imagePromptLlmSettingsFromRuntime } from './services/llmPromptBuilder.ts';
 import type { OllamaClientLike } from './types.ts';
 
 const runtimeConfig = loadRuntimeConfig();
@@ -15,7 +16,8 @@ const configStore = new ConfigStore(
   runtimeConfig.configPath,
   runtimeConfig.defaultModel,
   runtimeConfig.imageDefaultModel,
-  runtimeConfig.imagePreloadDefaultOnStartup
+  runtimeConfig.imagePreloadDefaultOnStartup,
+  imagePromptLlmSettingsFromRuntime(runtimeConfig)
 );
 const ollamaClient: OllamaClientLike = runtimeConfig.legacyOllamaEnabled
   ? new OllamaClient(runtimeConfig.ollamaBaseUrl, runtimeConfig.ollamaRequestTimeoutMs)

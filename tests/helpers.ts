@@ -76,6 +76,14 @@ export function testRuntimeConfig(overrides: Partial<RuntimeConfig> = {}): Runti
       upscaler: '/tmp/local-ai-images-models/upscale_models',
       other: '/tmp/local-ai-images-models'
     },
+    llmImagePromptEnabled: false,
+    llmImagePromptEndpointUrl: '',
+    llmImagePromptHealthUrl: '',
+    llmImagePromptRequestTimeoutMs: 1000,
+    llmImagePromptRequestFormat: 'openai_chat',
+    llmImagePromptInstruction: 'Return only a positive image prompt.',
+    llmImagePromptTemperature: null,
+    llmImagePromptMaxTokens: null,
     logLevel: 'silent',
     ...overrides
   };

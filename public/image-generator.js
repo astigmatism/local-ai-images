@@ -40,6 +40,10 @@ const state = {
   cancelRequests: new Map(),
   nextClientJobSequence: 0,
   prewarmingModel: null,
+  llmPromptSending: false,
+  llmPromptRequestId: 0,
+  llmPromptValueAtSend: '',
+  llmPendingPrompt: null,
   loadedFavoritePayloadBase: null,
   galleryLimit: DEFAULT_GALLERY_LIMIT,
   galleryTileSize: readStoredGallerySize(),
@@ -145,10 +149,12 @@ function applyControlsHeight(height = state.controlsHeight, persist = false) {
 }
 
 function syncNegativePromptDrawerLayout() {
-  const drawer = $('#image-lab-negative-drawer');
+  const negativeDrawer = $('#image-lab-negative-drawer');
+  const llmDrawer = $('#image-lab-llm-guidance-drawer');
   const stack = $('.image-lab-prompt-stack');
-  if (!drawer || !stack) return;
-  stack.classList.toggle('has-negative-open', Boolean(drawer.open));
+  if (!stack) return;
+  stack.classList.toggle('has-negative-open', Boolean(negativeDrawer?.open));
+  stack.classList.toggle('has-llm-open', Boolean(llmDrawer?.open));
 }
 
 function setNegativePromptDrawerOpen(open) {
@@ -176,6 +182,101 @@ async function fetchJson(url, options = {}) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function buildImagePromptFromGuidance(guidance) {
+  return fetchJson('/api/v1/llm/image-prompt', {
+    method: 'POST',
+    body: JSON.stringify({ guidance })
+  });
+}
+
+function setPositivePromptValue(value) {
+  const promptInput = $('#image-lab-prompt');
+  if (!promptInput) return false;
+  promptInput.value = String(value || '');
+  dispatchPromptInputChanged(promptInput);
+  return true;
+}
+
+function renderLlmPromptGuidanceChrome() {
+  const sendButton = $('#image-lab-llm-send');
+  const applyButton = $('#image-lab-llm-apply-returned');
+  const status = $('#image-lab-llm-status');
+  if (sendButton) {
+    sendButton.disabled = Boolean(state.llmPromptSending);
+    sendButton.textContent = state.llmPromptSending ? 'Sending...' : 'Send';
+  }
+  if (applyButton) {
+    applyButton.hidden = !state.llmPendingPrompt;
+    applyButton.disabled = Boolean(state.llmPromptSending) || !state.llmPendingPrompt;
+  }
+  if (status && !status.textContent) {
+    status.textContent = 'Enter image-prompt guidance, then send it to the configured local LLM.';
+  }
+}
+
+function setLlmPromptStatus(message, ok = true) {
+  const status = $('#image-lab-llm-status');
+  if (!status) return;
+  status.textContent = message;
+  status.className = `image-lab-llm-status ${ok ? 'ok' : 'error'}`;
+}
+
+async function handleLlmPromptGuidanceSend() {
+  if (state.llmPromptSending) return;
+  const guidanceInput = $('#image-lab-llm-guidance');
+  const promptInput = $('#image-lab-prompt');
+  const guidance = guidanceInput?.value.trim() || '';
+  if (!guidance) {
+    setLlmPromptStatus('Enter guidance before sending.', false);
+    return;
+  }
+
+  const requestId = state.llmPromptRequestId + 1;
+  state.llmPromptRequestId = requestId;
+  state.llmPromptSending = true;
+  state.llmPromptValueAtSend = promptInput?.value || '';
+  state.llmPendingPrompt = null;
+  setLlmPromptStatus('Waiting for response...');
+  renderLlmPromptGuidanceChrome();
+
+  try {
+    const result = await buildImagePromptFromGuidance(guidance);
+    if (requestId !== state.llmPromptRequestId) return;
+    const returnedPrompt = String(result.prompt || '').trim();
+    if (!returnedPrompt) throw new Error('The local LLM returned an empty prompt.');
+
+    if (promptInput && promptInput.value !== state.llmPromptValueAtSend) {
+      state.llmPendingPrompt = returnedPrompt;
+      setLlmPromptStatus('Prompt returned. The positive prompt changed while waiting; use Apply returned prompt to replace it.', true);
+      return;
+    }
+
+    setPositivePromptValue(returnedPrompt);
+    state.llmPendingPrompt = null;
+    const elapsed = Number.isFinite(Number(result.elapsedMs)) ? ` in ${Math.round(Number(result.elapsedMs))} ms` : '';
+    setLlmPromptStatus(`Positive prompt replaced from local LLM${elapsed}.`);
+  } catch (error) {
+    if (requestId === state.llmPromptRequestId) {
+      state.llmPendingPrompt = null;
+      setLlmPromptStatus(error.message || 'Local LLM prompt request failed.', false);
+    }
+  } finally {
+    if (requestId === state.llmPromptRequestId) {
+      state.llmPromptSending = false;
+      renderLlmPromptGuidanceChrome();
+    }
+  }
+}
+
+function applyPendingLlmPrompt() {
+  if (!state.llmPendingPrompt) return;
+  if (setPositivePromptValue(state.llmPendingPrompt)) {
+    state.llmPendingPrompt = null;
+    setLlmPromptStatus('Returned prompt applied to the positive prompt field.');
+    renderLlmPromptGuidanceChrome();
+  }
 }
 
 function escapeHtml(value) {
@@ -3393,8 +3494,13 @@ function wireEvents() {
   $('#image-lab-form')?.addEventListener('click', handlePromptClipboardClick);
   $('#image-lab-form')?.addEventListener('submit', handleGenerate);
   const negativeDrawer = $('#image-lab-negative-drawer');
+  const llmDrawer = $('#image-lab-llm-guidance-drawer');
   negativeDrawer?.addEventListener('toggle', syncNegativePromptDrawerLayout);
+  llmDrawer?.addEventListener('toggle', syncNegativePromptDrawerLayout);
+  $('#image-lab-llm-send')?.addEventListener('click', handleLlmPromptGuidanceSend);
+  $('#image-lab-llm-apply-returned')?.addEventListener('click', applyPendingLlmPrompt);
   syncNegativePromptDrawerLayout();
+  renderLlmPromptGuidanceChrome();
   $('#image-lab-gallery')?.addEventListener('click', handleGalleryClick);
   $('#image-lab-gallery')?.addEventListener('dragstart', handleGalleryImageDragStart);
   $('#image-lab-gallery')?.addEventListener('dragend', handleGalleryImageDragEnd);

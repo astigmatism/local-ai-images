@@ -1,19 +1,22 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { AppConfig } from '../types.ts';
+import type { AppConfig, ImagePromptLlmSettings } from '../types.ts';
 import { AppError } from '../errors.ts';
+import { normalizeImagePromptLlmSettings } from '../services/llmPromptBuilder.ts';
 
 export class ConfigStore {
   private readonly filePath: string;
   private readonly fallbackDefaultModel: string;
   private readonly fallbackImageDefaultModel: string;
   private readonly fallbackImagePreloadDefaultOnStartup: boolean;
+  private readonly fallbackImagePromptLlmSettings: ImagePromptLlmSettings | null;
 
-  constructor(filePath: string, fallbackDefaultModel: string, fallbackImageDefaultModel = '', fallbackImagePreloadDefaultOnStartup = false) {
+  constructor(filePath: string, fallbackDefaultModel: string, fallbackImageDefaultModel = '', fallbackImagePreloadDefaultOnStartup = false, fallbackImagePromptLlmSettings: ImagePromptLlmSettings | null = null) {
     this.filePath = filePath;
     this.fallbackDefaultModel = fallbackDefaultModel;
     this.fallbackImageDefaultModel = fallbackImageDefaultModel;
     this.fallbackImagePreloadDefaultOnStartup = fallbackImagePreloadDefaultOnStartup;
+    this.fallbackImagePromptLlmSettings = fallbackImagePromptLlmSettings;
   }
 
   get path(): string {
@@ -38,6 +41,11 @@ export class ConfigStore {
       } else if (this.fallbackImagePreloadDefaultOnStartup) {
         config.image_preload_default_on_startup = true;
       }
+      if (parsed.llm_image_prompt !== undefined) {
+        config.llm_image_prompt = normalizeImagePromptLlmSettings(parsed.llm_image_prompt, this.fallbackImagePromptLlmSettings);
+      } else if (this.shouldIncludeFallbackImagePromptLlmSettings()) {
+        config.llm_image_prompt = normalizeImagePromptLlmSettings({}, this.fallbackImagePromptLlmSettings);
+      }
       return config;
     } catch (error: unknown) {
       if (isNodeError(error) && error.code === 'ENOENT') {
@@ -47,6 +55,9 @@ export class ConfigStore {
         }
         if (this.fallbackImagePreloadDefaultOnStartup) {
           config.image_preload_default_on_startup = true;
+        }
+        if (this.shouldIncludeFallbackImagePromptLlmSettings()) {
+          config.llm_image_prompt = normalizeImagePromptLlmSettings({}, this.fallbackImagePromptLlmSettings);
         }
         await this.writeConfig(config);
         return config;
@@ -80,6 +91,9 @@ export class ConfigStore {
     }
     if (config.image_preload_default_on_startup !== undefined) {
       normalized.image_preload_default_on_startup = config.image_preload_default_on_startup;
+    }
+    if (config.llm_image_prompt !== undefined) {
+      normalized.llm_image_prompt = normalizeImagePromptLlmSettings(config.llm_image_prompt, this.fallbackImagePromptLlmSettings);
     }
 
     const directory = path.dirname(this.filePath);
@@ -128,6 +142,19 @@ export class ConfigStore {
     const config: AppConfig = { ...existing, image_preload_default_on_startup: enabled };
     await this.writeConfig(config);
     return config;
+  }
+
+  async updateImagePromptLlmSettings(settings: ImagePromptLlmSettings): Promise<AppConfig> {
+    const existing = await this.readConfig();
+    const config: AppConfig = { ...existing, llm_image_prompt: normalizeImagePromptLlmSettings(settings, this.fallbackImagePromptLlmSettings) };
+    await this.writeConfig(config);
+    return config;
+  }
+
+  private shouldIncludeFallbackImagePromptLlmSettings(): boolean {
+    const settings = this.fallbackImagePromptLlmSettings;
+    if (!settings) return false;
+    return Boolean(settings.enabled || settings.endpoint_url || settings.health_url || settings.temperature !== null || settings.max_tokens !== null);
   }
 }
 

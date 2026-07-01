@@ -454,6 +454,43 @@ const modelPreloadRequestSchema = {
   }
 } as const;
 
+const imagePromptLlmSettingsSchema = {
+  type: 'object',
+  required: ['enabled', 'endpoint_url', 'health_url', 'request_timeout_ms', 'request_format', 'instruction', 'temperature', 'max_tokens'],
+  additionalProperties: false,
+  properties: {
+    enabled: { type: 'boolean' },
+    endpoint_url: { type: 'string', description: 'Configured local LLM endpoint or active-model gateway URL. This app does not send a model field.' },
+    health_url: { type: 'string', description: 'Optional URL used by the Test action.' },
+    request_timeout_ms: { type: 'integer', minimum: 1000, maximum: 600000 },
+    request_format: { enum: ['openai_chat', 'ollama_chat', 'ollama_generate', 'simple_json'] },
+    instruction: { type: 'string' },
+    temperature: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+    max_tokens: { oneOf: [{ type: 'integer' }, { type: 'null' }] }
+  }
+} as const;
+
+const buildImagePromptRequestSchema = {
+  type: 'object',
+  required: ['guidance'],
+  additionalProperties: false,
+  properties: {
+    guidance: { type: 'string', minLength: 1, description: 'User guidance to convert into a positive text-to-image prompt.' }
+  }
+} as const;
+
+const buildImagePromptResponseSchema = {
+  type: 'object',
+  required: ['ok', 'prompt'],
+  additionalProperties: true,
+  properties: {
+    ok: { const: true },
+    prompt: { type: 'string' },
+    modelInfo: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    elapsedMs: { type: 'number' }
+  }
+} as const;
+
 const modelPreloadStartupRequestSchema = {
   type: 'object',
   required: ['enabled'],
@@ -516,7 +553,10 @@ export function buildOpenApiDocument() {
         Artifact: artifactSchema,
         ModelCatalogEntry: modelCatalogEntrySchema,
         ModelDownloadRequest: modelDownloadRequestSchema,
-        ModelDownloadJob: modelDownloadJobSchema
+        ModelDownloadJob: modelDownloadJobSchema,
+        ImagePromptLlmSettings: imagePromptLlmSettingsSchema,
+        BuildImagePromptRequest: buildImagePromptRequestSchema,
+        BuildImagePromptResponse: buildImagePromptResponseSchema
       }
     },
     paths: {
@@ -546,6 +586,44 @@ export function buildOpenApiDocument() {
           summary: 'Runtime stats',
           security: bearerSecurity,
           responses: { '200': { description: 'ComfyUI/mock provider state, GPU telemetry, queue stats, and recent jobs' }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/llm/image-prompt/settings': {
+        get: {
+          summary: 'Read local LLM image-prompt builder settings',
+          description: 'Returns runtime-effective settings for the prompt-building integration. The integration does not send, select, load, or swap Ollama model names.',
+          security: bearerSecurity,
+          responses: { '200': { description: 'LLM prompt-builder settings', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, settings: imagePromptLlmSettingsSchema, request_formats: { type: 'array', items: { type: 'string' } } } } } } }, ...authErrorResponses }
+        },
+        put: {
+          summary: 'Save local LLM image-prompt builder settings at runtime',
+          description: 'Persists settings in the application config store so the image generator can use them immediately. No model name is configured here.',
+          security: bearerSecurity,
+          requestBody: { required: true, content: { 'application/json': { schema: imagePromptLlmSettingsSchema } } },
+          responses: { '200': { description: 'Saved settings', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, settings: imagePromptLlmSettingsSchema } } } } }, '422': { description: 'Invalid settings', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
+        },
+        post: {
+          summary: 'Save local LLM image-prompt builder settings at runtime',
+          security: bearerSecurity,
+          requestBody: { required: true, content: { 'application/json': { schema: imagePromptLlmSettingsSchema } } },
+          responses: { '200': { description: 'Saved settings', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, settings: imagePromptLlmSettingsSchema } } } } }, '422': { description: 'Invalid settings', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/llm/image-prompt/test': {
+        post: {
+          summary: 'Test local LLM image-prompt builder reachability',
+          description: 'Uses the optional health URL or an OPTIONS request to the endpoint. It does not send guidance, image-generation requests, or a model name.',
+          security: bearerSecurity,
+          responses: { '200': { description: 'Endpoint reachable' }, '503': { description: 'Disabled, unconfigured, or unavailable', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
+        }
+      },
+      '/api/v1/llm/image-prompt': {
+        post: {
+          summary: 'Build a positive image prompt from guidance',
+          description: 'Calls the configured local LLM endpoint/gateway and returns clean positive prompt text. The request intentionally contains no Ollama model field.',
+          security: bearerSecurity,
+          requestBody: { required: true, content: { 'application/json': { schema: buildImagePromptRequestSchema } } },
+          responses: { '200': { description: 'Positive image prompt text', content: { 'application/json': { schema: buildImagePromptResponseSchema } } }, '422': { description: 'Blank guidance or invalid request' }, '503': { description: 'Integration disabled, unconfigured, or unavailable', content: { 'application/json': { schema: errorSchema } } }, '504': { description: 'LLM endpoint timed out', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
         }
       },
       '/api/v1/models': {

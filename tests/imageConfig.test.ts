@@ -29,7 +29,15 @@ const managedEnvKeys = [
   'LEGACY_OLLAMA_ENABLED',
   'OLLAMA_BASE_URL',
   'DEFAULT_MODEL',
-  'PREWARM_DEFAULT_MODEL_ON_START'
+  'PREWARM_DEFAULT_MODEL_ON_START',
+  'LLM_IMAGE_PROMPT_ENABLED',
+  'LLM_IMAGE_PROMPT_ENDPOINT_URL',
+  'LLM_IMAGE_PROMPT_HEALTH_URL',
+  'LLM_IMAGE_PROMPT_REQUEST_TIMEOUT_MS',
+  'LLM_IMAGE_PROMPT_REQUEST_FORMAT',
+  'LLM_IMAGE_PROMPT_INSTRUCTION',
+  'LLM_IMAGE_PROMPT_TEMPERATURE',
+  'LLM_IMAGE_PROMPT_MAX_TOKENS'
 ];
 
 function withCleanEnv(fn: () => void): void {
@@ -117,3 +125,27 @@ test('loadRuntimeConfig only enables legacy Ollama startup settings when explici
     assert.equal(config.prewarmDefaultModelOnStart, true);
   });
 });
+
+test('loadRuntimeConfig parses local LLM image-prompt builder settings without configuring a model', () => {
+  withCleanEnv(() => {
+    process.env.LLM_IMAGE_PROMPT_ENABLED = 'true';
+    process.env.LLM_IMAGE_PROMPT_ENDPOINT_URL = 'http://127.0.0.1:11434/active-chat/';
+    process.env.LLM_IMAGE_PROMPT_HEALTH_URL = 'http://127.0.0.1:11434/api/version/';
+    process.env.LLM_IMAGE_PROMPT_REQUEST_TIMEOUT_MS = '45000';
+    process.env.LLM_IMAGE_PROMPT_REQUEST_FORMAT = 'simple_json';
+    process.env.LLM_IMAGE_PROMPT_INSTRUCTION = 'Return positive image prompt text only.';
+    process.env.LLM_IMAGE_PROMPT_TEMPERATURE = '0.5';
+    process.env.LLM_IMAGE_PROMPT_MAX_TOKENS = '512';
+
+    const config = loadRuntimeConfig();
+    assert.equal(config.llmImagePromptEnabled, true);
+    assert.equal(config.llmImagePromptEndpointUrl, 'http://127.0.0.1:11434/active-chat');
+    assert.equal(config.llmImagePromptHealthUrl, 'http://127.0.0.1:11434/api/version');
+    assert.equal(config.llmImagePromptRequestTimeoutMs, 45000);
+    assert.equal(config.llmImagePromptRequestFormat, 'simple_json');
+    assert.equal(config.llmImagePromptInstruction, 'Return positive image prompt text only.');
+    assert.equal(config.llmImagePromptTemperature, 0.5);
+    assert.equal(config.llmImagePromptMaxTokens, 512);
+  });
+});
+
