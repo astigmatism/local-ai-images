@@ -1319,21 +1319,23 @@ summary {
 .image-lab-llm-guidance-field {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 4px;
+  align-self: stretch;
+  height: 100%;
   min-height: 0;
   margin-top: 6px;
+  overflow: hidden;
 }
 
 .image-lab-positive-field textarea,
 .image-lab-negative-field textarea,
 .image-lab-llm-guidance-field textarea {
-  height: 100%;
+  align-self: stretch;
+  height: auto;
   min-height: 0;
 }
 
 .image-lab-llm-guidance-field {
-  grid-template-rows: auto minmax(64px, 1fr) auto auto;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
 }
 
 .image-lab-llm-guidance-actions {
@@ -1614,10 +1616,6 @@ summary {
   max-height: none;
   resize: none;
   line-height: 1.25;
-}
-
-.image-lab-positive-field textarea {
-  height: 100%;
 }
 
 .image-lab-gallery-size-control input[type="range"] {
