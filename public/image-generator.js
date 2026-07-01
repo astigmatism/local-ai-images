@@ -6,6 +6,7 @@ const GALLERY_LIMIT_STEP = 48;
 const DEFAULT_TILE_SIZE = 300;
 const GALLERY_SIZE_STORAGE_KEY = 'local-ai-images-gallery-size';
 const CONTROLS_HEIGHT_STORAGE_KEY = 'local-ai-images-controls-height';
+const IMAGE_LAB_FORM_STORAGE_KEY = 'local-ai-images-image-lab-form-values-v1';
 const CONTROLS_MIN_HEIGHT = 240;
 const CONTROLS_DEFAULT_HEIGHT = 320;
 const CONTROLS_MAX_VIEWPORT_RATIO = 0.58;
@@ -28,6 +29,21 @@ const LLM_GUIDANCE_PAYLOAD_KEYS = [
   'imagePromptGuidance'
 ];
 const LLM_AUTO_GENERATION_SOURCE = 'llm-auto';
+const IMAGE_LAB_PERSISTED_FIELDS = [
+  { key: 'positivePrompt', selector: '#image-lab-prompt' },
+  { key: 'negativePrompt', selector: '#image-lab-negative' },
+  { key: 'llmGuidance', selector: '#image-lab-llm-guidance' },
+  { key: 'generationSourceId', selector: '#image-lab-model', select: true },
+  { key: 'workflowId', selector: '#image-lab-workflow', select: true },
+  { key: 'width', selector: '#image-lab-width' },
+  { key: 'height', selector: '#image-lab-height' },
+  { key: 'steps', selector: '#image-lab-steps' },
+  { key: 'cfgScale', selector: '#image-lab-cfg' },
+  { key: 'seed', selector: '#image-lab-seed' },
+  { key: 'samplerName', selector: '#image-lab-sampler' },
+  { key: 'scheduler', selector: '#image-lab-scheduler' },
+  { key: 'syncTimeoutMs', selector: '#image-lab-sync-timeout' }
+];
 
 const state = {
   imageHealth: null,
@@ -63,6 +79,7 @@ const state = {
   llmPromptRequestId: 0,
   llmPromptValueAtSend: '',
   llmPendingPrompt: null,
+  imageLabFormRestored: false,
   loadedFavoritePayloadBase: null,
   galleryLimit: DEFAULT_GALLERY_LIMIT,
   galleryTileSize: readStoredGallerySize(),
@@ -134,6 +151,75 @@ function readStoredControlsHeight() {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function readStoredImageLabFormValues() {
+  try {
+    const raw = window.localStorage.getItem(IMAGE_LAB_FORM_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return isPlainObject(parsed?.fields) ? parsed.fields : {};
+  } catch {
+    return {};
+  }
+}
+
+function collectImageLabFormValues() {
+  const fields = {};
+  for (const { key, selector } of IMAGE_LAB_PERSISTED_FIELDS) {
+    const element = $(selector);
+    if (!element) continue;
+    fields[key] = element.value || '';
+  }
+  return fields;
+}
+
+function persistImageLabFormValues() {
+  try {
+    window.localStorage.setItem(IMAGE_LAB_FORM_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      fields: collectImageLabFormValues()
+    }));
+  } catch {
+    // Local persistence is best-effort; generation should keep working if storage is blocked or full.
+  }
+}
+
+function restoreSelectControlValue(selector, value) {
+  const select = $(selector);
+  if (!(select instanceof HTMLSelectElement)) return false;
+  const text = String(value ?? '');
+  const option = Array.from(select.options).find((candidate) => candidate.value === text && !candidate.disabled);
+  if (!option) return false;
+  select.value = text;
+  return true;
+}
+
+function restoreInputControlValue(selector, value) {
+  const element = $(selector);
+  if (!(element instanceof HTMLInputElement) && !(element instanceof HTMLTextAreaElement)) return false;
+  element.value = String(value ?? '');
+  return true;
+}
+
+function restoreImageLabFormValuesOnce() {
+  if (state.imageLabFormRestored) return false;
+  state.imageLabFormRestored = true;
+  const fields = readStoredImageLabFormValues();
+  if (!isPlainObject(fields) || Object.keys(fields).length === 0) return false;
+
+  let restored = false;
+  for (const { key, selector, select } of IMAGE_LAB_PERSISTED_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(fields, key)) continue;
+    restored = (select ? restoreSelectControlValue(selector, fields[key]) : restoreInputControlValue(selector, fields[key])) || restored;
+  }
+
+  const workflowSelect = $('#image-lab-workflow');
+  if (workflowSelect?.value) state.selectedWorkflowId = workflowSelect.value;
+  state.selectedWorkflowId = selectedGenerationSource()?.workflowId || state.selectedWorkflowId;
+  syncResolutionPresetGroup(RESOLUTION_PRESET_SELECTS.imageLab, '#image-lab-width', '#image-lab-height');
+  return restored;
+}
+
 function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -192,6 +278,32 @@ function setNegativePromptDrawerOpen(open) {
   const shouldOpen = Boolean(open);
   if (drawer.open !== shouldOpen) drawer.open = shouldOpen;
   syncPromptDrawerLayout();
+}
+
+function setFavoritesDrawerOpen(open) {
+  const isOpen = Boolean(open);
+  const mainGrid = $('#image-lab-main-grid');
+  const panel = $('#image-lab-favorites-panel');
+  const toggle = $('#image-lab-favorites-toggle');
+  const favorites = $('#image-lab-favorites');
+
+  mainGrid?.classList.toggle('favorites-drawer-collapsed', !isOpen);
+  panel?.classList.toggle('is-collapsed', !isOpen);
+
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(isOpen));
+    toggle.setAttribute('aria-label', isOpen ? 'Collapse favorites drawer' : 'Open favorites drawer');
+    toggle.title = isOpen ? 'Collapse favorites drawer' : 'Open favorites drawer';
+    toggle.textContent = isOpen ? 'Hide' : 'Favorites';
+  }
+
+  if (favorites) favorites.setAttribute('aria-hidden', String(!isOpen));
+}
+
+function toggleFavoritesDrawer() {
+  const toggle = $('#image-lab-favorites-toggle');
+  const isOpen = toggle?.getAttribute('aria-expanded') !== 'false';
+  setFavoritesDrawerOpen(!isOpen);
 }
 
 async function fetchJson(url, options = {}) {
@@ -1490,6 +1602,7 @@ function applyWorkflowDefaults(overwrite = false) {
 function renderControls() {
   renderWorkflowOptions();
   renderModelOptions();
+  restoreImageLabFormValuesOnce();
   applyGenerationParameterConstraints();
   applyWorkflowDefaults(false);
   renderResolutionPresetGroup(RESOLUTION_PRESET_SELECTS.imageLab, '#image-lab-width', '#image-lab-height');
@@ -1767,6 +1880,7 @@ function applyGenerationPayloadToControls(payload) {
   }
 
   updatePayloadPreview();
+  persistImageLabFormValues();
   return warnings;
 }
 
@@ -3810,6 +3924,7 @@ function submitGenerationRequest(source = 'manual', options = {}) {
     if (state.autoGenerateEnabled) setAutoGenerateEnabled(false, { message: 'Auto-Generate turned off for manual generation.', ok: true });
     if (state.llmAutoGenerateEnabled) stopLlmAutoGenerate('LLM Auto-Generate turned off for manual generation.', true);
   }
+  persistImageLabFormValues();
   if (state.prewarmingModel) {
     return submissionValidationFailure(source, 'Model prewarming is still running. Submit again once the checkpoint is ready.', { wait: true });
   }
@@ -4106,6 +4221,8 @@ function wireEvents() {
     setLlmAutoGenerateEnabled(Boolean(event.currentTarget?.checked), { userInitiated: true });
   });
   $('#image-lab-slideshow-start')?.addEventListener('click', openImageLabSlideshow);
+  $('#image-lab-favorites-toggle')?.addEventListener('click', toggleFavoritesDrawer);
+  setFavoritesDrawerOpen(true);
   $('#image-lab-form')?.addEventListener('click', handlePromptClipboardClick);
   $('#image-lab-form')?.addEventListener('submit', handleGenerate);
   const positiveDrawer = $('#image-lab-positive-drawer');
@@ -4135,12 +4252,14 @@ function wireEvents() {
     applyWorkflowDefaults(true);
     renderModelOptions();
     updatePayloadPreview();
+    persistImageLabFormValues();
     if (selectedSourceRequiresPrewarm()) await prewarmSelectedModel();
   });
   for (const config of RESOLUTION_PRESET_SELECTS.imageLab) {
     $(config.selector)?.addEventListener('change', () => {
       applyResolutionPreset(config.selector, '#image-lab-width', '#image-lab-height', config.orientation, RESOLUTION_PRESET_SELECTS.imageLab);
       updatePayloadPreview();
+      persistImageLabFormValues();
     });
   }
   $('#image-lab-model')?.addEventListener('change', async () => {
@@ -4148,6 +4267,7 @@ function wireEvents() {
     applyGenerationParameterConstraints();
     applyWorkflowDefaults(true);
     updatePayloadPreview();
+    persistImageLabFormValues();
     if (selectedSourceRequiresPrewarm()) await prewarmSelectedModel();
   });
   $('#image-lab-gallery-size')?.addEventListener('input', (event) => {
@@ -4164,6 +4284,7 @@ function wireEvents() {
         syncResolutionPresetGroup(RESOLUTION_PRESET_SELECTS.imageLab, '#image-lab-width', '#image-lab-height');
       }
       updatePayloadPreview();
+      persistImageLabFormValues();
     };
     element?.addEventListener('input', handleParameterChange);
     element?.addEventListener('change', handleParameterChange);

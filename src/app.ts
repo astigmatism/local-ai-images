@@ -2246,7 +2246,7 @@ function renderImageGeneratorHtml(): string {
           </div>
         </div>
 
-        <div class="image-lab-main-grid">
+        <div id="image-lab-main-grid" class="image-lab-main-grid">
           <section class="image-lab-prompt-stack" aria-label="Prompt controls">
             <details id="image-lab-positive-drawer" class="image-lab-positive-drawer compact-details" open>
               <summary><span class="field-label">Positive prompt <span class="field-help" tabindex="0" title="Describe what the model should create. Add subject, style, composition, lighting, and details when the image does not follow the prompt or lacks detail.">?</span></span></summary>
@@ -2356,7 +2356,14 @@ function renderImageGeneratorHtml(): string {
             </div>
           </div>
 
-          <section class="image-lab-favorites-panel" aria-label="Saved image favorites">
+          <section id="image-lab-favorites-panel" class="image-lab-favorites-panel" aria-label="Saved image favorites">
+            <div class="image-lab-favorites-drawer-header">
+              <div class="image-lab-favorites-title">
+                <span class="field-label">Favorites</span>
+                <span class="hint">Saved gallery images</span>
+              </div>
+              <button id="image-lab-favorites-toggle" class="secondary image-lab-favorites-toggle" type="button" aria-controls="image-lab-favorites" aria-expanded="true" title="Collapse favorites drawer">Hide</button>
+            </div>
             <div id="image-lab-favorites" class="image-lab-favorites-strip placeholder">Loading favorites...</div>
           </section>
         </div>
