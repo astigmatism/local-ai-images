@@ -1280,6 +1280,40 @@ summary {
   font-weight: 800;
 }
 
+.image-lab-prompt-header,
+.image-lab-negative-field-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.image-lab-prompt-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.image-lab-prompt-actions button {
+  min-width: 0;
+  padding: 2px 7px;
+  border-radius: 7px;
+  border-color: rgba(96, 165, 250, 0.46);
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.68rem;
+  line-height: 1.2;
+}
+
+.image-lab-prompt-actions button:hover,
+.image-lab-prompt-actions button:focus-visible {
+  background: rgba(96, 165, 250, 0.12);
+}
+
 .image-lab-positive-field,
 .image-lab-negative-field,
 .image-lab-llm-guidance-field {
