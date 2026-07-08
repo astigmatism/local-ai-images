@@ -80,6 +80,7 @@ const state = {
   llmPromptValueAtSend: '',
   llmPendingPrompt: null,
   imageLabFormRestored: false,
+  imageLabWorkflowDefaultsApplied: false,
   loadedFavoritePayloadBase: null,
   galleryLimit: DEFAULT_GALLERY_LIMIT,
   galleryTileSize: readStoredGallerySize(),
@@ -1604,7 +1605,12 @@ function renderControls() {
   renderModelOptions();
   restoreImageLabFormValuesOnce();
   applyGenerationParameterConstraints();
-  applyWorkflowDefaults(false);
+  // Hydrate workflow defaults only once on initial control render. Source changes must never
+  // reapply defaults over active form values that the user is comparing across sources.
+  if (!state.imageLabWorkflowDefaultsApplied) {
+    state.imageLabWorkflowDefaultsApplied = true;
+    applyWorkflowDefaults(false);
+  }
   renderResolutionPresetGroup(RESOLUTION_PRESET_SELECTS.imageLab, '#image-lab-width', '#image-lab-height');
   const slider = $('#image-lab-gallery-size');
   const sliderValue = $('#image-lab-gallery-size-value');
@@ -3641,7 +3647,16 @@ async function refreshModelsOnly(message = '', options = {}) {
   if (message) setStatus(message);
 }
 
-async function prewarmSelectedModel() {
+function renderPrewarmState(preserveFormValues = false) {
+  if (preserveFormValues) {
+    renderControlChrome();
+    return;
+  }
+  renderControls();
+}
+
+async function prewarmSelectedModel(options = {}) {
+  const preserveFormValues = options.preserveFormValues === true;
   const source = selectedGenerationSource();
   if (!source) {
     setStatus('Choose a generation source before prewarming.', false);
@@ -3657,11 +3672,11 @@ async function prewarmSelectedModel() {
     return false;
   }
   state.prewarmingModel = model;
-  renderControls();
+  renderPrewarmState(preserveFormValues);
   setStatus(`Prewarming checkpoint ${model} for this generation workflow...`);
   try {
     await fetchJson('/api/v1/models/preload', { method: 'POST', body: JSON.stringify({ model }) });
-    await refreshModelsOnly(`Prewarmed checkpoint ${model} for this portal.`);
+    await refreshModelsOnly(`Prewarmed checkpoint ${model} for this portal.`, { renderControls: !preserveFormValues });
     return true;
   } catch (error) {
     const message = `Prewarm failed: ${error.message}`;
@@ -3673,7 +3688,7 @@ async function prewarmSelectedModel() {
     return false;
   } finally {
     state.prewarmingModel = null;
-    renderControls();
+    renderPrewarmState(preserveFormValues);
   }
 }
 
@@ -4302,12 +4317,12 @@ function wireEvents() {
     });
   }
   $('#image-lab-model')?.addEventListener('change', async () => {
-    state.selectedWorkflowId = selectedGenerationSource()?.workflowId || state.selectedWorkflowId;
+    const source = selectedGenerationSource();
+    state.selectedWorkflowId = source?.workflowId || state.selectedWorkflowId;
     applyGenerationParameterConstraints();
-    applyWorkflowDefaults(true);
     updatePayloadPreview();
     persistImageLabFormValues();
-    if (selectedSourceRequiresPrewarm()) await prewarmSelectedModel();
+    if (selectedSourceRequiresPrewarm(source)) await prewarmSelectedModel({ preserveFormValues: true });
   });
   $('#image-lab-gallery-size')?.addEventListener('input', (event) => {
     state.galleryTileSize = Number(event.target.value) || DEFAULT_TILE_SIZE;
