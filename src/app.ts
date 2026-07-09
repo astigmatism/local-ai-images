@@ -2234,10 +2234,19 @@ function renderImageGeneratorHtml(): string {
           </label>
           -->
 
-          <label class="image-lab-model-field">
-            <span class="field-label">Generation source <span class="field-help" tabindex="0" title="Choose a validated checkpoint or a compatible ComfyUI workflow source. Failed probe/status messages are shown as status, not as selectable sources.">?</span></span>
-            <select id="image-lab-model"></select>
-          </label>
+          <div id="image-lab-source-picker" class="image-lab-model-field image-lab-source-picker">
+            <select id="image-lab-model" class="visually-hidden image-lab-source-native" tabindex="-1" aria-hidden="true"></select>
+            <button id="image-lab-source-toggle" class="image-lab-source-toggle" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="image-lab-source-menu" aria-label="Select generation source">
+              <span class="image-lab-source-current-wrap">
+                <span id="image-lab-source-current" class="image-lab-source-current">Select generation source</span>
+                <span id="image-lab-source-current-meta" class="image-lab-source-current-meta"></span>
+              </span>
+              <span class="image-lab-source-caret" aria-hidden="true">▾</span>
+            </button>
+            <div id="image-lab-source-menu" class="image-lab-source-menu" role="listbox" aria-label="Generation sources" hidden>
+              <div id="image-lab-source-list" class="image-lab-source-list"></div>
+            </div>
+          </div>
           
           <div class="image-lab-top-actions">
             <div id="image-lab-status" class="feedback" aria-live="polite"></div>

@@ -7,6 +7,7 @@ const DEFAULT_TILE_SIZE = 300;
 const GALLERY_SIZE_STORAGE_KEY = 'local-ai-images-gallery-size';
 const CONTROLS_HEIGHT_STORAGE_KEY = 'local-ai-images-controls-height';
 const IMAGE_LAB_FORM_STORAGE_KEY = 'local-ai-images-image-lab-form-values-v1';
+const GENERATION_SOURCE_FAVORITES_STORAGE_KEY = 'local-ai-images-generation-source-favorites-v1';
 const CONTROLS_MIN_HEIGHT = 240;
 const CONTROLS_DEFAULT_HEIGHT = 320;
 const CONTROLS_MAX_VIEWPORT_RATIO = 0.58;
@@ -50,6 +51,8 @@ const state = {
   imageModels: null,
   generationSources: null,
   generationSourcePollTimer: null,
+  generationSourcePickerOpen: false,
+  generationSourceFavoriteIds: readStoredGenerationSourceFavoriteIds(),
   imageWorkflows: null,
   selectedWorkflowId: null,
   imageJobs: null,
@@ -150,6 +153,30 @@ function readStoredControlsHeight() {
   const raw = window.localStorage.getItem(CONTROLS_HEIGHT_STORAGE_KEY);
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readStoredGenerationSourceFavoriteIds() {
+  try {
+    const raw = window.localStorage.getItem(GENERATION_SOURCE_FAVORITES_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    const ids = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.ids) ? parsed.ids : [];
+    return new Set(ids.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()));
+  } catch {
+    return new Set();
+  }
+}
+
+function persistGenerationSourceFavoriteIds() {
+  try {
+    window.localStorage.setItem(GENERATION_SOURCE_FAVORITES_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      ids: Array.from(state.generationSourceFavoriteIds).sort((left, right) => left.localeCompare(right))
+    }));
+  } catch {
+    // Source favorites are a frontend convenience; blocked storage must not affect generation.
+  }
 }
 
 function readStoredImageLabFormValues() {
@@ -1386,6 +1413,240 @@ function workflowSources() {
     .filter((source) => source?.selectable !== false);
 }
 
+
+function generationSourceLabel(source) {
+  return String(source?.displayLabel || source?.label || source?.checkpointName || source?.workflowName || source?.id || '').trim();
+}
+
+function splitGenerationSourcePath(label) {
+  const segments = String(label || '').replace(/\\/g, '/').split('/').filter(Boolean);
+  if (segments.length <= 1) return { name: label || '', folder: '' };
+  return { name: segments.at(-1) || label || '', folder: segments.slice(0, -1).join('/') };
+}
+
+function generationSourceDisplayName(source) {
+  const label = generationSourceLabel(source) || 'Unnamed source';
+  if (source?.type !== 'checkpoint') return label;
+  return splitGenerationSourcePath(label).name || label;
+}
+
+function generationSourceTypeLabel(source) {
+  if (source?.type === 'workflow') return 'Workflow/subgraph';
+  if (source?.type === 'checkpoint') return 'Checkpoint';
+  return source?.type ? String(source.type) : 'Generation source';
+}
+
+function compactSourcePath(value) {
+  const label = String(value || '').replace(/\\/g, '/').trim();
+  if (!label) return '';
+  const parts = splitGenerationSourcePath(label);
+  return parts.folder ? `${parts.folder}/${parts.name}` : parts.name;
+}
+
+function generationSourceDetail(source) {
+  const details = [generationSourceTypeLabel(source)];
+  const label = generationSourceLabel(source);
+  const pathParts = splitGenerationSourcePath(label);
+  if (source?.type === 'checkpoint' && pathParts.folder) details.push(pathParts.folder);
+  if (source?.type === 'workflow') {
+    const workflowId = source.workflowId && source.workflowId !== label ? source.workflowId : '';
+    if (workflowId) details.push(workflowId);
+    if (source.checkpointName) details.push(`uses ${compactSourcePath(source.checkpointName)}`);
+  }
+  return details.filter(Boolean).join(' • ');
+}
+
+function sortedGenerationSourceList(sources) {
+  return [...sources].sort((left, right) => {
+    const labelCompare = generationSourceDisplayName(left).localeCompare(generationSourceDisplayName(right), undefined, { sensitivity: 'base', numeric: true });
+    if (labelCompare !== 0) return labelCompare;
+    const detailCompare = generationSourceDetail(left).localeCompare(generationSourceDetail(right), undefined, { sensitivity: 'base', numeric: true });
+    if (detailCompare !== 0) return detailCompare;
+    return String(left?.id || '').localeCompare(String(right?.id || ''), undefined, { sensitivity: 'base', numeric: true });
+  });
+}
+
+function favoriteGenerationSources() {
+  const favoriteIds = state.generationSourceFavoriteIds;
+  return sortedGenerationSourceList(generationSources().filter((source) => favoriteIds.has(source.id)));
+}
+
+function generalGenerationSources() {
+  const favoriteIds = state.generationSourceFavoriteIds;
+  return sortedGenerationSourceList(generationSources().filter((source) => !favoriteIds.has(source.id)));
+}
+
+function generationSourceFavoriteButton(source) {
+  const sourceId = String(source?.id || '');
+  const favorite = state.generationSourceFavoriteIds.has(sourceId);
+  const label = generationSourceDisplayName(source);
+  const title = favorite ? 'Remove from generation source favorites' : 'Add to generation source favorites';
+  return `<button type="button" class="image-lab-source-favorite-toggle${favorite ? ' is-favorite' : ''}" data-source-favorite-id="${escapeHtml(sourceId)}" aria-pressed="${favorite ? 'true' : 'false'}" aria-label="${escapeHtml(`${favorite ? 'Unfavorite' : 'Favorite'} ${label}`)}" title="${escapeHtml(title)}"><span aria-hidden="true">♥</span></button>`;
+}
+
+function generationSourceRowHtml(source) {
+  const sourceId = String(source?.id || '');
+  const selected = selectedGenerationSource()?.id === sourceId;
+  const displayName = generationSourceDisplayName(source);
+  const detail = generationSourceDetail(source);
+  return `<div class="image-lab-source-row${selected ? ' is-selected' : ''}" role="option" tabindex="0" data-source-id="${escapeHtml(sourceId)}" aria-selected="${selected ? 'true' : 'false'}">
+    <span class="image-lab-source-row-text">
+      <span class="image-lab-source-row-title">${escapeHtml(displayName)}</span>
+      <span class="image-lab-source-row-detail">${escapeHtml(detail)}</span>
+    </span>
+    ${generationSourceFavoriteButton(source)}
+  </div>`;
+}
+
+function generationSourceSectionHtml(title, sources, emptyMessage = '') {
+  if (!sources.length && !emptyMessage) return '';
+  const rows = sources.length
+    ? sources.map(generationSourceRowHtml).join('')
+    : `<div class="image-lab-source-empty">${escapeHtml(emptyMessage)}</div>`;
+  return `<section class="image-lab-source-section" aria-label="${escapeHtml(title)}">
+    <div class="image-lab-source-section-title">${escapeHtml(title)}</div>
+    <div class="image-lab-source-section-list">${rows}</div>
+  </section>`;
+}
+
+function generationSourcePickerPlaceholder() {
+  if (!state.generationSources) return 'Loading generation sources...';
+  const status = generationSourceProbeStatus();
+  if (status?.active || Number(status?.pending || 0) > 0) return 'Discovering checkpoint sources...';
+  return 'Select generation source';
+}
+
+function renderGenerationSourcePicker() {
+  const picker = $('#image-lab-source-picker');
+  const toggle = $('#image-lab-source-toggle');
+  const current = $('#image-lab-source-current');
+  const currentMeta = $('#image-lab-source-current-meta');
+  const menu = $('#image-lab-source-menu');
+  const list = $('#image-lab-source-list');
+  if (!toggle || !current || !currentMeta || !menu || !list) return;
+
+  const sources = generationSources();
+  const selected = selectedGenerationSource();
+  const disabled = sources.length === 0;
+  toggle.disabled = disabled;
+  toggle.classList.toggle('is-empty', !selected);
+  toggle.classList.toggle('is-loading', !state.generationSources || (generationSourceProbeInProgress() && sources.length === 0));
+  toggle.setAttribute('aria-expanded', state.generationSourcePickerOpen ? 'true' : 'false');
+  current.textContent = selected ? generationSourceDisplayName(selected) : generationSourcePickerPlaceholder();
+  currentMeta.textContent = selected ? generationSourceDetail(selected) : '';
+  const statusMessage = generationSourceStatusMessage();
+  toggle.title = selected
+    ? `${generationSourceLabel(selected)}${currentMeta.textContent ? ` (${currentMeta.textContent})` : ''}`
+    : (statusMessage || 'Choose a validated checkpoint or compatible workflow source.');
+
+  const favorites = favoriteGenerationSources();
+  const general = generalGenerationSources();
+  const favoriteHtml = favorites.length ? generationSourceSectionHtml('Favorites', favorites) : '';
+  const generalHtml = generationSourceSectionHtml('All generation sources', general, sources.length ? 'All available sources are currently favorited.' : generationSourcePlaceholder());
+  list.innerHTML = `${favoriteHtml}${generalHtml}`;
+  picker?.classList.toggle('is-open', state.generationSourcePickerOpen);
+  menu.classList.toggle('is-open', state.generationSourcePickerOpen);
+  menu.hidden = !state.generationSourcePickerOpen;
+  if (state.generationSourcePickerOpen) positionGenerationSourcePicker();
+}
+
+function positionGenerationSourcePicker() {
+  const toggle = $('#image-lab-source-toggle');
+  const menu = $('#image-lab-source-menu');
+  if (!toggle || !menu || menu.hidden) return;
+  const rect = toggle.getBoundingClientRect();
+  const margin = 12;
+  const gap = 6;
+  const viewportWidth = Math.max(window.innerWidth || 0, 320);
+  const viewportHeight = Math.max(window.innerHeight || 0, 320);
+  const preferredWidth = Math.max(rect.width, Math.min(520, viewportWidth - (margin * 2)));
+  const width = Math.min(preferredWidth, viewportWidth - (margin * 2));
+  const left = Math.min(Math.max(margin, rect.left), Math.max(margin, viewportWidth - width - margin));
+  const below = viewportHeight - rect.bottom - margin - gap;
+  const above = rect.top - margin - gap;
+  const openAbove = below < 180 && above > below;
+  const maxHeight = Math.max(160, Math.min(420, openAbove ? above : below));
+  const top = openAbove
+    ? Math.max(margin, rect.top - maxHeight - gap)
+    : Math.min(rect.bottom + gap, viewportHeight - maxHeight - margin);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${Math.max(margin, top)}px`;
+  menu.style.width = `${width}px`;
+  menu.style.setProperty('--image-lab-source-menu-max-height', `${maxHeight}px`);
+}
+
+function sourceRowOrButtonById(selector, sourceId) {
+  return Array.from(document.querySelectorAll(selector)).find((element) => element.dataset.sourceId === sourceId || element.dataset.sourceFavoriteId === sourceId) || null;
+}
+
+function focusGenerationSourceRow(sourceId = '') {
+  const menu = $('#image-lab-source-menu');
+  if (!menu || menu.hidden) return;
+  const target = sourceId ? sourceRowOrButtonById('[data-source-id]', sourceId) : null;
+  const fallback = menu.querySelector('.image-lab-source-row.is-selected') || menu.querySelector('.image-lab-source-row');
+  window.setTimeout(() => (target || fallback)?.focus?.(), 0);
+}
+
+function focusGenerationSourceFavorite(sourceId) {
+  const button = sourceRowOrButtonById('[data-source-favorite-id]', sourceId);
+  window.setTimeout(() => button?.focus?.(), 0);
+}
+
+function openGenerationSourcePicker() {
+  if (generationSources().length === 0) return;
+  state.generationSourcePickerOpen = true;
+  renderGenerationSourcePicker();
+  focusGenerationSourceRow(selectedGenerationSource()?.id || '');
+}
+
+function closeGenerationSourcePicker(options = {}) {
+  if (!state.generationSourcePickerOpen) return;
+  state.generationSourcePickerOpen = false;
+  renderGenerationSourcePicker();
+  if (options.focusToggle) $('#image-lab-source-toggle')?.focus?.();
+}
+
+function toggleGenerationSourcePicker() {
+  if (state.generationSourcePickerOpen) closeGenerationSourcePicker();
+  else openGenerationSourcePicker();
+}
+
+function toggleGenerationSourceFavorite(sourceId) {
+  if (!sourceId || !generationSources().some((source) => source.id === sourceId)) return;
+  if (state.generationSourceFavoriteIds.has(sourceId)) state.generationSourceFavoriteIds.delete(sourceId);
+  else state.generationSourceFavoriteIds.add(sourceId);
+  persistGenerationSourceFavoriteIds();
+  renderGenerationSourcePicker();
+  focusGenerationSourceFavorite(sourceId);
+}
+
+function dispatchGenerationSourceChanged() {
+  const select = $('#image-lab-model');
+  if (!select) return;
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function selectGenerationSourceFromPicker(sourceId) {
+  const source = generationSources().find((candidate) => candidate.id === sourceId);
+  const select = $('#image-lab-model');
+  if (!source || !select) return;
+  const changed = select.value !== source.id;
+  select.value = source.id;
+  renderGenerationSourcePicker();
+  closeGenerationSourcePicker({ focusToggle: true });
+  if (changed) dispatchGenerationSourceChanged();
+}
+
+function moveGenerationSourceFocus(direction) {
+  const rows = Array.from(document.querySelectorAll('#image-lab-source-menu .image-lab-source-row'));
+  if (!rows.length) return;
+  const currentIndex = rows.indexOf(document.activeElement);
+  const nextIndex = currentIndex < 0
+    ? (direction > 0 ? 0 : rows.length - 1)
+    : (currentIndex + direction + rows.length) % rows.length;
+  rows[nextIndex]?.focus?.();
+}
+
 function selectedGenerationSource() {
   const value = $('#image-lab-model')?.value || '';
   if (!value) return null;
@@ -1577,6 +1838,7 @@ function renderModelOptions() {
   select.value = selected;
   select.disabled = allSources.length === 0;
   state.selectedWorkflowId = selectedGenerationSource()?.workflowId || state.selectedWorkflowId;
+  renderGenerationSourcePicker();
   scheduleGenerationSourceProbePoll();
 }
 
@@ -1611,6 +1873,7 @@ function renderControls() {
     state.imageLabWorkflowDefaultsApplied = true;
     applyWorkflowDefaults(false);
   }
+  renderGenerationSourcePicker();
   renderResolutionPresetGroup(RESOLUTION_PRESET_SELECTS.imageLab, '#image-lab-width', '#image-lab-height');
   const slider = $('#image-lab-gallery-size');
   const sliderValue = $('#image-lab-gallery-size-value');
@@ -1770,6 +2033,14 @@ function setInputValue(selector, value) {
   input.value = String(value);
 }
 
+function applySelectedGenerationSource(source, select = $('#image-lab-model')) {
+  if (!source || !select) return false;
+  select.value = source.id;
+  state.selectedWorkflowId = source.workflowId || state.selectedWorkflowId;
+  renderGenerationSourcePicker();
+  return true;
+}
+
 function selectSourceByPayload(payload) {
   const select = $('#image-lab-model');
   if (!select) return false;
@@ -1777,32 +2048,20 @@ function selectSourceByPayload(payload) {
   const sourceType = payloadString(payload, ['generation_source_type', 'generationSourceType', 'source_type', 'sourceType']);
   if (sourceId) {
     const direct = generationSources().find((source) => source.id === sourceId && (!sourceType || source.type === sourceType));
-    if (direct) {
-      select.value = direct.id;
-      state.selectedWorkflowId = direct.workflowId || state.selectedWorkflowId;
-      return true;
-    }
+    if (direct) return applySelectedGenerationSource(direct, select);
   }
 
   const workflowSourceId = payloadString(payload, ['workflow_source_id', 'workflowSourceId']);
   if (workflowSourceId) {
     const direct = generationSources().find((source) => source.id === workflowSourceId || (source.type === 'workflow' && source.workflowId === workflowSourceId));
-    if (direct) {
-      select.value = direct.id;
-      state.selectedWorkflowId = direct.workflowId || state.selectedWorkflowId;
-      return true;
-    }
+    if (direct) return applySelectedGenerationSource(direct, select);
   }
 
   const workflowId = payloadString(payload, ['workflow_id', 'workflowId', 'workflow']);
   const model = payloadString(payload, ['model', 'checkpoint', 'checkpoint_name', 'checkpointName']);
   if (sourceType === 'workflow' || (!model && workflowId)) {
     const workflowSource = workflowSources().find((source) => source.workflowId === workflowId);
-    if (workflowSource) {
-      select.value = workflowSource.id;
-      state.selectedWorkflowId = workflowSource.workflowId || state.selectedWorkflowId;
-      return true;
-    }
+    if (workflowSource) return applySelectedGenerationSource(workflowSource, select);
   }
   if (model) return selectModelByPayload(model);
   return true;
@@ -1813,25 +2072,13 @@ function selectModelByPayload(model) {
   const select = $('#image-lab-model');
   if (!select) return false;
   const direct = generationSources().find((source) => source.id === model);
-  if (direct) {
-    select.value = direct.id;
-    state.selectedWorkflowId = direct.workflowId || state.selectedWorkflowId;
-    return true;
-  }
+  if (direct) return applySelectedGenerationSource(direct, select);
   const matchedSource = checkpointSources().find((source) => sourceMatchesCheckpointValue(source, model));
-  if (matchedSource) {
-    select.value = matchedSource.id;
-    state.selectedWorkflowId = matchedSource.workflowId || state.selectedWorkflowId;
-    return true;
-  }
+  if (matchedSource) return applySelectedGenerationSource(matchedSource, select);
   const matchedModel = (state.imageModels?.models || []).find((candidate) => modelMatches(candidate, model));
   if (matchedModel) {
     const matchedByInventory = checkpointSources().find((source) => sourceMatchesCheckpointValue(source, modelIdentifier(matchedModel)));
-    if (matchedByInventory) {
-      select.value = matchedByInventory.id;
-      state.selectedWorkflowId = matchedByInventory.workflowId || state.selectedWorkflowId;
-      return true;
-    }
+    if (matchedByInventory) return applySelectedGenerationSource(matchedByInventory, select);
   }
   return false;
 }
@@ -4261,8 +4508,78 @@ function initResizableControls() {
   window.addEventListener('resize', () => applyControlsHeight());
 }
 
+
+function handleGenerationSourcePickerClick(event) {
+  const favoriteButton = event.target.closest?.('[data-source-favorite-id]');
+  if (favoriteButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleGenerationSourceFavorite(favoriteButton.dataset.sourceFavoriteId || '');
+    return;
+  }
+
+  const row = event.target.closest?.('[data-source-id]');
+  if (!row) return;
+  event.preventDefault();
+  selectGenerationSourceFromPicker(row.dataset.sourceId || '');
+}
+
+function handleGenerationSourcePickerKeydown(event) {
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    moveGenerationSourceFocus(1);
+    return;
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    moveGenerationSourceFocus(-1);
+    return;
+  }
+  if (event.key === 'Home') {
+    event.preventDefault();
+    const first = document.querySelector('#image-lab-source-menu .image-lab-source-row');
+    first?.focus?.();
+    return;
+  }
+  if (event.key === 'End') {
+    event.preventDefault();
+    const rows = document.querySelectorAll('#image-lab-source-menu .image-lab-source-row');
+    rows[rows.length - 1]?.focus?.();
+    return;
+  }
+
+  if ((event.key === 'Enter' || event.key === ' ') && !event.target.closest?.('[data-source-favorite-id]')) {
+    const row = event.target.closest?.('[data-source-id]');
+    if (!row) return;
+    event.preventDefault();
+    selectGenerationSourceFromPicker(row.dataset.sourceId || '');
+  }
+}
+
+function handleGenerationSourceDocumentClick(event) {
+  if (!state.generationSourcePickerOpen) return;
+  const picker = $('#image-lab-source-picker');
+  if (picker && picker.contains(event.target)) return;
+  closeGenerationSourcePicker();
+}
+
+function handleGenerationSourceDocumentKeydown(event) {
+  if (!state.generationSourcePickerOpen) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeGenerationSourcePicker({ focusToggle: true });
+  }
+}
+
 function wireEvents() {
   initResizableControls();
+  $('#image-lab-source-toggle')?.addEventListener('click', toggleGenerationSourcePicker);
+  $('#image-lab-source-list')?.addEventListener('click', handleGenerationSourcePickerClick);
+  $('#image-lab-source-list')?.addEventListener('keydown', handleGenerationSourcePickerKeydown);
+  document.addEventListener('click', handleGenerationSourceDocumentClick);
+  document.addEventListener('keydown', handleGenerationSourceDocumentKeydown);
+  window.addEventListener('resize', positionGenerationSourcePicker);
+  window.addEventListener('scroll', positionGenerationSourcePicker, true);
   $('#image-lab-refresh')?.addEventListener('click', () => refreshAll('Image generator refreshed and generation sources are being rescanned.', { forceGenerationSourceRefresh: true }));
   $('#image-lab-generate')?.addEventListener('click', () => {
     if (state.autoGenerateEnabled) setAutoGenerateEnabled(false, { message: 'Auto-Generate turned off for manual generation.', ok: true });
@@ -4319,6 +4636,7 @@ function wireEvents() {
   $('#image-lab-model')?.addEventListener('change', async () => {
     const source = selectedGenerationSource();
     state.selectedWorkflowId = source?.workflowId || state.selectedWorkflowId;
+    renderGenerationSourcePicker();
     applyGenerationParameterConstraints();
     updatePayloadPreview();
     persistImageLabFormValues();
