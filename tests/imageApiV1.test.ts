@@ -24,6 +24,7 @@ async function tempImageRuntimeConfig(overrides = {}) {
     imageArtifactPath: artifactPath,
     favoriteImagePromptsPath: path.join(root, 'favorite-image-prompts.json'),
     imageFavoritesPath: path.join(root, 'image-favorites.json'),
+    generationSourceMetadataPath: path.join(root, 'generation-source-metadata.json'),
     imageDefaultSyncTimeoutMs: 0,
     imageMaxSyncTimeoutMs: 2000,
     imageMockDelayMs: 1,
@@ -217,6 +218,94 @@ test('GET /api/v1/generation-sources probes checkpoints, groups workflow sources
     assert.equal(generatedWithWorkflow.job.generationSourceType, 'workflow');
     assert.equal(generatedWithWorkflow.job.generationSourceId, workflow.id);
     assert.equal(generatedWithWorkflow.job.requestPayload.workflow_source_id, workflow.id);
+  });
+});
+
+
+test('generation source metadata persists server-side favorites, notes, and browser-visible source metadata', async () => {
+  const runtimeConfig = await tempImageRuntimeConfig({ imageDefaultSyncTimeoutMs: 1000, imageMockDelayMs: 1 });
+  const checkpointDir = path.join(runtimeConfig.imageModelPaths[0]!, 'checkpoints');
+  await fs.mkdir(path.join(checkpointDir, 'Cartoon'), { recursive: true });
+  await fs.writeFile(path.join(checkpointDir, 'Cartoon', 'flux-demo.safetensors'), 'flux demo');
+  const customWorkflow = {
+    ...builtinWorkflows()[0]!,
+    id: 'custom-flux-workflow',
+    name: 'Custom Flux workflow',
+    category: 'Experimental workflows',
+    prompt_style: 'Flux',
+    constraints: {
+      steps: '20-30',
+      cfg_scale: '1.0',
+      resolution: '1024x1024 preferred',
+      notes: ['Workflow manifest recommendation']
+    },
+    source: undefined
+  };
+  await fs.writeFile(path.join(runtimeConfig.imageWorkflowPath, 'custom-flux-workflow.json'), JSON.stringify(customWorkflow));
+
+  let persistedSourceId = '';
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    const list = await waitForGenerationSources(baseUrl, (body) => {
+      return generationSourceGroup(body, 'checkpoints').some((source) => source.checkpointName === 'Cartoon/flux-demo.safetensors' && source.probeStatus === 'valid');
+    });
+    const checkpoint = generationSourceGroup(list, 'checkpoints').find((source) => source.checkpointName === 'Cartoon/flux-demo.safetensors');
+    assert.ok(checkpoint);
+    persistedSourceId = stringField(checkpoint, 'id');
+    assert.equal(testRecord(checkpoint.category).name, 'Cartoon');
+    assert.equal(typeof testRecord(checkpoint.category).color, 'string');
+    assert.equal(testRecord(checkpoint.promptStyle).value, 'Flux');
+    assert.equal(testRecord(checkpoint.promptStyle).confidence, 'inferred');
+    assert.equal(testRecord(checkpoint.constraints).steps, 'default 28');
+    assert.equal(testRecord(checkpoint.constraints).cfgScale, 'default 7');
+
+    const workflow = generationSourceGroup(list, 'workflows').find((source) => source.id === 'workflow:custom-flux-workflow');
+    assert.ok(workflow);
+    assert.equal(testRecord(workflow.category).name, 'Experimental workflows');
+    assert.equal(testRecord(workflow.promptStyle).value, 'Flux');
+    assert.equal(testRecord(workflow.promptStyle).confidence, 'explicit');
+    assert.equal(testRecord(workflow.constraints).steps, '20-30');
+    assert.equal(testRecord(workflow.constraints).cfgScale, '1.0');
+    assert.equal(testRecord(workflow.constraints).resolution, '1024x1024 preferred');
+
+    const patched = await (await fetch(`${baseUrl}/api/v1/generation-sources/metadata/${encodeURIComponent(persistedSourceId)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ favorite: true, notes: 'Great for cartoons. Avoid high CFG.' })
+    })).json();
+    assert.equal(patched.ok, true);
+    assert.equal(patched.metadata.sourceId, persistedSourceId);
+    assert.equal(patched.metadata.favorite, true);
+    assert.equal(patched.metadata.notes, 'Great for cartoons. Avoid high CFG.');
+
+    const metadataList = await (await fetch(`${baseUrl}/api/v1/generation-sources/metadata`)).json();
+    assert.equal(metadataList.ok, true);
+    assert.equal(metadataList.metadata.length, 1);
+    assert.equal(metadataList.metadata[0].sourceId, persistedSourceId);
+
+    const decorated = await (await fetch(`${baseUrl}/api/v1/generation-sources`)).json();
+    const decoratedCheckpoint = generationSourceGroup(testRecord(decorated), 'checkpoints').find((source) => source.id === persistedSourceId);
+    assert.ok(decoratedCheckpoint);
+    assert.equal(testRecord(decoratedCheckpoint.userMetadata).favorite, true);
+    assert.equal(testRecord(decoratedCheckpoint.userMetadata).notes, 'Great for cartoons. Avoid high CFG.');
+  });
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    const list = await waitForGenerationSources(baseUrl, (body) => {
+      return generationSourceGroup(body, 'checkpoints').some((source) => source.id === persistedSourceId && testRecord(source.userMetadata).favorite === true);
+    });
+    const checkpoint = generationSourceGroup(list, 'checkpoints').find((source) => source.id === persistedSourceId);
+    assert.ok(checkpoint);
+    assert.equal(testRecord(checkpoint.userMetadata).notes, 'Great for cartoons. Avoid high CFG.');
   });
 });
 

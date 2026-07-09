@@ -5,6 +5,7 @@ export type ModelInstallType = 'checkpoint' | 'lora' | 'vae' | 'controlnet' | 'u
 export type ModelDownloadStatus = 'queued' | 'downloading' | 'succeeded' | 'failed' | 'canceled';
 export type GenerationSourceType = 'checkpoint' | 'workflow';
 export type CheckpointProbeStatus = 'pending' | 'valid' | 'invalid' | 'error';
+export type GenerationSourceMetadataOrigin = 'manifest' | 'folder' | 'filename' | 'workflow' | 'workflow-defaults' | 'inferred' | 'user' | 'fallback' | 'unknown';
 export type ImagePromptLlmRequestFormat = 'openai_chat' | 'ollama_chat' | 'ollama_generate' | 'simple_json';
 
 export interface ImagePromptLlmSettings {
@@ -48,6 +49,7 @@ export interface RuntimeConfig {
   imageArtifactPublicBaseUrl: string;
   favoriteImagePromptsPath: string;
   imageFavoritesPath: string;
+  generationSourceMetadataPath: string;
   imageDefaultModel: string;
   imageDefaultWorkflowId: string;
   imagePreloadDefaultOnStartup: boolean;
@@ -246,6 +248,38 @@ export interface GenerationSourceCapabilities {
   sourceWorkflowId?: string;
 }
 
+export interface GenerationSourceCategoryMetadata {
+  name: string;
+  color: string;
+  origin: GenerationSourceMetadataOrigin;
+  path?: string;
+}
+
+export interface GenerationSourcePromptStyleMetadata {
+  value: string;
+  origin: GenerationSourceMetadataOrigin;
+  confidence: 'explicit' | 'inferred' | 'unknown';
+}
+
+export interface GenerationSourceConstraintMetadata {
+  steps?: string;
+  cfgScale?: string;
+  resolution?: string;
+  notes?: string[];
+  origin: GenerationSourceMetadataOrigin;
+}
+
+export interface GenerationSourceUserMetadata {
+  sourceId: string;
+  favorite: boolean;
+  notes: string;
+  promptStyleOverride?: string | null;
+  categoryOverride?: string | null;
+  colorOverride?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface GenerationSourceSummary {
   id: string;
   type: GenerationSourceType;
@@ -260,6 +294,10 @@ export interface GenerationSourceSummary {
   checkpointId?: string;
   probeStatus?: CheckpointProbeStatus;
   source: 'checkpoint-probe' | 'workflow-registry';
+  category?: GenerationSourceCategoryMetadata;
+  promptStyle?: GenerationSourcePromptStyleMetadata;
+  constraints?: GenerationSourceConstraintMetadata;
+  userMetadata?: GenerationSourceUserMetadata;
 }
 
 export interface GenerationSourceListStatus {
@@ -290,6 +328,11 @@ export interface GenerationSourceList {
     workflows: GenerationSourceSummary[];
   };
   status: GenerationSourceListStatus;
+  sourceMetadata?: GenerationSourceUserMetadata[];
+  sourceMetadataStatus?: {
+    ok: boolean;
+    error?: { code: string; message: string };
+  };
 }
 
 export interface WorkflowPresetDefaults {
@@ -301,6 +344,17 @@ export interface WorkflowPresetDefaults {
   samplerName?: string;
   scheduler?: string;
   checkpoint?: string;
+}
+
+export interface WorkflowPresetMetadata {
+  category?: string;
+  promptStyle?: string;
+  constraints?: {
+    steps?: string;
+    cfgScale?: string;
+    resolution?: string;
+    notes?: string[];
+  };
 }
 
 export interface ComfyUiWorkflowMapping {
@@ -331,6 +385,7 @@ export interface WorkflowPreset {
   parameters: string[];
   source: 'builtin' | 'file';
   filePath?: string;
+  metadata?: WorkflowPresetMetadata;
   comfyui: {
     prompt: Record<string, unknown>;
     mappings: ComfyUiWorkflowMapping;

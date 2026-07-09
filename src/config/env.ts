@@ -167,6 +167,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
   const artifactPath = readPath('IMAGE_ARTIFACT_PATH', './data/artifacts');
   const favoriteImagePromptsPath = readPath('FAVORITE_IMAGE_PROMPTS_PATH', path.join(path.dirname(configPath), 'favorite-image-prompts.json'));
   const imageFavoritesPath = readPath('IMAGE_FAVORITES_PATH', path.join(path.dirname(configPath), 'image-favorites.json'));
+  const generationSourceMetadataPath = readPath('GENERATION_SOURCE_METADATA_PATH', path.join(path.dirname(configPath), 'generation-source-metadata.json'));
   const artifactPublicBaseUrl = readOptionalString('IMAGE_ARTIFACT_PUBLIC_BASE_URL') || '/api/v1/artifacts';
   const legacyOllamaEnabled = readBoolean('LEGACY_OLLAMA_ENABLED', false);
   const imageModelPaths = readPathList('IMAGE_MODEL_PATHS', ['./models']);
@@ -210,6 +211,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
     imageArtifactPublicBaseUrl: normalizeBaseUrl(artifactPublicBaseUrl),
     favoriteImagePromptsPath,
     imageFavoritesPath,
+    generationSourceMetadataPath,
     imageDefaultModel: readOptionalString('IMAGE_DEFAULT_MODEL'),
     imageDefaultWorkflowId,
     imagePreloadDefaultOnStartup: readBoolean('IMAGE_PRELOAD_DEFAULT_ON_STARTUP', false),

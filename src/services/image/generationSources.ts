@@ -6,6 +6,9 @@ import type {
   GenerationSourceList,
   GenerationSourceListStatus,
   GenerationSourceSummary,
+  GenerationSourceCategoryMetadata,
+  GenerationSourceConstraintMetadata,
+  GenerationSourcePromptStyleMetadata,
   ImageGenerationProvider,
   ModelInventory,
   ModelInventoryItem,
@@ -381,30 +384,37 @@ export class GenerationSourceRegistry {
   }
 
   private buildSourceList(): GenerationSourceList {
+    const workflows = this.workflowStore.getCachedWorkflows();
+    const defaultWorkflow = workflows.find((workflow) => workflow.id === this.runtimeConfig.imageDefaultWorkflowId);
     const checkpointSources = [...this.checkpointProbeCache.values()]
       .filter((entry) => entry.status !== 'invalid')
       .sort((left, right) => left.checkpointName.localeCompare(right.checkpointName))
-      .map((entry): GenerationSourceSummary => ({
-        id: entry.checkpointId,
-        type: 'checkpoint',
-        label: entry.checkpointName,
-        displayLabel: entry.checkpointName,
-        selectable: true,
-        capabilityStatus: checkpointCapabilityStatus(entry.status),
-        checkpointName: entry.checkpointName,
-        checkpointId: entry.model.id,
-        workflowId: this.runtimeConfig.imageDefaultWorkflowId,
-        source: 'checkpoint-probe',
-        probeStatus: entry.status,
-        capabilities: {
-          textToImage: true,
-          supportsSeed: true,
-          supportsCheckpoint: true,
-          sourceWorkflowId: this.runtimeConfig.imageDefaultWorkflowId
-        }
-      }));
+      .map((entry): GenerationSourceSummary => {
+        const category = checkpointCategory(entry.model);
+        return {
+          id: entry.checkpointId,
+          type: 'checkpoint',
+          label: entry.checkpointName,
+          displayLabel: entry.checkpointName,
+          selectable: true,
+          capabilityStatus: checkpointCapabilityStatus(entry.status),
+          checkpointName: entry.checkpointName,
+          checkpointId: entry.model.id,
+          workflowId: this.runtimeConfig.imageDefaultWorkflowId,
+          source: 'checkpoint-probe',
+          probeStatus: entry.status,
+          category,
+          promptStyle: inferCheckpointPromptStyle(entry.model, category.name),
+          ...(defaultWorkflow ? { constraints: constraintsFromWorkflow(defaultWorkflow, 'workflow-defaults') } : {}),
+          capabilities: {
+            textToImage: true,
+            supportsSeed: true,
+            supportsCheckpoint: true,
+            sourceWorkflowId: this.runtimeConfig.imageDefaultWorkflowId
+          }
+        };
+      });
 
-    const workflows = this.workflowStore.getCachedWorkflows();
     const workflowResults = workflows.filter(isStandaloneWorkflowSource).map((workflow) => ({ workflow, compatibility: workflowCompatibility(workflow) }));
     const workflowSources = workflowResults
       .filter((item) => item.compatibility.ok)
@@ -420,6 +430,9 @@ export class GenerationSourceRegistry {
         workflowName: workflow.name,
         ...(compatibility.checkpointName ? { checkpointName: compatibility.checkpointName } : {}),
         source: 'workflow-registry',
+        category: workflowCategory(workflow),
+        promptStyle: workflowPromptStyle(workflow, compatibility.checkpointName),
+        constraints: constraintsFromWorkflow(workflow, workflow.metadata?.constraints ? 'manifest' : 'workflow-defaults'),
         capabilities: {
           textToImage: true,
           supportsSeed: compatibility.supportsSeed,
@@ -482,6 +495,108 @@ export function sourceMatchesCheckpoint(source: GenerationSourceSummary, model: 
   return Boolean(normalized) && [source.checkpointName, source.label, source.displayLabel, source.id]
     .filter((value): value is string => typeof value === 'string')
     .some((value) => normalizeProviderCheckpointName(value) === normalized);
+}
+
+
+const UNCATEGORIZED_SOURCE_CATEGORY = 'Uncategorized';
+
+function checkpointCategory(model: ModelInventoryItem): GenerationSourceCategoryMetadata {
+  const pathSegments = model.comfyName.split('/').filter(Boolean);
+  const relativeSegments = model.relativePath.split('/').filter(Boolean);
+  const displaySegments = pathSegments.length > 1 ? pathSegments : relativeSegments;
+  const categoryName = categoryNameFromPathSegments(displaySegments);
+  const name = categoryName || UNCATEGORIZED_SOURCE_CATEGORY;
+  return {
+    name,
+    color: colorForCategory(name),
+    origin: categoryName ? 'folder' : 'fallback',
+    ...(categoryName ? { path: displaySegments.slice(0, -1).join('/') } : {})
+  };
+}
+
+function workflowCategory(workflow: WorkflowPreset): GenerationSourceCategoryMetadata {
+  const configured = workflow.metadata?.category?.trim();
+  const name = configured || 'Workflow';
+  return {
+    name,
+    color: colorForCategory(name),
+    origin: configured ? 'manifest' : 'fallback'
+  };
+}
+
+function categoryNameFromPathSegments(segments: string[]): string | null {
+  const cleaned = segments.map((segment) => segment.trim()).filter(Boolean);
+  if (cleaned.length <= 1) return null;
+  const folders = cleaned.slice(0, -1).filter((segment) => !isCheckpointRootSegment(segment));
+  if (folders.length === 0) return null;
+  if (folders.length === 1) return folders[0]!;
+  return folders.slice(0, 2).join(' / ');
+}
+
+function isCheckpointRootSegment(value: string): boolean {
+  return ['checkpoints', 'checkpoint', 'models', 'model'].includes(value.trim().toLowerCase());
+}
+
+function colorForCategory(categoryName: string): string {
+  const normalized = categoryName.trim().toLowerCase();
+  if (!normalized || normalized === UNCATEGORIZED_SOURCE_CATEGORY.toLowerCase()) return 'hsl(215 18% 58%)';
+  const digest = crypto.createHash('sha1').update(normalized).digest();
+  const hue = digest.readUInt16BE(0) % 360;
+  const saturation = 62 + (digest[2]! % 18);
+  const lightness = 50 + (digest[3]! % 12);
+  return `hsl(${hue} ${saturation}% ${lightness}%)`;
+}
+
+function inferCheckpointPromptStyle(model: ModelInventoryItem, categoryName: string): GenerationSourcePromptStyleMetadata {
+  const text = [model.relativePath, model.comfyName, model.fileName, model.displayName, categoryName].join(' ');
+  return inferPromptStyle(text, 'filename');
+}
+
+function workflowPromptStyle(workflow: WorkflowPreset, checkpointName: string | null): GenerationSourcePromptStyleMetadata {
+  const explicit = workflow.metadata?.promptStyle?.trim();
+  if (explicit) {
+    return { value: explicit, origin: 'manifest', confidence: 'explicit' };
+  }
+  if (workflowContainsClass(workflow, 'FluxGuidance')) {
+    return { value: 'Flux', origin: 'workflow', confidence: 'inferred' };
+  }
+  const fromText = inferPromptStyle([workflow.id, workflow.name, workflow.description, checkpointName ?? ''].join(' '), 'workflow');
+  return fromText;
+}
+
+function inferPromptStyle(text: string, origin: GenerationSourcePromptStyleMetadata['origin']): GenerationSourcePromptStyleMetadata {
+  const normalized = text.toLowerCase();
+  const matches: Array<[RegExp, string]> = [
+    [/(^|[^a-z0-9])flux([^a-z0-9]|$)|schnell|flux1|flux-dev|flux_dev/iu, 'Flux'],
+    [/(^|[^a-z0-9])pony([^a-z0-9]|$)|ponyxl|pony-xl/iu, 'Pony'],
+    [/illustrious/iu, 'Illustrious'],
+    [/sdxl|sd_xl|stable[_.\-\s]?diffusion[_.\-\s]?xl|xl[_.\-\s]?base|juggernaut[_.\-\s]?xl|realvis[_.\-\s]?xl/iu, 'SDXL'],
+    [/sd[_.\-\s]?1[_.\-\s]?5|stable[_.\-\s]?diffusion[_.\-\s]?1[_.\-\s]?5|v1[_.\-\s]?5/iu, 'SD 1.5'],
+    [/anime|animagine|waifu|anything[_.\-\s]?v\d|cetus|counterfeit/iu, 'Anime']
+  ];
+  for (const [pattern, value] of matches) {
+    if (pattern.test(normalized)) return { value, origin, confidence: 'inferred' };
+  }
+  return { value: 'Unknown', origin: 'unknown', confidence: 'unknown' };
+}
+
+function workflowContainsClass(workflow: WorkflowPreset, classType: string): boolean {
+  return Object.values(workflow.comfyui.prompt).some((node) => isRecord(node) && node.class_type === classType);
+}
+
+function constraintsFromWorkflow(workflow: WorkflowPreset, origin: GenerationSourceConstraintMetadata['origin']): GenerationSourceConstraintMetadata {
+  const explicit = workflow.metadata?.constraints;
+  const steps = explicit?.steps ?? (workflow.defaults.steps !== undefined ? `default ${workflow.defaults.steps}` : undefined);
+  const cfgScale = explicit?.cfgScale ?? (workflow.defaults.cfgScale !== undefined ? `default ${workflow.defaults.cfgScale}` : undefined);
+  const resolution = explicit?.resolution ?? ((workflow.defaults.width !== undefined && workflow.defaults.height !== undefined) ? `default ${workflow.defaults.width}x${workflow.defaults.height}` : undefined);
+  const notes = explicit?.notes;
+  return {
+    ...(steps ? { steps } : {}),
+    ...(cfgScale ? { cfgScale } : {}),
+    ...(resolution ? { resolution } : {}),
+    ...(notes && notes.length > 0 ? { notes } : {}),
+    origin
+  };
 }
 
 function isEligibleCheckpointCandidate(model: ModelInventoryItem): boolean {

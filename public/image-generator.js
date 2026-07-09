@@ -52,7 +52,15 @@ const state = {
   generationSources: null,
   generationSourcePollTimer: null,
   generationSourcePickerOpen: false,
-  generationSourceFavoriteIds: readStoredGenerationSourceFavoriteIds(),
+  generationSourceFavoriteIds: new Set(),
+  generationSourceMetadataById: {},
+  generationSourceMetadataRecordCount: 0,
+  generationSourceLocalFavoriteIds: readStoredGenerationSourceFavoriteIds(),
+  generationSourceLocalFavoritesMigrationAttempted: false,
+  generationSourceFavoritePendingIds: new Set(),
+  generationSourceNotesOpenId: null,
+  generationSourceNoteDrafts: {},
+  generationSourceNotesSavingIds: new Set(),
   imageWorkflows: null,
   selectedWorkflowId: null,
   imageJobs: null,
@@ -167,16 +175,187 @@ function readStoredGenerationSourceFavoriteIds() {
   }
 }
 
-function persistGenerationSourceFavoriteIds() {
+function clearStoredGenerationSourceFavoriteIds() {
   try {
-    window.localStorage.setItem(GENERATION_SOURCE_FAVORITES_STORAGE_KEY, JSON.stringify({
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      ids: Array.from(state.generationSourceFavoriteIds).sort((left, right) => left.localeCompare(right))
-    }));
+    window.localStorage.removeItem(GENERATION_SOURCE_FAVORITES_STORAGE_KEY);
   } catch {
-    // Source favorites are a frontend convenience; blocked storage must not affect generation.
+    // Old client-only source favorites are used only for one-time migration.
   }
+}
+
+
+function normalizeGenerationSourceMetadataRecord(record) {
+  if (!isPlainObject(record)) return null;
+  const sourceId = String(record.sourceId || record.source_id || '').trim();
+  if (!sourceId) return null;
+  return {
+    sourceId,
+    favorite: record.favorite === true || record.isFavorite === true || record.is_favorite === true,
+    notes: typeof record.notes === 'string' ? record.notes : '',
+    promptStyleOverride: typeof record.promptStyleOverride === 'string' && record.promptStyleOverride.trim() ? record.promptStyleOverride.trim() : null,
+    categoryOverride: typeof record.categoryOverride === 'string' && record.categoryOverride.trim() ? record.categoryOverride.trim() : null,
+    colorOverride: typeof record.colorOverride === 'string' && record.colorOverride.trim() ? record.colorOverride.trim() : null,
+    createdAt: typeof record.createdAt === 'string' ? record.createdAt : '',
+    updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : ''
+  };
+}
+
+function generationSourceMetadataRecordsFromResponse(result) {
+  const records = [];
+  const seen = new Set();
+  const add = (record) => {
+    const normalized = normalizeGenerationSourceMetadataRecord(record);
+    if (!normalized || seen.has(normalized.sourceId)) return;
+    seen.add(normalized.sourceId);
+    records.push(normalized);
+  };
+  if (Array.isArray(result?.sourceMetadata)) result.sourceMetadata.forEach(add);
+  if (Array.isArray(result?.metadata)) result.metadata.forEach(add);
+  if (Array.isArray(result?.sources)) result.sources.forEach((source) => add(source?.userMetadata));
+  return records;
+}
+
+function hydrateGenerationSourceMetadata(result) {
+  const records = generationSourceMetadataRecordsFromResponse(result);
+  const nextById = {};
+  const nextFavorites = new Set();
+  for (const record of records) {
+    nextById[record.sourceId] = record;
+    if (record.favorite) nextFavorites.add(record.sourceId);
+  }
+  state.generationSourceMetadataById = nextById;
+  state.generationSourceMetadataRecordCount = records.length;
+  state.generationSourceFavoriteIds = nextFavorites;
+}
+
+function applyGenerationSourcesResult(result) {
+  state.generationSources = result;
+  hydrateGenerationSourceMetadata(result);
+  void migrateStoredGenerationSourceFavoritesToServer();
+}
+
+function sourceUserMetadata(sourceOrId) {
+  const sourceId = typeof sourceOrId === 'string' ? sourceOrId : String(sourceOrId?.id || '');
+  if (!sourceId) return { sourceId: '', favorite: false, notes: '' };
+  const stored = state.generationSourceMetadataById[sourceId];
+  if (stored) return stored;
+  const sourceRecord = typeof sourceOrId === 'string' ? null : normalizeGenerationSourceMetadataRecord(sourceOrId?.userMetadata);
+  if (sourceRecord) return sourceRecord;
+  return { sourceId, favorite: false, notes: '' };
+}
+
+function sourceIsFavorite(source) {
+  const sourceId = String(source?.id || '');
+  return Boolean(sourceId && state.generationSourceFavoriteIds.has(sourceId));
+}
+
+function upsertGenerationSourceMetadataRecord(record) {
+  const normalized = normalizeGenerationSourceMetadataRecord(record);
+  if (!normalized) return null;
+  state.generationSourceMetadataById = { ...state.generationSourceMetadataById, [normalized.sourceId]: normalized };
+  state.generationSourceMetadataRecordCount = Object.keys(state.generationSourceMetadataById).length;
+  state.generationSourceFavoriteIds = new Set(Object.values(state.generationSourceMetadataById)
+    .filter((item) => item?.favorite === true)
+    .map((item) => item.sourceId));
+  if (state.generationSources?.sources) {
+    const decorate = (source) => source?.id === normalized.sourceId ? { ...source, userMetadata: normalized } : source;
+    state.generationSources = {
+      ...state.generationSources,
+      sources: state.generationSources.sources.map(decorate),
+      sourceGroups: {
+        checkpoints: (state.generationSources.sourceGroups?.checkpoints || []).map(decorate),
+        workflows: (state.generationSources.sourceGroups?.workflows || []).map(decorate)
+      },
+      sourceMetadata: Object.values(state.generationSourceMetadataById)
+    };
+  }
+  return normalized;
+}
+
+async function updateGenerationSourceMetadata(sourceId, patch) {
+  if (!sourceId) throw new Error('Missing generation source id.');
+  const result = await fetchJson(`/api/v1/generation-sources/metadata/${encodeURIComponent(sourceId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch)
+  });
+  return upsertGenerationSourceMetadataRecord(result.metadata);
+}
+
+async function migrateStoredGenerationSourceFavoritesToServer() {
+  if (state.generationSourceLocalFavoritesMigrationAttempted) return;
+  state.generationSourceLocalFavoritesMigrationAttempted = true;
+  const localIds = Array.from(state.generationSourceLocalFavoriteIds || []).filter((id) => generationSources().some((source) => source.id === id));
+  if (!localIds.length || state.generationSourceMetadataRecordCount > 0) return;
+  try {
+    await Promise.all(localIds.map((sourceId) => updateGenerationSourceMetadata(sourceId, { favorite: true })));
+    state.generationSourceLocalFavoriteIds = new Set();
+    clearStoredGenerationSourceFavoriteIds();
+    renderGenerationSourcePicker();
+    setStatus('Migrated generation-source favorites from this browser to server metadata.');
+  } catch (error) {
+    state.generationSourceLocalFavoritesMigrationAttempted = false;
+    setStatus(`Could not migrate local generation-source favorites: ${error.message}`, false);
+  }
+}
+
+function sourceCategory(source) {
+  const userMetadata = sourceUserMetadata(source);
+  const base = isPlainObject(source?.category) ? source.category : {};
+  const name = userMetadata.categoryOverride || base.name || 'Uncategorized';
+  const color = userMetadata.colorOverride || base.color || categoryColorForName(name);
+  return {
+    name,
+    color,
+    origin: userMetadata.categoryOverride ? 'user' : (base.origin || 'fallback'),
+    path: base.path || ''
+  };
+}
+
+function sourcePromptStyle(source) {
+  const userMetadata = sourceUserMetadata(source);
+  const base = isPlainObject(source?.promptStyle) ? source.promptStyle : {};
+  const value = userMetadata.promptStyleOverride || base.value || 'Unknown';
+  const confidence = userMetadata.promptStyleOverride ? 'explicit' : (base.confidence || 'unknown');
+  const origin = userMetadata.promptStyleOverride ? 'user' : (base.origin || 'unknown');
+  return { value, confidence, origin };
+}
+
+function sourceConstraintChips(source) {
+  const constraints = isPlainObject(source?.constraints) ? source.constraints : null;
+  if (!constraints) return [];
+  const chips = [];
+  if (constraints.steps) chips.push(`Steps: ${constraints.steps}`);
+  if (constraints.cfgScale) chips.push(`CFG: ${constraints.cfgScale}`);
+  if (constraints.resolution) chips.push(`Resolution: ${constraints.resolution}`);
+  if (Array.isArray(constraints.notes)) {
+    constraints.notes.filter((note) => typeof note === 'string' && note.trim()).slice(0, 2).forEach((note) => chips.push(note.trim()));
+  }
+  return chips;
+}
+
+function categoryColorForName(value) {
+  const name = String(value || 'Uncategorized').trim().toLowerCase();
+  if (!name || name === 'uncategorized') return 'hsl(215 18% 58%)';
+  let hash = 0;
+  for (let index = 0; index < name.length; index += 1) {
+    hash = ((hash << 5) - hash + name.charCodeAt(index)) | 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  const saturation = 64 + (Math.abs(hash >> 8) % 14);
+  const lightness = 50 + (Math.abs(hash >> 16) % 10);
+  return `hsl(${hue} ${saturation}% ${lightness}%)`;
+}
+
+function notePreviewText(value) {
+  const text = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!text) return '';
+  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+}
+
+function cssEscape(value) {
+  const text = String(value || '');
+  if (window.CSS?.escape) return window.CSS.escape(text);
+  return text.replace(/[\\"]/g, '\\$&');
 }
 
 function readStoredImageLabFormValues() {
@@ -1444,15 +1623,18 @@ function compactSourcePath(value) {
 }
 
 function generationSourceDetail(source) {
-  const details = [generationSourceTypeLabel(source)];
+  const category = sourceCategory(source);
+  const promptStyle = sourcePromptStyle(source);
+  const details = [generationSourceTypeLabel(source), category.name];
   const label = generationSourceLabel(source);
   const pathParts = splitGenerationSourcePath(label);
-  if (source?.type === 'checkpoint' && pathParts.folder) details.push(pathParts.folder);
+  if (source?.type === 'checkpoint' && pathParts.folder && pathParts.folder !== category.path) details.push(pathParts.folder);
   if (source?.type === 'workflow') {
     const workflowId = source.workflowId && source.workflowId !== label ? source.workflowId : '';
     if (workflowId) details.push(workflowId);
     if (source.checkpointName) details.push(`uses ${compactSourcePath(source.checkpointName)}`);
   }
+  details.push(`Prompt: ${promptStyle.value || 'Unknown'}`);
   return details.filter(Boolean).join(' • ');
 }
 
@@ -1467,21 +1649,59 @@ function sortedGenerationSourceList(sources) {
 }
 
 function favoriteGenerationSources() {
-  const favoriteIds = state.generationSourceFavoriteIds;
-  return sortedGenerationSourceList(generationSources().filter((source) => favoriteIds.has(source.id)));
+  return sortedGenerationSourceList(generationSources().filter(sourceIsFavorite));
 }
 
 function generalGenerationSources() {
-  const favoriteIds = state.generationSourceFavoriteIds;
-  return sortedGenerationSourceList(generationSources().filter((source) => !favoriteIds.has(source.id)));
+  return sortedGenerationSourceList(generationSources().filter((source) => !sourceIsFavorite(source)));
 }
 
 function generationSourceFavoriteButton(source) {
   const sourceId = String(source?.id || '');
-  const favorite = state.generationSourceFavoriteIds.has(sourceId);
+  const favorite = sourceIsFavorite(source);
+  const pending = state.generationSourceFavoritePendingIds.has(sourceId);
   const label = generationSourceDisplayName(source);
   const title = favorite ? 'Remove from generation source favorites' : 'Add to generation source favorites';
-  return `<button type="button" class="image-lab-source-favorite-toggle${favorite ? ' is-favorite' : ''}" data-source-favorite-id="${escapeHtml(sourceId)}" aria-pressed="${favorite ? 'true' : 'false'}" aria-label="${escapeHtml(`${favorite ? 'Unfavorite' : 'Favorite'} ${label}`)}" title="${escapeHtml(title)}"><span aria-hidden="true">♥</span></button>`;
+  return `<button type="button" class="image-lab-source-favorite-toggle${favorite ? ' is-favorite' : ''}${pending ? ' is-saving' : ''}" data-source-favorite-id="${escapeHtml(sourceId)}" aria-pressed="${favorite ? 'true' : 'false'}" aria-label="${escapeHtml(`${favorite ? 'Unfavorite' : 'Favorite'} ${label}`)}" title="${escapeHtml(title)}"${pending ? ' disabled' : ''}><span aria-hidden="true">♥</span></button>`;
+}
+
+function generationSourceNotesButton(source) {
+  const sourceId = String(source?.id || '');
+  const notesOpen = state.generationSourceNotesOpenId === sourceId;
+  const hasNotes = Boolean(sourceUserMetadata(source).notes || state.generationSourceNoteDrafts[sourceId]);
+  const label = notesOpen ? 'Close notes editor' : (hasNotes ? 'Edit source notes' : 'Add source notes');
+  return `<button type="button" class="image-lab-source-notes-toggle${notesOpen ? ' is-open' : ''}${hasNotes ? ' has-notes' : ''}" data-source-notes-toggle-id="${escapeHtml(sourceId)}" aria-expanded="${notesOpen ? 'true' : 'false'}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">Notes</button>`;
+}
+
+function generationSourceMetadataChipsHtml(source) {
+  const category = sourceCategory(source);
+  const promptStyle = sourcePromptStyle(source);
+  const constraints = sourceConstraintChips(source);
+  const chips = [
+    { text: category.name, className: 'image-lab-source-chip is-category', style: `--source-category-color: ${category.color}` },
+    { text: generationSourceTypeLabel(source), className: 'image-lab-source-chip' },
+    { text: `Prompt: ${promptStyle.value || 'Unknown'}${promptStyle.confidence === 'inferred' ? ' (inferred)' : ''}`, className: `image-lab-source-chip${promptStyle.value === 'Unknown' ? ' is-muted' : ''}` },
+    ...constraints.map((text) => ({ text, className: 'image-lab-source-chip is-constraint' }))
+  ];
+  return chips.map((chip) => `<span class="${escapeHtml(chip.className)}"${chip.style ? ` style="${escapeHtml(chip.style)}"` : ''}>${escapeHtml(chip.text)}</span>`).join('');
+}
+
+function generationSourceNotesPanelHtml(source) {
+  const sourceId = String(source?.id || '');
+  if (state.generationSourceNotesOpenId !== sourceId) return '';
+  const savedNotes = sourceUserMetadata(source).notes || '';
+  const draft = Object.prototype.hasOwnProperty.call(state.generationSourceNoteDrafts, sourceId)
+    ? state.generationSourceNoteDrafts[sourceId]
+    : savedNotes;
+  const saving = state.generationSourceNotesSavingIds.has(sourceId);
+  return `<div class="image-lab-source-notes-panel" data-source-notes-panel-id="${escapeHtml(sourceId)}">
+    <label class="image-lab-source-notes-label" for="image-lab-source-notes-${escapeHtml(sourceId)}">Source notes</label>
+    <textarea id="image-lab-source-notes-${escapeHtml(sourceId)}" class="image-lab-source-notes-input" rows="4" data-source-notes-input-id="${escapeHtml(sourceId)}" placeholder="Add observations about this source. Notes are saved on the server and never sent as generation input."${saving ? ' disabled' : ''}>${escapeHtml(draft)}</textarea>
+    <div class="image-lab-source-notes-actions">
+      <button type="button" class="secondary" data-source-notes-cancel-id="${escapeHtml(sourceId)}"${saving ? ' disabled' : ''}>Cancel</button>
+      <button type="button" data-source-notes-save-id="${escapeHtml(sourceId)}"${saving ? ' disabled' : ''}>${saving ? 'Saving...' : 'Save notes'}</button>
+    </div>
+  </div>`;
 }
 
 function generationSourceRowHtml(source) {
@@ -1489,12 +1709,27 @@ function generationSourceRowHtml(source) {
   const selected = selectedGenerationSource()?.id === sourceId;
   const displayName = generationSourceDisplayName(source);
   const detail = generationSourceDetail(source);
-  return `<div class="image-lab-source-row${selected ? ' is-selected' : ''}" role="option" tabindex="0" data-source-id="${escapeHtml(sourceId)}" aria-selected="${selected ? 'true' : 'false'}">
+  const category = sourceCategory(source);
+  const notes = Object.prototype.hasOwnProperty.call(state.generationSourceNoteDrafts, sourceId)
+    ? state.generationSourceNoteDrafts[sourceId]
+    : sourceUserMetadata(source).notes;
+  const preview = notePreviewText(notes);
+  return `<div class="image-lab-source-row${selected ? ' is-selected' : ''}${state.generationSourceNotesOpenId === sourceId ? ' is-expanded' : ''}" role="option" tabindex="0" data-source-id="${escapeHtml(sourceId)}" aria-selected="${selected ? 'true' : 'false'}" style="--source-category-color: ${escapeHtml(category.color)}">
+    <span class="image-lab-source-category-marker" aria-hidden="true"></span>
     <span class="image-lab-source-row-text">
-      <span class="image-lab-source-row-title">${escapeHtml(displayName)}</span>
+      <span class="image-lab-source-row-heading">
+        <span class="image-lab-source-row-title">${escapeHtml(displayName)}</span>
+        ${selected ? '<span class="image-lab-source-selected-pill">Selected</span>' : ''}
+      </span>
       <span class="image-lab-source-row-detail">${escapeHtml(detail)}</span>
+      <span class="image-lab-source-chip-row">${generationSourceMetadataChipsHtml(source)}</span>
+      ${preview ? `<span class="image-lab-source-note-preview"><strong>Note:</strong> ${escapeHtml(preview)}</span>` : '<span class="image-lab-source-note-preview is-empty">No notes yet.</span>'}
     </span>
-    ${generationSourceFavoriteButton(source)}
+    <span class="image-lab-source-row-actions">
+      ${generationSourceFavoriteButton(source)}
+      ${generationSourceNotesButton(source)}
+    </span>
+    ${generationSourceNotesPanelHtml(source)}
   </div>`;
 }
 
@@ -1559,13 +1794,14 @@ function positionGenerationSourcePicker() {
   const gap = 6;
   const viewportWidth = Math.max(window.innerWidth || 0, 320);
   const viewportHeight = Math.max(window.innerHeight || 0, 320);
-  const preferredWidth = Math.max(rect.width, Math.min(520, viewportWidth - (margin * 2)));
-  const width = Math.min(preferredWidth, viewportWidth - (margin * 2));
+  const availableWidth = viewportWidth - (margin * 2);
+  const targetWidth = viewportWidth < 760 ? availableWidth : Math.min(920, Math.max(640, rect.width * 2.15));
+  const width = Math.max(Math.min(targetWidth, availableWidth), Math.min(rect.width, availableWidth));
   const left = Math.min(Math.max(margin, rect.left), Math.max(margin, viewportWidth - width - margin));
   const below = viewportHeight - rect.bottom - margin - gap;
   const above = rect.top - margin - gap;
-  const openAbove = below < 180 && above > below;
-  const maxHeight = Math.max(160, Math.min(420, openAbove ? above : below));
+  const openAbove = below < 280 && above > below;
+  const maxHeight = Math.max(240, Math.min(Math.round(viewportHeight * 0.72), openAbove ? above : below));
   const top = openAbove
     ? Math.max(margin, rect.top - maxHeight - gap)
     : Math.min(rect.bottom + gap, viewportHeight - maxHeight - margin);
@@ -1611,13 +1847,75 @@ function toggleGenerationSourcePicker() {
   else openGenerationSourcePicker();
 }
 
-function toggleGenerationSourceFavorite(sourceId) {
-  if (!sourceId || !generationSources().some((source) => source.id === sourceId)) return;
-  if (state.generationSourceFavoriteIds.has(sourceId)) state.generationSourceFavoriteIds.delete(sourceId);
-  else state.generationSourceFavoriteIds.add(sourceId);
-  persistGenerationSourceFavoriteIds();
+async function toggleGenerationSourceFavorite(sourceId) {
+  if (!sourceId || !generationSources().some((source) => source.id === sourceId) || state.generationSourceFavoritePendingIds.has(sourceId)) return;
+  const previous = sourceUserMetadata(sourceId);
+  const nextFavorite = !previous.favorite;
+  state.generationSourceFavoritePendingIds.add(sourceId);
+  upsertGenerationSourceMetadataRecord({ ...previous, favorite: nextFavorite, updatedAt: new Date().toISOString() });
   renderGenerationSourcePicker();
   focusGenerationSourceFavorite(sourceId);
+  try {
+    const saved = await updateGenerationSourceMetadata(sourceId, { favorite: nextFavorite });
+    if (saved) setStatus(nextFavorite ? 'Generation source added to server favorites.' : 'Generation source removed from server favorites.');
+  } catch (error) {
+    upsertGenerationSourceMetadataRecord(previous);
+    setStatus(`Could not update generation source favorite: ${error.message}`, false);
+  } finally {
+    state.generationSourceFavoritePendingIds.delete(sourceId);
+    renderGenerationSourcePicker();
+    focusGenerationSourceFavorite(sourceId);
+  }
+}
+
+function toggleGenerationSourceNotes(sourceId) {
+  if (!sourceId || !generationSources().some((source) => source.id === sourceId)) return;
+  state.generationSourceNotesOpenId = state.generationSourceNotesOpenId === sourceId ? null : sourceId;
+  renderGenerationSourcePicker();
+  if (state.generationSourceNotesOpenId === sourceId) {
+    window.setTimeout(() => document.querySelector(`[data-source-notes-input-id="${cssEscape(sourceId)}"]`)?.focus?.(), 0);
+  } else {
+    focusGenerationSourceRow(sourceId);
+  }
+}
+
+function updateGenerationSourceNotesDraft(sourceId, value) {
+  if (!sourceId) return;
+  state.generationSourceNoteDrafts = { ...state.generationSourceNoteDrafts, [sourceId]: String(value || '') };
+}
+
+function cancelGenerationSourceNotesEdit(sourceId) {
+  if (!sourceId) return;
+  const nextDrafts = { ...state.generationSourceNoteDrafts };
+  delete nextDrafts[sourceId];
+  state.generationSourceNoteDrafts = nextDrafts;
+  state.generationSourceNotesOpenId = null;
+  renderGenerationSourcePicker();
+  focusGenerationSourceRow(sourceId);
+}
+
+async function saveGenerationSourceNotes(sourceId) {
+  if (!sourceId || state.generationSourceNotesSavingIds.has(sourceId)) return;
+  const current = sourceUserMetadata(sourceId);
+  const draft = Object.prototype.hasOwnProperty.call(state.generationSourceNoteDrafts, sourceId)
+    ? state.generationSourceNoteDrafts[sourceId]
+    : current.notes;
+  state.generationSourceNotesSavingIds.add(sourceId);
+  renderGenerationSourcePicker();
+  try {
+    const saved = await updateGenerationSourceMetadata(sourceId, { notes: draft || '' });
+    const nextDrafts = { ...state.generationSourceNoteDrafts };
+    delete nextDrafts[sourceId];
+    state.generationSourceNoteDrafts = nextDrafts;
+    state.generationSourceNotesOpenId = null;
+    if (saved) setStatus('Generation source notes saved on the server.');
+  } catch (error) {
+    setStatus(`Could not save generation source notes: ${error.message}`, false);
+  } finally {
+    state.generationSourceNotesSavingIds.delete(sourceId);
+    renderGenerationSourcePicker();
+    focusGenerationSourceRow(sourceId);
+  }
 }
 
 function dispatchGenerationSourceChanged() {
@@ -1692,6 +1990,10 @@ function generationSourceStatusMessage() {
     }
     return 'No generation sources available.';
   }
+  const metadataError = state.generationSources?.sourceMetadataStatus?.ok === false
+    ? state.generationSources.sourceMetadataStatus.error
+    : null;
+  if (metadataError?.message) return `Generation source metadata unavailable: ${metadataError.message}`;
   return '';
 }
 
@@ -1707,7 +2009,7 @@ function scheduleGenerationSourceProbePoll() {
   state.generationSourcePollTimer = window.setTimeout(async () => {
     state.generationSourcePollTimer = null;
     try {
-      state.generationSources = await fetchJson('/api/v1/generation-sources');
+      applyGenerationSourcesResult(await fetchJson('/api/v1/generation-sources'));
       renderControls();
       const message = generationSourceStatusMessage();
       if (message && generationSources().length === 0) setStatus(message, true);
@@ -3844,7 +4146,7 @@ async function refreshAll(message = '', options = {}) {
   ]);
 
   if (models.status === 'fulfilled') state.imageModels = models.value;
-  if (generationSourcesResult.status === 'fulfilled') state.generationSources = generationSourcesResult.value;
+  if (generationSourcesResult.status === 'fulfilled') applyGenerationSourcesResult(generationSourcesResult.value);
   if (workflows.status === 'fulfilled') state.imageWorkflows = workflows.value;
   if (jobs.status === 'fulfilled') state.imageJobs = jobs.value;
   if (favorites.status === 'fulfilled') state.imageFavorites = favorites.value;
@@ -3887,7 +4189,7 @@ async function refreshModelsOnly(message = '', options = {}) {
       : fetchJson('/api/v1/generation-sources')
   ]);
   state.imageModels = models;
-  state.generationSources = generationSourcesResult;
+  applyGenerationSourcesResult(generationSourcesResult);
   if (options.renderControls === false) renderControlChrome();
   else renderControls();
   scheduleGenerationSourceProbePoll();
@@ -4514,9 +4816,35 @@ function handleGenerationSourcePickerClick(event) {
   if (favoriteButton) {
     event.preventDefault();
     event.stopPropagation();
-    toggleGenerationSourceFavorite(favoriteButton.dataset.sourceFavoriteId || '');
+    void toggleGenerationSourceFavorite(favoriteButton.dataset.sourceFavoriteId || '');
     return;
   }
+
+  const notesToggle = event.target.closest?.('[data-source-notes-toggle-id]');
+  if (notesToggle) {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleGenerationSourceNotes(notesToggle.dataset.sourceNotesToggleId || '');
+    return;
+  }
+
+  const notesSave = event.target.closest?.('[data-source-notes-save-id]');
+  if (notesSave) {
+    event.preventDefault();
+    event.stopPropagation();
+    void saveGenerationSourceNotes(notesSave.dataset.sourceNotesSaveId || '');
+    return;
+  }
+
+  const notesCancel = event.target.closest?.('[data-source-notes-cancel-id]');
+  if (notesCancel) {
+    event.preventDefault();
+    event.stopPropagation();
+    cancelGenerationSourceNotesEdit(notesCancel.dataset.sourceNotesCancelId || '');
+    return;
+  }
+
+  if (event.target.closest?.('textarea, input, button')) return;
 
   const row = event.target.closest?.('[data-source-id]');
   if (!row) return;
@@ -4524,7 +4852,14 @@ function handleGenerationSourcePickerClick(event) {
   selectGenerationSourceFromPicker(row.dataset.sourceId || '');
 }
 
+function handleGenerationSourcePickerInput(event) {
+  const input = event.target.closest?.('[data-source-notes-input-id]');
+  if (!input) return;
+  updateGenerationSourceNotesDraft(input.dataset.sourceNotesInputId || '', input.value);
+}
+
 function handleGenerationSourcePickerKeydown(event) {
+  if (event.target.closest?.('textarea, input')) return;
   if (event.key === 'ArrowDown') {
     event.preventDefault();
     moveGenerationSourceFocus(1);
@@ -4548,7 +4883,7 @@ function handleGenerationSourcePickerKeydown(event) {
     return;
   }
 
-  if ((event.key === 'Enter' || event.key === ' ') && !event.target.closest?.('[data-source-favorite-id]')) {
+  if ((event.key === 'Enter' || event.key === ' ') && !event.target.closest?.('[data-source-favorite-id], [data-source-notes-toggle-id], [data-source-notes-save-id], [data-source-notes-cancel-id], button')) {
     const row = event.target.closest?.('[data-source-id]');
     if (!row) return;
     event.preventDefault();
@@ -4575,6 +4910,7 @@ function wireEvents() {
   initResizableControls();
   $('#image-lab-source-toggle')?.addEventListener('click', toggleGenerationSourcePicker);
   $('#image-lab-source-list')?.addEventListener('click', handleGenerationSourcePickerClick);
+  $('#image-lab-source-list')?.addEventListener('input', handleGenerationSourcePickerInput);
   $('#image-lab-source-list')?.addEventListener('keydown', handleGenerationSourcePickerKeydown);
   document.addEventListener('click', handleGenerationSourceDocumentClick);
   document.addEventListener('keydown', handleGenerationSourceDocumentKeydown);

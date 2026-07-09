@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { AppError } from '../../errors.ts';
-import type { WorkflowPreset } from '../../types.ts';
+import type { WorkflowPreset, WorkflowPresetMetadata } from '../../types.ts';
 
 export interface WorkflowStoreWarning {
   filePath: string;
@@ -95,6 +95,15 @@ export function builtinWorkflows(): WorkflowPreset[] {
     },
     parameters: ['prompt', 'negative_prompt', 'model', 'width', 'height', 'steps', 'cfg_scale', 'seed', 'sampler_name', 'scheduler'],
     source: 'builtin',
+    metadata: {
+      category: 'Checkpoint workflow',
+      promptStyle: 'SDXL',
+      constraints: {
+        steps: 'default 28',
+        cfgScale: 'default 7',
+        resolution: 'default 1024x1024'
+      }
+    },
     comfyui: {
       mappings: {
         checkpointNode: '4',
@@ -195,6 +204,7 @@ function normalizeWorkflowPreset(value: unknown, filePath: string): WorkflowPres
 
   const mappings = isRecord(comfyui.mappings) ? normalizeMappings(comfyui.mappings) : {};
   const defaults = isRecord(value.defaults) ? normalizeDefaults(value.defaults) : {};
+  const metadata = normalizeWorkflowMetadata(value);
   const parameters = Array.isArray(value.parameters)
     ? value.parameters.filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim())
     : ['prompt'];
@@ -207,6 +217,7 @@ function normalizeWorkflowPreset(value: unknown, filePath: string): WorkflowPres
     defaults,
     parameters,
     source: 'file',
+    ...(metadata ? { metadata } : {}),
     filePath,
     comfyui: {
       prompt: deepCloneRecord(comfyui.prompt),
@@ -228,6 +239,81 @@ function normalizeDefaults(value: Record<string, unknown>): WorkflowPreset['defa
     ...(readOptionalString(value, 'scheduler') ? { scheduler: readOptionalString(value, 'scheduler') } : {}),
     ...(readOptionalString(value, 'checkpoint') ? { checkpoint: readOptionalString(value, 'checkpoint') } : {})
   };
+}
+
+function normalizeWorkflowMetadata(value: Record<string, unknown>): WorkflowPresetMetadata | undefined {
+  const metadataRecord = isRecord(value.metadata) ? value.metadata : {};
+  const category = readOptionalString(value, 'category') || readOptionalString(metadataRecord, 'category');
+  const promptStyle = readOptionalString(value, 'promptStyle')
+    || readOptionalString(value, 'prompt_style')
+    || readOptionalString(metadataRecord, 'promptStyle')
+    || readOptionalString(metadataRecord, 'prompt_style');
+  const constraintsRecord = isRecord(value.constraints)
+    ? value.constraints
+    : isRecord(metadataRecord.constraints)
+      ? metadataRecord.constraints
+      : null;
+  const constraints = constraintsRecord ? normalizeWorkflowConstraints(constraintsRecord) : undefined;
+  const normalized: WorkflowPresetMetadata = {
+    ...(category ? { category } : {}),
+    ...(promptStyle ? { promptStyle } : {}),
+    ...(constraints ? { constraints } : {})
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeWorkflowConstraints(value: Record<string, unknown>): WorkflowPresetMetadata['constraints'] | undefined {
+  const steps = readConstraintText(value, ['steps', 'stepRange', 'step_range', 'recommendedSteps', 'recommended_steps']);
+  const cfgScale = readConstraintText(value, ['cfgScale', 'cfg_scale', 'cfg', 'recommendedCfg', 'recommended_cfg']);
+  const resolution = readConstraintText(value, ['resolution', 'recommendedResolution', 'recommended_resolution', 'size', 'dimensions'])
+    || resolutionTextFromConstraintRecord(value);
+  const notes = readConstraintNotes(value.notes ?? value.note ?? value.warnings);
+  const constraints = {
+    ...(steps ? { steps } : {}),
+    ...(cfgScale ? { cfgScale } : {}),
+    ...(resolution ? { resolution } : {}),
+    ...(notes.length > 0 ? { notes } : {})
+  };
+  return Object.keys(constraints).length > 0 ? constraints : undefined;
+}
+
+function readConstraintText(value: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const raw = value[key];
+    const text = constraintValueToText(raw);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function constraintValueToText(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (!isRecord(value)) return undefined;
+  const min = readOptionalNumber(value, 'min');
+  const max = readOptionalNumber(value, 'max');
+  const recommended = readOptionalNumber(value, 'recommended') ?? readOptionalNumber(value, 'preferred') ?? readOptionalNumber(value, 'default');
+  if (min !== undefined && max !== undefined) return `${min}-${max}`;
+  if (recommended !== undefined) return `recommended ${recommended}`;
+  if (min !== undefined) return `min ${min}`;
+  if (max !== undefined) return `max ${max}`;
+  return undefined;
+}
+
+function resolutionTextFromConstraintRecord(value: Record<string, unknown>): string | undefined {
+  const width = readOptionalNumber(value, 'width') ?? readOptionalNumber(value, 'preferredWidth') ?? readOptionalNumber(value, 'recommendedWidth');
+  const height = readOptionalNumber(value, 'height') ?? readOptionalNumber(value, 'preferredHeight') ?? readOptionalNumber(value, 'recommendedHeight');
+  if (width !== undefined && height !== undefined) return `${width}x${height} preferred`;
+  const maxWidth = readOptionalNumber(value, 'maxWidth') ?? readOptionalNumber(value, 'max_width');
+  const maxHeight = readOptionalNumber(value, 'maxHeight') ?? readOptionalNumber(value, 'max_height');
+  if (maxWidth !== undefined && maxHeight !== undefined) return `max ${maxWidth}x${maxHeight}`;
+  return undefined;
+}
+
+function readConstraintNotes(value: unknown): string[] {
+  if (typeof value === 'string' && value.trim()) return [value.trim()];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim()).slice(0, 6);
 }
 
 function normalizeMappings(value: Record<string, unknown>): WorkflowPreset['comfyui']['mappings'] {

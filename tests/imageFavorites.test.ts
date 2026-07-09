@@ -22,6 +22,7 @@ async function tempGeneratorRuntimeConfig(overrides = {}) {
     imageArtifactPath: artifactPath,
     favoriteImagePromptsPath: path.join(root, 'favorite-image-prompts.json'),
     imageFavoritesPath: path.join(root, 'image-favorites.json'),
+    generationSourceMetadataPath: path.join(root, 'generation-source-metadata.json'),
     imageDefaultSyncTimeoutMs: 1000,
     imageMaxSyncTimeoutMs: 2000,
     imageMockDelayMs: 1,

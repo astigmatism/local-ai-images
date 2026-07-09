@@ -9,7 +9,7 @@ import { toLegacyGpu } from './services/gpuService.ts';
 import { createImageRuntime, type ImageRuntime } from './services/image/runtime.ts';
 import { buildImagePromptWithLlm, effectiveImagePromptLlmSettings, testImagePromptLlmConnection, validateImagePromptLlmSettings } from './services/llmPromptBuilder.ts';
 import { findInventoryModel, modelMatchesDefault } from './services/image/modelIdentity.ts';
-import type { AppConfig, ArtifactMetadata, FavoriteImagePrompt, ImageFavorite, GpuServiceLike, ImageJob, ModelInventory, ModelInventoryItem, ImagePromptLlmSettings, OllamaClientLike, OllamaImageGenerateOptions, OutputDelivery, RuntimeConfig, WorkflowPreset } from './types.ts';
+import type { AppConfig, ArtifactMetadata, FavoriteImagePrompt, GenerationSourceList, GenerationSourceUserMetadata, ImageFavorite, GpuServiceLike, ImageJob, ModelInventory, ModelInventoryItem, ImagePromptLlmSettings, OllamaClientLike, OllamaImageGenerateOptions, OutputDelivery, RuntimeConfig, WorkflowPreset } from './types.ts';
 import { validateModelLoadRequest, validateModelName } from './utils/validation.ts';
 import { authenticateImageApiRequest } from './utils/auth.ts';
 import { generationRequestToApiPayload, normalizeResultDelivery, validateAndNormalizeGenerationRequest } from './utils/imageRequests.ts';
@@ -381,6 +381,17 @@ async function routeImageApiV1(
 
   if (method === 'POST' && pathName === '/api/v1/generation-sources/refresh') {
     await handleImageApiGenerationSources(response, dependencies, true);
+    return;
+  }
+
+  if (method === 'GET' && pathName === '/api/v1/generation-sources/metadata') {
+    await handleImageApiGenerationSourceMetadata(response, dependencies);
+    return;
+  }
+
+  const generationSourceMetadataMatch = /^\/api\/v1\/generation-sources\/metadata\/(.+)$/u.exec(pathName);
+  if ((method === 'PATCH' || method === 'PUT' || method === 'POST') && generationSourceMetadataMatch?.[1]) {
+    await handleImageApiUpdateGenerationSourceMetadata(request, response, dependencies, decodeURIComponent(generationSourceMetadataMatch[1]));
     return;
   }
 
@@ -769,10 +780,62 @@ async function handleImageApiGenerationSources(response: ServerResponse, depende
     const sources = refresh
       ? await dependencies.imageRuntime.generationSources.refresh({ forceProbe: true })
       : await dependencies.imageRuntime.generationSources.list();
-    sendJson(response, 200, sources);
+    sendJson(response, 200, await decorateGenerationSourceListWithMetadata(sources, dependencies));
   } catch (error: unknown) {
     sendJson(response, statusCodeForError(error, 503), toErrorPayload(error, 'GENERATION_SOURCES_FAILED'));
   }
+}
+
+async function handleImageApiGenerationSourceMetadata(response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
+  try {
+    const metadata = await dependencies.imageRuntime.generationSourceMetadataStore.list();
+    sendJson(response, 200, { ok: true, metadata: metadata.map(publicGenerationSourceMetadata) });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'GENERATION_SOURCE_METADATA_FAILED'));
+  }
+}
+
+async function handleImageApiUpdateGenerationSourceMetadata(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies, sourceId: string): Promise<void> {
+  try {
+    const body = await readJsonBody(request);
+    const metadata = await dependencies.imageRuntime.generationSourceMetadataStore.update(sourceId, body);
+    sendJson(response, 200, { ok: true, metadata: publicGenerationSourceMetadata(metadata) });
+  } catch (error: unknown) {
+    sendJson(response, statusCodeForError(error), toErrorPayload(error, 'GENERATION_SOURCE_METADATA_UPDATE_FAILED'));
+  }
+}
+
+async function decorateGenerationSourceListWithMetadata(sources: GenerationSourceList, dependencies: ResolvedAppDependencies): Promise<GenerationSourceList> {
+  let metadata: GenerationSourceUserMetadata[] = [];
+  let sourceMetadataStatus: GenerationSourceList['sourceMetadataStatus'] = { ok: true };
+  try {
+    metadata = await dependencies.imageRuntime.generationSourceMetadataStore.list();
+  } catch (error: unknown) {
+    const errorPayload = toErrorPayload(error, 'GENERATION_SOURCE_METADATA_FAILED');
+    sourceMetadataStatus = { ok: false, error: errorPayload.error };
+    dependencies.logger.warn({ err: error }, 'Generation source metadata persistence unavailable while listing generation sources');
+  }
+
+  const metadataBySourceId = new Map(metadata.map((item) => [item.sourceId, publicGenerationSourceMetadata(item)]));
+  const decorateSource = (source: GenerationSourceList['sources'][number]): GenerationSourceList['sources'][number] => {
+    const userMetadata = metadataBySourceId.get(source.id);
+    return userMetadata ? { ...source, userMetadata } : { ...source };
+  };
+  const decoratedSources = sources.sources.map(decorateSource);
+  return {
+    ...sources,
+    sources: decoratedSources,
+    sourceGroups: {
+      checkpoints: sources.sourceGroups.checkpoints.map(decorateSource),
+      workflows: sources.sourceGroups.workflows.map(decorateSource)
+    },
+    sourceMetadata: metadata.map(publicGenerationSourceMetadata),
+    sourceMetadataStatus
+  };
+}
+
+function publicGenerationSourceMetadata(metadata: GenerationSourceUserMetadata): GenerationSourceUserMetadata {
+  return { ...metadata };
 }
 
 async function handleImageApiSetDefaultModel(request: IncomingMessage, response: ServerResponse, dependencies: ResolvedAppDependencies): Promise<void> {
