@@ -4946,10 +4946,6 @@ function addJobToTop(job) {
   renderGallery();
 }
 
-function defaultFavoriteTitle(job) {
-  return previewText(jobPrompt(job), 90) || `Image job ${job?.id || 'favorite'}`;
-}
-
 async function saveFavoriteFromJob(job) {
   const artifact = firstArtifact(job);
   const actualSeed = actualSeedForJob(job);
@@ -4971,13 +4967,7 @@ async function saveFavoriteFromJob(job) {
     setStatus('Cannot save a deterministic favorite because this completed job did not expose the actual seed used. Refresh the gallery and try again, or regenerate with an explicit seed.', false);
     return;
   }
-  const title = window.prompt('Save image favorite as:', defaultFavoriteTitle(job));
-  if (title === null) {
-    setStatus('Save favorite canceled.', false);
-    return;
-  }
   const body = {
-    title: title.trim() || defaultFavoriteTitle(job),
     request_payload: payload,
     image_url: savedFavoriteImageUrl,
     artifact_id: artifact?.id || undefined,

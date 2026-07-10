@@ -11,6 +11,7 @@ const PREVIEW_CHARS = 240;
 export class ImageFavoriteStore {
   private readonly filePath: string;
   private readonly maxPromptChars: number;
+  private mutationQueue: Promise<void> = Promise.resolve();
 
   constructor(filePath: string, maxPromptChars: number) {
     this.filePath = filePath;
@@ -50,29 +51,36 @@ export class ImageFavoriteStore {
     const imageUrl = readStringFrom(body, ['image_url', 'imageUrl', 'url']) ?? stringField(artifact, 'url');
     const artifactId = readStringFrom(body, ['artifact_id', 'artifactId']) ?? stringField(artifact, 'id');
     const jobId = readStringFrom(body, ['job_id', 'jobId']) ?? stringField(job, 'id') ?? stringField(artifact, 'jobId') ?? stringField(artifact, 'job_id');
-    const title = normalizeTitle(readNullableString(body.title ?? body.name, 'title'), derived.prompt, jobId);
+    const requestedTitle = readNullableString(body.title ?? body.name, 'title');
     const description = normalizeDescription(body.description ?? body.notes);
-    const now = new Date().toISOString();
 
-    const favorite: ImageFavorite = {
-      id: crypto.randomUUID(),
-      title,
-      ...(description !== undefined ? { description } : {}),
-      requestPayload,
-      ...derived,
-      ...(imageUrl !== null ? { imageUrl } : {}),
-      ...(artifactId !== null ? { artifactId } : {}),
-      ...(jobId !== null ? { jobId } : {}),
-      ...(artifact !== null ? { artifact } : {}),
-      ...(job !== null ? { job } : {}),
-      createdAt: now,
-      updatedAt: now
-    };
+    return this.withMutationLock(async () => {
+      const records = await this.readRecords();
+      const existing = this.normalizeRecords(records);
+      const title = requestedTitle !== null && requestedTitle.trim() !== ''
+        ? normalizeTitle(requestedTitle, derived.prompt, jobId)
+        : nextNumericFavoriteTitle(records);
+      const now = new Date().toISOString();
 
-    const existing = await this.readAll();
-    existing.push(favorite);
-    await this.writeAll(existing);
-    return cloneFavorite(favorite);
+      const favorite: ImageFavorite = {
+        id: crypto.randomUUID(),
+        title,
+        ...(description !== undefined ? { description } : {}),
+        requestPayload,
+        ...derived,
+        ...(imageUrl !== null ? { imageUrl } : {}),
+        ...(artifactId !== null ? { artifactId } : {}),
+        ...(jobId !== null ? { jobId } : {}),
+        ...(artifact !== null ? { artifact } : {}),
+        ...(job !== null ? { job } : {}),
+        createdAt: now,
+        updatedAt: now
+      };
+
+      existing.push(favorite);
+      await this.writeAll(existing);
+      return cloneFavorite(favorite);
+    });
   }
 
   async update(id: string, body: unknown): Promise<ImageFavorite> {
@@ -80,73 +88,80 @@ export class ImageFavoriteStore {
       throw new AppError('IMAGE_FAVORITE_INVALID_REQUEST', 'Image favorite update must be a JSON object.', 422);
     }
 
-    const favorites = await this.readAll();
-    const index = favorites.findIndex((item) => item.id === id);
-    if (index < 0) {
-      throw new AppError('IMAGE_FAVORITE_NOT_FOUND', `Image favorite ${id} was not found.`, 404);
-    }
-
-    const existing = favorites[index]!;
-    let next: ImageFavorite = cloneFavorite(existing);
-
-    if (hasOwn(body, 'title') || hasOwn(body, 'name')) {
-      const titleValue = body.title ?? body.name;
-      if (typeof titleValue !== 'string' || titleValue.trim() === '') {
-        throw new AppError('IMAGE_FAVORITE_INVALID_TITLE', 'Image favorite title must be a non-empty string.', 422);
+    return this.withMutationLock(async () => {
+      const favorites = await this.readAll();
+      const index = favorites.findIndex((item) => item.id === id);
+      if (index < 0) {
+        throw new AppError('IMAGE_FAVORITE_NOT_FOUND', `Image favorite ${id} was not found.`, 404);
       }
-      next.title = limitText(titleValue.trim(), MAX_TITLE_CHARS);
-    }
 
-    if (hasOwn(body, 'description') || hasOwn(body, 'notes')) {
-      next.description = normalizeDescription(body.description ?? body.notes);
-    }
+      const existing = favorites[index]!;
+      let next: ImageFavorite = cloneFavorite(existing);
 
-    if (hasRequestPayload(body)) {
-      const requestPayload = readResolvedRequestPayload(body, true);
-      next = {
-        ...next,
-        requestPayload,
-        ...deriveFields(requestPayload, this.maxPromptChars)
-      };
-    }
+      if (hasOwn(body, 'title') || hasOwn(body, 'name')) {
+        const titleValue = body.title ?? body.name;
+        if (typeof titleValue !== 'string' || titleValue.trim() === '') {
+          throw new AppError('IMAGE_FAVORITE_INVALID_TITLE', 'Image favorite title must be a non-empty string.', 422);
+        }
+        next.title = limitText(titleValue.trim(), MAX_TITLE_CHARS);
+      }
 
-    if (hasOwn(body, 'artifact') || hasOwn(body, 'artifact_metadata') || hasOwn(body, 'artifactMetadata') || hasOwn(body, 'job')) {
-      const artifact = readArtifact(body);
-      const job = readJob(body);
-      next.artifact = artifact;
-      next.job = job;
-      next.imageUrl = readStringFrom(body, ['image_url', 'imageUrl', 'url']) ?? stringField(artifact, 'url') ?? next.imageUrl ?? null;
-      next.artifactId = readStringFrom(body, ['artifact_id', 'artifactId']) ?? stringField(artifact, 'id') ?? next.artifactId ?? null;
-      next.jobId = readStringFrom(body, ['job_id', 'jobId']) ?? stringField(job, 'id') ?? stringField(artifact, 'jobId') ?? stringField(artifact, 'job_id') ?? next.jobId ?? null;
-    }
+      if (hasOwn(body, 'description') || hasOwn(body, 'notes')) {
+        next.description = normalizeDescription(body.description ?? body.notes);
+      }
 
-    next.updatedAt = new Date().toISOString();
-    favorites[index] = next;
-    await this.writeAll(favorites);
-    return cloneFavorite(next);
+      if (hasRequestPayload(body)) {
+        const requestPayload = readResolvedRequestPayload(body, true);
+        next = {
+          ...next,
+          requestPayload,
+          ...deriveFields(requestPayload, this.maxPromptChars)
+        };
+      }
+
+      if (hasOwn(body, 'artifact') || hasOwn(body, 'artifact_metadata') || hasOwn(body, 'artifactMetadata') || hasOwn(body, 'job')) {
+        const artifact = readArtifact(body);
+        const job = readJob(body);
+        next.artifact = artifact;
+        next.job = job;
+        next.imageUrl = readStringFrom(body, ['image_url', 'imageUrl', 'url']) ?? stringField(artifact, 'url') ?? next.imageUrl ?? null;
+        next.artifactId = readStringFrom(body, ['artifact_id', 'artifactId']) ?? stringField(artifact, 'id') ?? next.artifactId ?? null;
+        next.jobId = readStringFrom(body, ['job_id', 'jobId']) ?? stringField(job, 'id') ?? stringField(artifact, 'jobId') ?? stringField(artifact, 'job_id') ?? next.jobId ?? null;
+      }
+
+      next.updatedAt = new Date().toISOString();
+      favorites[index] = next;
+      await this.writeAll(favorites);
+      return cloneFavorite(next);
+    });
   }
 
   async delete(id: string): Promise<ImageFavorite> {
-    const favorites = await this.readAll();
-    const index = favorites.findIndex((item) => item.id === id);
-    if (index < 0) {
-      throw new AppError('IMAGE_FAVORITE_NOT_FOUND', `Image favorite ${id} was not found.`, 404);
-    }
-    const [deleted] = favorites.splice(index, 1);
-    await this.writeAll(favorites);
-    return cloneFavorite(deleted!);
+    return this.withMutationLock(async () => {
+      const favorites = await this.readAll();
+      const index = favorites.findIndex((item) => item.id === id);
+      if (index < 0) {
+        throw new AppError('IMAGE_FAVORITE_NOT_FOUND', `Image favorite ${id} was not found.`, 404);
+      }
+      const [deleted] = favorites.splice(index, 1);
+      await this.writeAll(favorites);
+      return cloneFavorite(deleted!);
+    });
   }
 
   private async readAll(): Promise<ImageFavorite[]> {
+    return this.normalizeRecords(await this.readRecords());
+  }
+
+  private async readRecords(): Promise<unknown[]> {
     try {
       const raw = await fs.readFile(this.filePath, 'utf8');
       const parsed = JSON.parse(raw) as unknown;
-      const records = Array.isArray(parsed)
+      return Array.isArray(parsed)
         ? parsed
         : isRecord(parsed) && Array.isArray(parsed.favorites)
           ? parsed.favorites
           : [];
-      return records.map((record) => normalizeStoredFavorite(record, this.maxPromptChars)).filter(isImageFavorite).map(cloneFavorite);
     } catch (error: unknown) {
       if (isNodeError(error) && error.code === 'ENOENT') return [];
       if (error instanceof SyntaxError) {
@@ -157,6 +172,10 @@ export class ImageFavoriteStore {
         cause: error instanceof Error ? error.message : String(error)
       });
     }
+  }
+
+  private normalizeRecords(records: unknown[]): ImageFavorite[] {
+    return records.map((record) => normalizeStoredFavorite(record, this.maxPromptChars)).filter(isImageFavorite).map(cloneFavorite);
   }
 
   private async writeAll(favorites: ImageFavorite[]): Promise<void> {
@@ -174,6 +193,20 @@ export class ImageFavoriteStore {
         path: this.filePath,
         cause: error instanceof Error ? error.message : String(error)
       });
+    }
+  }
+
+  private async withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.mutationQueue;
+    let release: () => void = () => undefined;
+    this.mutationQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
     }
   }
 }
@@ -438,6 +471,24 @@ function normalizeTitle(value: string | null, prompt: string, jobId?: string | n
   const compactPrompt = previewText(prompt).replace(/\s+/gu, ' ').trim();
   const fallback = compactPrompt || (jobId ? `Image job ${jobId}` : 'Untitled image favorite');
   return limitText(value?.trim() || fallback, MAX_TITLE_CHARS);
+}
+
+function nextNumericFavoriteTitle(records: unknown[]): string {
+  let maximum: bigint | null = null;
+  for (const record of records) {
+    if (!isRecord(record)) continue;
+    const value = numericTitleSequenceValue(record.title);
+    if (value === null) continue;
+    if (maximum === null || value > maximum) maximum = value;
+  }
+  return String((maximum ?? 0n) + 1n);
+}
+
+function numericTitleSequenceValue(value: unknown): bigint | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!/^\d+$/u.test(trimmed)) return null;
+  return BigInt(trimmed);
 }
 
 function normalizeDescription(value: unknown): string | null | undefined {

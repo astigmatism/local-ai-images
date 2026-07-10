@@ -30,6 +30,42 @@ async function tempGeneratorRuntimeConfig(overrides = {}) {
   });
 }
 
+function imageFavoriteCreateBody(title: string | undefined, prompt: string, seed: number): Record<string, unknown> {
+  const artifactId = `test-artifact-${seed}`;
+  const body: Record<string, unknown> = {
+    request_payload: {
+      prompt,
+      negative_prompt: 'test negative',
+      model: 'demo.safetensors',
+      workflow_id: 'sdxl-text-to-image',
+      width: 512,
+      height: 512,
+      steps: 12,
+      cfg_scale: 6,
+      seed,
+      sampler_name: 'euler',
+      scheduler: 'normal',
+      output: 'url',
+      sync_timeout_ms: 0,
+      preserved_test_field: { seed }
+    },
+    image_url: `/api/v1/artifacts/${artifactId}`,
+    artifact_id: artifactId
+  };
+  if (title !== undefined) body.title = title;
+  return body;
+}
+
+async function createImageFavorite(baseUrl: string, body: Record<string, unknown>) {
+  const response = await fetch(`${baseUrl}/api/v1/image-favorites`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  assert.equal(response.status, 201);
+  return response.json();
+}
+
 test('image favorite endpoints persist generated artifacts and full request payloads', async () => {
   const runtimeConfig = await tempGeneratorRuntimeConfig();
 
@@ -134,6 +170,55 @@ test('image favorite endpoints persist generated artifacts and full request payl
 
     const missing = await fetch(`${baseUrl}/api/v1/image-favorites/${created.favorite.id}`);
     assert.equal(missing.status, 404);
+  });
+});
+
+test('image favorites assign the next numeric title when title is omitted', async () => {
+  const runtimeConfig = await tempGeneratorRuntimeConfig();
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    await createImageFavorite(baseUrl, imageFavoriteCreateBody('1', 'numeric favorite one', 101));
+    await createImageFavorite(baseUrl, imageFavoriteCreateBody('2', 'numeric favorite two', 102));
+    await createImageFavorite(baseUrl, imageFavoriteCreateBody('Favorite 37', 'non-numeric favorite label', 103));
+    await createImageFavorite(baseUrl, imageFavoriteCreateBody('37 test', 'partially numeric favorite label', 104));
+    await createImageFavorite(baseUrl, imageFavoriteCreateBody('37', 'numeric favorite thirty seven', 105));
+
+    const created = await createImageFavorite(baseUrl, imageFavoriteCreateBody(undefined, 'auto-numbered favorite', 106));
+    assert.equal(created.ok, true);
+    assert.equal(created.favorite.title, '38');
+    assert.equal(created.favorite.requestPayload.prompt, 'auto-numbered favorite');
+    assert.deepEqual(created.favorite.requestPayload.preserved_test_field, { seed: 106 });
+
+    const list = await (await fetch(`${baseUrl}/api/v1/image-favorites?limit=10`)).json();
+    assert.equal(list.ok, true);
+    assert.equal(list.favorites.some((favorite: { title?: string }) => favorite.title === '38'), true);
+  });
+});
+
+test('image favorites start numeric titles at 1 and treat leading zeroes as plain integers', async () => {
+  const runtimeConfig = await tempGeneratorRuntimeConfig();
+
+  await withTestServer({
+    runtimeConfig,
+    configStore: await tempConfigStore(),
+    ollamaClient: mockOllama(),
+    gpuService: { async queryGpus() { return []; } }
+  }, async (baseUrl) => {
+    await createImageFavorite(baseUrl, imageFavoriteCreateBody('Favorite 37', 'non-numeric title only', 201));
+
+    const firstAuto = await createImageFavorite(baseUrl, imageFavoriteCreateBody(undefined, 'first automatic numeric favorite', 202));
+    assert.equal(firstAuto.ok, true);
+    assert.equal(firstAuto.favorite.title, '1');
+
+    await createImageFavorite(baseUrl, imageFavoriteCreateBody('007', 'leading zero numeric favorite', 203));
+    const nextAuto = await createImageFavorite(baseUrl, imageFavoriteCreateBody(undefined, 'automatic numeric after leading zeroes', 204));
+    assert.equal(nextAuto.ok, true);
+    assert.equal(nextAuto.favorite.title, '8');
   });
 });
 
@@ -325,7 +410,9 @@ test('image generator portal route, asset, and persisted favorites survive runti
 
     const asset = await fetch(`${baseUrl}/assets/image-generator.js`);
     assert.equal(asset.status, 200);
-    assert.match(await asset.text(), /image-favorites/);
+    const assetText = await asset.text();
+    assert.match(assetText, /image-favorites/);
+    assert.doesNotMatch(assetText, /Save image favorite as:/);
 
     const created = await (await fetch(`${baseUrl}/api/v1/image-favorites`, {
       method: 'POST',
