@@ -2313,6 +2313,7 @@ function renderImageGeneratorHtml(): string {
           
           <div class="image-lab-top-actions">
             <div id="image-lab-status" class="feedback" aria-live="polite"></div>
+            <button id="image-lab-show-favorites" class="secondary" type="button" aria-haspopup="dialog" aria-controls="image-lab-favorites-modal">Show Favorites</button>
             <a class="button-link secondary" href="/">Status portal</a>
             <button id="image-lab-refresh" class="secondary" type="button">Refresh</button>
           </div>
@@ -2427,17 +2428,6 @@ function renderImageGeneratorHtml(): string {
               <button id="image-lab-generate" type="submit" title="Submit the current generation request. Repeated clicks queue separate jobs with their own pending gallery cards.">Generate!</button>
             </div>
           </div>
-
-          <section id="image-lab-favorites-panel" class="image-lab-favorites-panel" aria-label="Saved image favorites">
-            <div class="image-lab-favorites-drawer-header">
-              <div class="image-lab-favorites-title">
-                <span class="field-label">Favorites</span>
-                <span class="hint">Saved gallery images</span>
-              </div>
-              <button id="image-lab-favorites-toggle" class="secondary image-lab-favorites-toggle" type="button" aria-controls="image-lab-favorites" aria-expanded="true" title="Collapse favorites drawer">Hide</button>
-            </div>
-            <div id="image-lab-favorites" class="image-lab-favorites-strip placeholder">Loading favorites...</div>
-          </section>
         </div>
 
         <details class="image-lab-advanced compact-details">
@@ -2470,6 +2460,19 @@ function renderImageGeneratorHtml(): string {
       </form>
       <div id="image-lab-controls-resize" class="image-lab-resize-handle" role="separator" aria-label="Resize controls area" aria-orientation="horizontal" tabindex="0"></div>
     </section>
+
+    <div id="image-lab-favorites-modal" class="image-lab-favorites-modal" hidden aria-hidden="true">
+      <section class="image-lab-favorites-dialog" role="dialog" aria-modal="true" aria-labelledby="image-lab-favorites-modal-title" aria-describedby="image-lab-favorites-modal-description" tabindex="-1">
+        <div class="image-lab-favorites-modal-header">
+          <div>
+            <h2 id="image-lab-favorites-modal-title">Generated image favorites</h2>
+            <p id="image-lab-favorites-modal-description" class="hint">Saved gallery images with their prompts, settings, seeds, and thumbnails.</p>
+          </div>
+          <button id="image-lab-favorites-modal-close" class="secondary image-lab-favorites-modal-close" type="button" data-favorite-modal-action="close">Close</button>
+        </div>
+        <div id="image-lab-favorites" class="image-lab-favorites-strip image-lab-favorites-modal-list placeholder">Loading favorites...</div>
+      </section>
+    </div>
 
     <section class="image-lab-gallery-section" aria-label="Generated image gallery">
       <div class="section-heading image-lab-gallery-heading">

@@ -65,9 +65,13 @@ const state = {
   selectedWorkflowId: null,
   imageJobs: null,
   imageFavorites: null,
+  imageFavoritesError: null,
+  imageFavoritesModalOpen: false,
+  imageFavoritesModalPreviousFocus: null,
   imageError: null,
   activeJobId: null,
   autoGenerateEnabled: false,
+  favoriteLoadAutomaticGenerationGuard: false,
   autoGenerateSubmitting: false,
   autoGenerateCheckQueued: false,
   autoGenerateWaitTimer: null,
@@ -487,30 +491,98 @@ function setNegativePromptDrawerOpen(open) {
   syncPromptDrawerLayout();
 }
 
-function setFavoritesDrawerOpen(open) {
-  const isOpen = Boolean(open);
-  const mainGrid = $('#image-lab-main-grid');
-  const panel = $('#image-lab-favorites-panel');
-  const toggle = $('#image-lab-favorites-toggle');
-  const favorites = $('#image-lab-favorites');
-
-  mainGrid?.classList.toggle('favorites-drawer-collapsed', !isOpen);
-  panel?.classList.toggle('is-collapsed', !isOpen);
-
-  if (toggle) {
-    toggle.setAttribute('aria-expanded', String(isOpen));
-    toggle.setAttribute('aria-label', isOpen ? 'Collapse favorites drawer' : 'Open favorites drawer');
-    toggle.title = isOpen ? 'Collapse favorites drawer' : 'Open favorites drawer';
-    toggle.textContent = isOpen ? 'Hide' : 'Favorites';
-  }
-
-  if (favorites) favorites.setAttribute('aria-hidden', String(!isOpen));
+function imageFavoritesDialog() {
+  return $('.image-lab-favorites-dialog');
 }
 
-function toggleFavoritesDrawer() {
-  const toggle = $('#image-lab-favorites-toggle');
-  const isOpen = toggle?.getAttribute('aria-expanded') !== 'false';
-  setFavoritesDrawerOpen(!isOpen);
+function imageFavoritesFocusableElements() {
+  const dialog = imageFavoritesDialog();
+  if (!dialog) return [];
+  const selector = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  return Array.from(dialog.querySelectorAll(selector)).filter((element) => {
+    return element instanceof HTMLElement && !element.hidden && element.getAttribute('aria-hidden') !== 'true';
+  });
+}
+
+function syncImageFavoritesModalState() {
+  const modal = $('#image-lab-favorites-modal');
+  const toggle = $('#image-lab-show-favorites');
+  const isOpen = Boolean(state.imageFavoritesModalOpen);
+
+  if (modal) {
+    modal.hidden = !isOpen;
+    modal.setAttribute('aria-hidden', String(!isOpen));
+  }
+  if (toggle) toggle.setAttribute('aria-expanded', String(isOpen));
+  document.body.classList.toggle('image-lab-favorites-modal-open', isOpen);
+
+  if (isOpen) {
+    renderFavorites();
+    window.setTimeout(() => {
+      const dialog = imageFavoritesDialog();
+      const closeButton = $('#image-lab-favorites-modal-close');
+      (closeButton || dialog)?.focus?.();
+    }, 0);
+  }
+}
+
+function openImageFavoritesModal() {
+  if (state.imageFavoritesModalOpen) return;
+  state.imageFavoritesModalPreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  state.imageFavoritesModalOpen = true;
+  syncImageFavoritesModalState();
+}
+
+function closeImageFavoritesModal(options = {}) {
+  if (!state.imageFavoritesModalOpen) return;
+  const previousFocus = state.imageFavoritesModalPreviousFocus;
+  state.imageFavoritesModalOpen = false;
+  state.imageFavoritesModalPreviousFocus = null;
+  syncImageFavoritesModalState();
+  if (options.restoreFocus === false) return;
+  window.setTimeout(() => {
+    if (previousFocus?.isConnected) previousFocus.focus();
+    else $('#image-lab-show-favorites')?.focus?.();
+  }, 0);
+}
+
+function handleImageFavoritesModalClick(event) {
+  if (!state.imageFavoritesModalOpen) return;
+  const closeControl = event.target.closest?.('[data-favorite-modal-action="close"]');
+  if (closeControl) {
+    closeImageFavoritesModal();
+    return;
+  }
+  const modal = $('#image-lab-favorites-modal');
+  if (event.target === modal) closeImageFavoritesModal();
+}
+
+function handleImageFavoritesModalKeydown(event) {
+  if (!state.imageFavoritesModalOpen) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeImageFavoritesModal();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const dialog = imageFavoritesDialog();
+  if (!dialog) return;
+  const focusable = imageFavoritesFocusableElements();
+  if (focusable.length === 0) {
+    event.preventDefault();
+    dialog.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey && (!active || active === first || !dialog.contains(active))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 async function fetchJson(url, options = {}) {
@@ -1045,7 +1117,7 @@ async function startNextLlmAutoPromptRequest() {
 }
 
 async function maybeRunLlmAutoGeneration() {
-  if (!state.llmAutoGenerateEnabled || state.llmAutoGenerateSubmitting) return;
+  if (!state.llmAutoGenerateEnabled || state.llmAutoGenerateSubmitting || state.favoriteLoadAutomaticGenerationGuard) return;
   if (!state.imageJobs || state.prewarmingModel) {
     setLlmAutoGenerateStatus('waiting-jobs', llmAutoGenerateStatusText('waiting-jobs'));
     scheduleLlmAutoGenerateWaitCheck();
@@ -1092,7 +1164,7 @@ async function maybeRunLlmAutoGeneration() {
 }
 
 async function maybeRunAutoGeneration() {
-  if (!state.autoGenerateEnabled || state.autoGenerateSubmitting) return;
+  if (!state.autoGenerateEnabled || state.autoGenerateSubmitting || state.favoriteLoadAutomaticGenerationGuard) return;
   if (!state.imageJobs || state.prewarmingModel) {
     scheduleAutoGenerateWaitCheck();
     return;
@@ -4056,6 +4128,51 @@ function favoriteSeedLabel(favorite) {
   return favorite?.seed ?? payloadSeed(favorite?.requestPayload || {}) ?? 'n/a';
 }
 
+function favoritePayload(favorite) {
+  return isPlainObject(favorite?.requestPayload) ? favorite.requestPayload : {};
+}
+
+function favoriteMetaValue(value) {
+  return value === null || value === undefined || value === '' ? 'n/a' : value;
+}
+
+function favoriteMetaItem(label, value, options = {}) {
+  const displayValue = favoriteMetaValue(value);
+  const content = options.code
+    ? `<code>${escapeHtml(displayValue)}</code>`
+    : escapeHtml(displayValue);
+  return `<div><dt>${escapeHtml(label)}</dt><dd>${content}</dd></div>`;
+}
+
+function favoriteDetailsHtml(favorite, model, seed, dimensions, updated) {
+  const payload = favoritePayload(favorite);
+  const steps = favorite?.steps ?? payloadNumber(payload, ['steps']);
+  const cfg = favorite?.cfgScale ?? payloadNumber(payload, ['cfg_scale', 'cfgScale', 'guidance_scale', 'guidanceScale']);
+  const sampler = favorite?.sampler || payloadString(payload, ['sampler_name', 'samplerName', 'sampler']);
+  const scheduler = favorite?.scheduler || payloadString(payload, ['scheduler']);
+  const sourceType = favorite?.generationSourceType || payloadString(payload, ['generation_source_type', 'generationSourceType', 'source_type', 'sourceType']);
+  return `<dl class="image-lab-favorite-meta-grid">
+    ${favoriteMetaItem('Source', model, { code: true })}
+    ${favoriteMetaItem('Type', sourceType)}
+    ${favoriteMetaItem('Seed', seed)}
+    ${favoriteMetaItem('Size', dimensions)}
+    ${favoriteMetaItem('Steps', steps)}
+    ${favoriteMetaItem('CFG', cfg)}
+    ${favoriteMetaItem('Sampler', sampler)}
+    ${favoriteMetaItem('Scheduler', scheduler)}
+    ${favoriteMetaItem('Updated', updated)}
+  </dl>`;
+}
+
+function favoriteTextBlock(label, value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return `<div class="image-lab-favorite-text-block">
+    <span class="field-label">${escapeHtml(label)}</span>
+    <p class="image-lab-favorite-prompt" title="${escapeHtml(text)}">${escapeHtml(previewText(text, 700))}</p>
+  </div>`;
+}
+
 function artifactUrlFromId(id) {
   const value = String(id || '').trim();
   return value ? `/api/v1/artifacts/${encodeURIComponent(value)}` : '';
@@ -4079,6 +4196,15 @@ function renderFavorites() {
   const target = $('#image-lab-favorites');
   if (!target) return;
   const favorites = state.imageFavorites?.favorites || [];
+  const error = state.imageFavoritesError;
+  const errorHtml = error
+    ? `<p class="danger-text image-lab-favorites-error">Could not load favorites: ${escapeHtml(error.message || error)}</p>`
+    : '';
+  if (!state.imageFavorites && error) {
+    target.classList.add('placeholder');
+    target.innerHTML = errorHtml;
+    return;
+  }
   if (!state.imageFavorites) {
     target.classList.add('placeholder');
     target.innerHTML = '<p class="muted">Loading saved image favorites...</p>';
@@ -4086,28 +4212,31 @@ function renderFavorites() {
   }
   if (favorites.length === 0) {
     target.classList.add('placeholder');
-    target.innerHTML = '<p class="muted">No image favorites yet. Save a generated gallery item to pin it here.</p>';
+    target.innerHTML = `${errorHtml}<p class="muted">No image favorites yet. Save a generated gallery item to pin it here.</p>`;
     return;
   }
   target.classList.remove('placeholder');
-  target.innerHTML = favorites.map((favorite) => {
+  target.innerHTML = `${errorHtml}${favorites.map((favorite) => {
     const imageUrl = favoriteImageUrl(favorite);
     const caption = favorite.title || favorite.promptPreview || favorite.jobId || 'Image favorite';
-    const promptPreview = favorite.promptPreview || favorite.prompt || caption;
+    const promptText = favorite.prompt || favorite.promptPreview || caption;
+    const negativeText = favorite.negativePrompt || favorite.negativePromptPreview || '';
+    const llmGuidance = favorite.llmImagePromptGuidance || favorite.llmImagePromptGuidancePreview || llmGuidanceFromPayload(favoritePayload(favorite));
     const model = favoriteModelLabel(favorite);
     const seed = favoriteSeedLabel(favorite);
     const dimensions = favoriteDimensions(favorite);
     const updated = formatDate(favorite.updatedAt || favorite.createdAt);
     return `<article class="image-lab-favorite-card" data-favorite-id="${escapeHtml(favorite.id)}">
       <button type="button" class="image-lab-favorite-thumb" data-favorite-action="load" aria-label="Load favorite ${escapeHtml(caption)}">
-        ${imageUrl ? `<img class="image-lab-favorite-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Favorite image: ${escapeHtml(previewText(caption, 80))}" loading="lazy" decoding="async"><div class="thumb-placeholder">Loading favorite...</div>` : '<div class="thumb-placeholder">No saved image</div>'}
+        ${imageUrl ? `<img class="image-lab-favorite-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Favorite image: ${escapeHtml(previewText(caption, 120))}" loading="lazy" decoding="async"><div class="thumb-placeholder">Loading favorite...</div>` : '<div class="thumb-placeholder">No saved image</div>'}
       </button>
       <div class="image-lab-favorite-body">
         <div class="image-lab-favorite-details">
-          <strong title="${escapeHtml(caption)}">${escapeHtml(previewText(caption, 64))}</strong>
-          <span class="hint image-lab-favorite-model"><code>${escapeHtml(model)}</code></span>
-          <span class="hint">seed ${escapeHtml(seed)} - ${escapeHtml(dimensions)} - ${escapeHtml(updated)}</span>
-          <span class="image-lab-favorite-prompt">${escapeHtml(previewText(promptPreview, 92))}</span>
+          <strong title="${escapeHtml(caption)}">${escapeHtml(previewText(caption, 120))}</strong>
+          ${favoriteDetailsHtml(favorite, model, seed, dimensions, updated)}
+          ${favoriteTextBlock('Prompt', promptText)}
+          ${favoriteTextBlock('Negative', negativeText)}
+          ${favoriteTextBlock('LLM guidance', llmGuidance)}
         </div>
         <div class="button-row favorite-actions">
           <button type="button" data-favorite-action="load" aria-label="Load favorite ${escapeHtml(caption)}">Load</button>
@@ -4116,7 +4245,7 @@ function renderFavorites() {
         </div>
       </div>
     </article>`;
-  }).join('');
+  }).join('')}`;
   hydrateImages();
 }
 
@@ -4129,6 +4258,7 @@ function renderAll() {
 
 async function refreshAll(message = '', options = {}) {
   state.imageError = null;
+  state.imageFavoritesError = null;
   const publicHealth = await fetchJson('/health').catch((error) => {
     state.imageError = error;
     return null;
@@ -4149,7 +4279,12 @@ async function refreshAll(message = '', options = {}) {
   if (generationSourcesResult.status === 'fulfilled') applyGenerationSourcesResult(generationSourcesResult.value);
   if (workflows.status === 'fulfilled') state.imageWorkflows = workflows.value;
   if (jobs.status === 'fulfilled') state.imageJobs = jobs.value;
-  if (favorites.status === 'fulfilled') state.imageFavorites = favorites.value;
+  if (favorites.status === 'fulfilled') {
+    state.imageFavorites = favorites.value;
+    state.imageFavoritesError = null;
+  } else {
+    state.imageFavoritesError = favorites.reason;
+  }
 
   const rejected = [models, generationSourcesResult, workflows, jobs, favorites].find((result) => result.status === 'rejected');
   if (rejected) {
@@ -4175,10 +4310,17 @@ async function refreshGalleryOnly(message = '') {
 }
 
 async function refreshFavoritesOnly(message = '') {
-  state.imageFavorites = await fetchJson('/api/v1/image-favorites?limit=50');
-  renderFavorites();
-  renderGallery();
-  if (message) setStatus(message);
+  try {
+    state.imageFavorites = await fetchJson('/api/v1/image-favorites?limit=50');
+    state.imageFavoritesError = null;
+    renderFavorites();
+    renderGallery();
+    if (message) setStatus(message);
+  } catch (error) {
+    state.imageFavoritesError = error;
+    renderFavorites();
+    throw error;
+  }
 }
 
 async function refreshModelsOnly(message = '', options = {}) {
@@ -4713,6 +4855,12 @@ function favoriteById(id) {
   return (state.imageFavorites?.favorites || []).find((favorite) => String(favorite.id || '') === id) || null;
 }
 
+function releaseFavoriteLoadAutomaticGenerationGuard() {
+  window.setTimeout(() => {
+    state.favoriteLoadAutomaticGenerationGuard = false;
+  }, 500);
+}
+
 async function handleFavoriteClick(event) {
   const button = event.target.closest('[data-favorite-action]');
   if (!button || button.disabled) return;
@@ -4723,16 +4871,20 @@ async function handleFavoriteClick(event) {
   const action = button.dataset.favoriteAction;
   try {
     if (action === 'load') {
-      if (state.autoGenerateEnabled) setAutoGenerateEnabled(false, { message: 'Auto-Generate turned off before loading favorite settings.', ok: true });
-      if (state.llmAutoGenerateEnabled) stopLlmAutoGenerate('LLM Auto-Generate turned off before loading favorite settings.', true);
-      const response = await fetchJson(`/api/v1/image-favorites/${encodeURIComponent(favoriteId)}`);
-      const favorite = response.favorite;
-      const warnings = applyGenerationPayloadToControls(favorite?.requestPayload || {});
-      if (selectedSourceRequiresPrewarm() && warnings.every((warning) => !warning.includes('generation source') && !warning.startsWith('model '))) {
-        await prewarmSelectedModel();
+      state.favoriteLoadAutomaticGenerationGuard = true;
+      try {
+        const response = await fetchJson(`/api/v1/image-favorites/${encodeURIComponent(favoriteId)}`);
+        const favorite = response.favorite;
+        const warnings = applyGenerationPayloadToControls(favorite?.requestPayload || {});
+        if (selectedSourceRequiresPrewarm() && warnings.every((warning) => !warning.includes('generation source') && !warning.startsWith('model '))) {
+          await prewarmSelectedModel({ preserveFormValues: true });
+        }
+        const warningText = warnings.length ? ` Restored what I could; check: ${warnings.join(', ')}.` : '';
+        setStatus(`Loaded favorite "${favorite?.title || summary?.title || favoriteId}" into controls. It was not submitted.${warningText}`, warnings.length === 0);
+        closeImageFavoritesModal();
+      } finally {
+        releaseFavoriteLoadAutomaticGenerationGuard();
       }
-      const warningText = warnings.length ? ` Restored what I could; check: ${warnings.join(', ')}.` : '';
-      setStatus(`Loaded favorite "${favorite?.title || summary?.title || favoriteId}" into controls. It was not submitted.${warningText}`, warnings.length === 0);
       return;
     }
     if (action === 'delete') {
@@ -4928,8 +5080,10 @@ function wireEvents() {
     setLlmAutoGenerateEnabled(Boolean(event.currentTarget?.checked), { userInitiated: true });
   });
   $('#image-lab-slideshow-start')?.addEventListener('click', openImageLabSlideshow);
-  $('#image-lab-favorites-toggle')?.addEventListener('click', toggleFavoritesDrawer);
-  setFavoritesDrawerOpen(true);
+  $('#image-lab-show-favorites')?.addEventListener('click', openImageFavoritesModal);
+  $('#image-lab-favorites-modal')?.addEventListener('click', handleImageFavoritesModalClick);
+  document.addEventListener('keydown', handleImageFavoritesModalKeydown);
+  syncImageFavoritesModalState();
   $('#image-lab-form')?.addEventListener('click', handlePromptClipboardClick);
   $('#image-lab-form')?.addEventListener('submit', handleGenerate);
   const positiveDrawer = $('#image-lab-positive-drawer');
