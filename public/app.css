@@ -2280,7 +2280,7 @@ body.image-lab-favorites-modal-open {
   min-width: 0;
   height: clamp(320px, 44vh, 520px);
   min-height: 320px;
-  max-height: min(520px, calc(100vh - 190px));
+  max-height: min(300px, calc(100vh - 190px));
   background: var(--card-soft);
   border: 1px solid var(--border);
   border-radius: 14px;
