@@ -5,6 +5,7 @@ import type { GenerationSourceUserMetadata } from '../../types.ts';
 
 const MAX_SOURCE_ID_CHARS = 512;
 const MAX_NOTES_CHARS = 8000;
+const MAX_USER_CATEGORY_CHARS = 80;
 const MAX_OVERRIDE_CHARS = 120;
 
 export class GenerationSourceMetadataStore {
@@ -61,6 +62,16 @@ export class GenerationSourceMetadataStore {
       next.notes = normalizeNotes(body.notes ?? body.note);
     }
 
+    if (hasAnyOwn(body, ['rating', 'rank', 'starRating', 'star_rating'])) {
+      next.rating = normalizeRating(body.rating ?? body.rank ?? body.starRating ?? body.star_rating);
+    }
+
+    if (hasAnyOwn(body, ['userCategory', 'user_category', 'customCategory', 'custom_category', 'categoryLabel', 'category_label'])) {
+      next.userCategory = normalizeUserCategory(
+        body.userCategory ?? body.user_category ?? body.customCategory ?? body.custom_category ?? body.categoryLabel ?? body.category_label
+      );
+    }
+
     if (hasOwn(body, 'promptStyleOverride') || hasOwn(body, 'prompt_style_override')) {
       next.promptStyleOverride = normalizeNullableOverride(body.promptStyleOverride ?? body.prompt_style_override, 'promptStyleOverride');
     }
@@ -111,7 +122,7 @@ export class GenerationSourceMetadataStore {
       .filter((item): item is GenerationSourceUserMetadata => item !== null)
       .sort(compareMetadataBySourceId);
     const payload = {
-      version: 1,
+      version: 2,
       updatedAt: new Date().toISOString(),
       sources: normalized
     };
@@ -135,6 +146,8 @@ function createEmptyMetadata(sourceId: string, now: string): GenerationSourceUse
     sourceId,
     favorite: false,
     notes: '',
+    rating: 0,
+    userCategory: '',
     promptStyleOverride: null,
     categoryOverride: null,
     colorOverride: null,
@@ -165,12 +178,18 @@ function normalizeStoredMetadata(value: unknown): GenerationSourceUserMetadata |
   const now = new Date().toISOString();
   const createdAt = readDateString(value.createdAt ?? value.created_at) ?? readDateString(value.updatedAt ?? value.updated_at) ?? now;
   const updatedAt = readDateString(value.updatedAt ?? value.updated_at) ?? createdAt;
+  const legacyCategoryOverride = normalizeStoredNullableOverride(value.categoryOverride ?? value.category_override);
+  const hasExplicitUserCategory = hasAnyOwn(value, ['userCategory', 'user_category', 'customCategory', 'custom_category', 'categoryLabel', 'category_label']);
   return {
     sourceId,
     favorite: value.favorite === true || value.isFavorite === true || value.is_favorite === true,
     notes: normalizeStoredNotes(value.notes ?? value.note),
+    rating: normalizeStoredRating(value.rating ?? value.rank ?? value.starRating ?? value.star_rating),
+    userCategory: hasExplicitUserCategory
+      ? normalizeStoredUserCategory(value.userCategory ?? value.user_category ?? value.customCategory ?? value.custom_category ?? value.categoryLabel ?? value.category_label)
+      : (legacyCategoryOverride ?? ''),
     promptStyleOverride: normalizeStoredNullableOverride(value.promptStyleOverride ?? value.prompt_style_override),
-    categoryOverride: normalizeStoredNullableOverride(value.categoryOverride ?? value.category_override),
+    categoryOverride: legacyCategoryOverride,
     colorOverride: normalizeStoredNullableOverride(value.colorOverride ?? value.color_override),
     createdAt,
     updatedAt
@@ -201,6 +220,41 @@ function normalizeNotes(value: unknown): string {
 
 function normalizeStoredNotes(value: unknown): string {
   return typeof value === 'string' ? value.slice(0, MAX_NOTES_CHARS) : '';
+}
+
+function normalizeRating(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 5) {
+    throw new AppError('GENERATION_SOURCE_METADATA_INVALID_RATING', 'Generation source rating must be an integer from 0 through 5.', 422, {
+      minimum: 0,
+      maximum: 5
+    });
+  }
+  return value;
+}
+
+function normalizeStoredRating(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 5 ? value : 0;
+}
+
+function normalizeUserCategory(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw new AppError('GENERATION_SOURCE_METADATA_INVALID_USER_CATEGORY', 'Generation source user category must be a string.', 422);
+  }
+  const normalized = value.trim();
+  if (normalized.length > MAX_USER_CATEGORY_CHARS) {
+    throw new AppError(
+      'GENERATION_SOURCE_METADATA_USER_CATEGORY_TOO_LONG',
+      `Generation source user category must be ${MAX_USER_CATEGORY_CHARS} characters or fewer.`,
+      422,
+      { max_chars: MAX_USER_CATEGORY_CHARS }
+    );
+  }
+  return normalized;
+}
+
+function normalizeStoredUserCategory(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.trim().slice(0, MAX_USER_CATEGORY_CHARS);
 }
 
 function normalizeNullableOverride(value: unknown, fieldName: string): string | null {
@@ -243,6 +297,10 @@ function compareMetadataBySourceId(left: GenerationSourceUserMetadata, right: Ge
 
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function hasAnyOwn(record: Record<string, unknown>, keys: string[]): boolean {
+  return keys.some((key) => hasOwn(record, key));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -2299,14 +2299,13 @@ function renderImageGeneratorHtml(): string {
 
           <div id="image-lab-source-picker" class="image-lab-model-field image-lab-source-picker">
             <select id="image-lab-model" class="visually-hidden image-lab-source-native" tabindex="-1" aria-hidden="true"></select>
-            <button id="image-lab-source-toggle" class="image-lab-source-toggle" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="image-lab-source-menu" aria-label="Select generation source">
+            <button id="image-lab-source-toggle" class="image-lab-source-toggle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="image-lab-source-menu" aria-label="Select generation source">
               <span class="image-lab-source-current-wrap">
                 <span id="image-lab-source-current" class="image-lab-source-current">Select generation source</span>
-                <span id="image-lab-source-current-meta" class="image-lab-source-current-meta"></span>
               </span>
               <span class="image-lab-source-caret" aria-hidden="true">▾</span>
             </button>
-            <div id="image-lab-source-menu" class="image-lab-source-menu" role="listbox" aria-label="Generation sources" hidden>
+            <div id="image-lab-source-menu" class="image-lab-source-menu" role="dialog" aria-label="Generation sources" hidden>
               <div id="image-lab-source-list" class="image-lab-source-list"></div>
             </div>
           </div>

@@ -250,7 +250,7 @@ export interface GenerationSourceCapabilities {
 
 export interface GenerationSourceCategoryMetadata {
   name: string;
-  color: string;
+  color?: string;
   origin: GenerationSourceMetadataOrigin;
   path?: string;
 }
@@ -273,6 +273,8 @@ export interface GenerationSourceUserMetadata {
   sourceId: string;
   favorite: boolean;
   notes: string;
+  rating: number;
+  userCategory: string;
   promptStyleOverride?: string | null;
   categoryOverride?: string | null;
   colorOverride?: string | null;

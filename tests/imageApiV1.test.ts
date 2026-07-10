@@ -222,7 +222,7 @@ test('GET /api/v1/generation-sources probes checkpoints, groups workflow sources
 });
 
 
-test('generation source metadata persists server-side favorites, notes, and browser-visible source metadata', async () => {
+test('generation source metadata persists server-side favorites, notes, ratings, and user categories', async () => {
   const runtimeConfig = await tempImageRuntimeConfig({ imageDefaultSyncTimeoutMs: 1000, imageMockDelayMs: 1 });
   const checkpointDir = path.join(runtimeConfig.imageModelPaths[0]!, 'checkpoints');
   await fs.mkdir(path.join(checkpointDir, 'Cartoon'), { recursive: true });
@@ -257,7 +257,7 @@ test('generation source metadata persists server-side favorites, notes, and brow
     assert.ok(checkpoint);
     persistedSourceId = stringField(checkpoint, 'id');
     assert.equal(testRecord(checkpoint.category).name, 'Cartoon');
-    assert.equal(typeof testRecord(checkpoint.category).color, 'string');
+    assert.equal(testRecord(checkpoint.category).color, undefined);
     assert.equal(testRecord(checkpoint.promptStyle).value, 'Flux');
     assert.equal(testRecord(checkpoint.promptStyle).confidence, 'inferred');
     assert.equal(testRecord(checkpoint.constraints).steps, 'default 28');
@@ -275,23 +275,48 @@ test('generation source metadata persists server-side favorites, notes, and brow
     const patched = await (await fetch(`${baseUrl}/api/v1/generation-sources/metadata/${encodeURIComponent(persistedSourceId)}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ favorite: true, notes: 'Great for cartoons. Avoid high CFG.' })
+      body: JSON.stringify({ favorite: true, notes: 'Great for cartoons. Avoid high CFG.', rating: 5, userCategory: '  Anime  ' })
     })).json();
     assert.equal(patched.ok, true);
     assert.equal(patched.metadata.sourceId, persistedSourceId);
     assert.equal(patched.metadata.favorite, true);
     assert.equal(patched.metadata.notes, 'Great for cartoons. Avoid high CFG.');
+    assert.equal(patched.metadata.rating, 5);
+    assert.equal(patched.metadata.userCategory, 'Anime');
+
+    const invalidRatingResponse = await fetch(`${baseUrl}/api/v1/generation-sources/metadata/${encodeURIComponent(persistedSourceId)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rating: 6 })
+    });
+    assert.equal(invalidRatingResponse.status, 422);
+    const invalidRating = await invalidRatingResponse.json();
+    assert.equal(invalidRating.error.code, 'GENERATION_SOURCE_METADATA_INVALID_RATING');
+
+    const longCategoryResponse = await fetch(`${baseUrl}/api/v1/generation-sources/metadata/${encodeURIComponent(persistedSourceId)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ userCategory: 'x'.repeat(81) })
+    });
+    assert.equal(longCategoryResponse.status, 422);
+    const longCategory = await longCategoryResponse.json();
+    assert.equal(longCategory.error.code, 'GENERATION_SOURCE_METADATA_USER_CATEGORY_TOO_LONG');
 
     const metadataList = await (await fetch(`${baseUrl}/api/v1/generation-sources/metadata`)).json();
     assert.equal(metadataList.ok, true);
     assert.equal(metadataList.metadata.length, 1);
     assert.equal(metadataList.metadata[0].sourceId, persistedSourceId);
+    assert.equal(metadataList.metadata[0].rating, 5);
+    assert.equal(metadataList.metadata[0].userCategory, 'Anime');
 
     const decorated = await (await fetch(`${baseUrl}/api/v1/generation-sources`)).json();
     const decoratedCheckpoint = generationSourceGroup(testRecord(decorated), 'checkpoints').find((source) => source.id === persistedSourceId);
     assert.ok(decoratedCheckpoint);
     assert.equal(testRecord(decoratedCheckpoint.userMetadata).favorite, true);
     assert.equal(testRecord(decoratedCheckpoint.userMetadata).notes, 'Great for cartoons. Avoid high CFG.');
+    assert.equal(testRecord(decoratedCheckpoint.userMetadata).rating, 5);
+    assert.equal(testRecord(decoratedCheckpoint.userMetadata).userCategory, 'Anime');
+    assert.equal(testRecord(decoratedCheckpoint.category).name, 'Cartoon');
   });
 
   await withTestServer({
@@ -305,7 +330,21 @@ test('generation source metadata persists server-side favorites, notes, and brow
     });
     const checkpoint = generationSourceGroup(list, 'checkpoints').find((source) => source.id === persistedSourceId);
     assert.ok(checkpoint);
+    assert.equal(testRecord(checkpoint.userMetadata).favorite, true);
     assert.equal(testRecord(checkpoint.userMetadata).notes, 'Great for cartoons. Avoid high CFG.');
+    assert.equal(testRecord(checkpoint.userMetadata).rating, 5);
+    assert.equal(testRecord(checkpoint.userMetadata).userCategory, 'Anime');
+    assert.equal(testRecord(checkpoint.category).name, 'Cartoon');
+
+    const cleared = await (await fetch(`${baseUrl}/api/v1/generation-sources/metadata/${encodeURIComponent(persistedSourceId)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rating: 0, userCategory: '' })
+    })).json();
+    assert.equal(cleared.metadata.rating, 0);
+    assert.equal(cleared.metadata.userCategory, '');
+    assert.equal(cleared.metadata.favorite, true);
+    assert.equal(cleared.metadata.notes, 'Great for cartoons. Avoid high CFG.');
   });
 });
 

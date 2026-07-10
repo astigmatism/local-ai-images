@@ -508,7 +508,6 @@ function checkpointCategory(model: ModelInventoryItem): GenerationSourceCategory
   const name = categoryName || UNCATEGORIZED_SOURCE_CATEGORY;
   return {
     name,
-    color: colorForCategory(name),
     origin: categoryName ? 'folder' : 'fallback',
     ...(categoryName ? { path: displaySegments.slice(0, -1).join('/') } : {})
   };
@@ -519,7 +518,6 @@ function workflowCategory(workflow: WorkflowPreset): GenerationSourceCategoryMet
   const name = configured || 'Workflow';
   return {
     name,
-    color: colorForCategory(name),
     origin: configured ? 'manifest' : 'fallback'
   };
 }
@@ -535,16 +533,6 @@ function categoryNameFromPathSegments(segments: string[]): string | null {
 
 function isCheckpointRootSegment(value: string): boolean {
   return ['checkpoints', 'checkpoint', 'models', 'model'].includes(value.trim().toLowerCase());
-}
-
-function colorForCategory(categoryName: string): string {
-  const normalized = categoryName.trim().toLowerCase();
-  if (!normalized || normalized === UNCATEGORIZED_SOURCE_CATEGORY.toLowerCase()) return 'hsl(215 18% 58%)';
-  const digest = crypto.createHash('sha1').update(normalized).digest();
-  const hue = digest.readUInt16BE(0) % 360;
-  const saturation = 62 + (digest[2]! % 18);
-  const lightness = 50 + (digest[3]! % 12);
-  return `hsl(${hue} ${saturation}% ${lightness}%)`;
 }
 
 function inferCheckpointPromptStyle(model: ModelInventoryItem, categoryName: string): GenerationSourcePromptStyleMetadata {

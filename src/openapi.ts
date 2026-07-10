@@ -68,11 +68,13 @@ const generationRequestSchema = {
 const generationSourceUserMetadataSchema = {
   type: 'object',
   additionalProperties: true,
-  required: ['sourceId', 'favorite', 'notes', 'createdAt', 'updatedAt'],
+  required: ['sourceId', 'favorite', 'notes', 'rating', 'userCategory', 'createdAt', 'updatedAt'],
   properties: {
     sourceId: { type: 'string' },
     favorite: { type: 'boolean' },
     notes: { type: 'string' },
+    rating: { type: 'integer', minimum: 0, maximum: 5, description: 'User-assigned generation-source rating. Zero means unrated.' },
+    userCategory: { type: 'string', maxLength: 80, description: 'User-defined category label, separate from discovered folder/category metadata.' },
     promptStyleOverride: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     categoryOverride: { oneOf: [{ type: 'string' }, { type: 'null' }] },
     colorOverride: { oneOf: [{ type: 'string' }, { type: 'null' }] },
@@ -98,7 +100,7 @@ const generationSourceSchema = {
     checkpointId: { type: 'string' },
     probeStatus: { enum: ['pending', 'valid', 'invalid', 'error'] },
     source: { enum: ['checkpoint-probe', 'workflow-registry'] },
-    category: { type: 'object', additionalProperties: true, properties: { name: { type: 'string' }, color: { type: 'string' }, origin: { type: 'string' }, path: { type: 'string' } } },
+    category: { type: 'object', additionalProperties: true, properties: { name: { type: 'string' }, origin: { type: 'string' }, path: { type: 'string' } } },
     promptStyle: { type: 'object', additionalProperties: true, properties: { value: { type: 'string' }, origin: { type: 'string' }, confidence: { type: 'string' } } },
     constraints: { type: 'object', additionalProperties: true, properties: { steps: { type: 'string' }, cfgScale: { type: 'string' }, resolution: { type: 'string' }, notes: { type: 'array', items: { type: 'string' } }, origin: { type: 'string' } } },
     userMetadata: generationSourceUserMetadataSchema,
@@ -690,17 +692,17 @@ export function buildOpenApiDocument() {
       '/api/v1/generation-sources/metadata': {
         get: {
           summary: 'List persisted generation-source user metadata',
-          description: 'Returns server-persisted favorites, notes, and optional user overrides keyed by stable generation source id. This is separate from generated-image favorites.',
+          description: 'Returns server-persisted favorites, notes, ratings, user-defined categories, and legacy optional overrides keyed by stable generation source id. This is separate from generated-image favorites.',
           security: bearerSecurity,
           responses: { '200': { description: 'Generation source user metadata', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, metadata: { type: 'array', items: generationSourceUserMetadataSchema } } } } } }, ...authErrorResponses }
         }
       },
       '/api/v1/generation-sources/metadata/{sourceId}': {
         patch: {
-          summary: 'Update generation-source favorite, notes, or user metadata overrides',
+          summary: 'Update generation-source favorite, notes, rating, user category, or legacy overrides',
           security: bearerSecurity,
           parameters: [{ name: 'sourceId', in: 'path', required: true, schema: { type: 'string' } }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true, properties: { favorite: { type: 'boolean' }, notes: { type: 'string' }, promptStyleOverride: { oneOf: [{ type: 'string' }, { type: 'null' }] }, categoryOverride: { oneOf: [{ type: 'string' }, { type: 'null' }] }, colorOverride: { oneOf: [{ type: 'string' }, { type: 'null' }] } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true, properties: { favorite: { type: 'boolean' }, notes: { type: 'string' }, rating: { type: 'integer', minimum: 0, maximum: 5 }, userCategory: { type: 'string', maxLength: 80 }, promptStyleOverride: { oneOf: [{ type: 'string' }, { type: 'null' }] }, categoryOverride: { oneOf: [{ type: 'string' }, { type: 'null' }] }, colorOverride: { oneOf: [{ type: 'string' }, { type: 'null' }] } } } } } },
           responses: { '200': { description: 'Updated generation source user metadata', content: { 'application/json': { schema: { type: 'object', properties: { ok: { const: true }, metadata: generationSourceUserMetadataSchema } } } } }, '422': { description: 'Invalid metadata update', content: { 'application/json': { schema: errorSchema } } }, ...authErrorResponses }
         }
       },
