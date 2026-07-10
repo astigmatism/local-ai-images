@@ -4342,7 +4342,7 @@ function favoriteTextBlock(label, value) {
   if (!text) return '';
   return `<div class="image-lab-favorite-text-block">
     <span class="field-label">${escapeHtml(label)}</span>
-    <p class="image-lab-favorite-prompt" title="${escapeHtml(text)}">${escapeHtml(previewText(text, 700))}</p>
+    <p class="image-lab-favorite-prompt" title="${escapeHtml(text)}">${escapeHtml(text)}</p>
   </div>`;
 }
 
@@ -4404,6 +4404,11 @@ function renderFavorites() {
     const seed = favoriteSeedLabel(favorite);
     const dimensions = favoriteDimensions(favorite);
     const updated = formatDate(favorite.updatedAt || favorite.createdAt);
+    const promptDetailsHtml = [
+      favoriteTextBlock('Prompt', promptText),
+      favoriteTextBlock('Negative', negativeText),
+      favoriteTextBlock('LLM guidance', llmGuidance)
+    ].filter(Boolean).join('');
     return `<article class="image-lab-favorite-card" data-favorite-id="${escapeHtml(favorite.id)}">
       <button type="button" class="image-lab-favorite-thumb" data-favorite-action="load" aria-label="Load favorite ${escapeHtml(caption)}">
         ${imageUrl ? `<img class="image-lab-favorite-image" data-artifact-url="${escapeHtml(imageUrl)}" alt="Favorite image: ${escapeHtml(previewText(caption, 120))}" loading="lazy" decoding="async"><div class="thumb-placeholder">Loading favorite...</div>` : '<div class="thumb-placeholder">No saved image</div>'}
@@ -4415,9 +4420,7 @@ function renderFavorites() {
             ${favoritePromptBadgesHtml(positivePromptPresent, negativePromptPresent, llmGuidancePresent)}
           </div>
           ${favoriteDetailsHtml(favorite, model, seed, dimensions, updated)}
-          ${favoriteTextBlock('Prompt', promptText)}
-          ${favoriteTextBlock('Negative', negativeText)}
-          ${favoriteTextBlock('LLM guidance', llmGuidance)}
+          ${promptDetailsHtml ? `<div class="image-lab-favorite-prompt-scroll" tabindex="0" aria-label="Saved prompt details">${promptDetailsHtml}</div>` : ''}
         </div>
         <div class="button-row favorite-actions">
           <button type="button" data-favorite-action="load" aria-label="Load favorite ${escapeHtml(caption)}">Load</button>
