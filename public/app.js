@@ -24,6 +24,7 @@ const state = {
   llmImagePromptStatusMessage: '',
   llmImagePromptStatusOk: true,
   imageError: null,
+  resolutionPresetPickerOpenSelector: '',
   activeJobId: null,
   loadedFavoritePayloadBase: null
 };
@@ -268,7 +269,7 @@ function resolutionPresetFromValue(value, orientation) {
 
 function formatMegapixels(width, height) {
   const megapixels = (Number(width) * Number(height)) / 1000000;
-  return `${megapixels < 1 ? megapixels.toFixed(2) : megapixels.toFixed(1)} MP`;
+  return `${megapixels < 10 ? megapixels.toFixed(2) : megapixels.toFixed(1)} MP`;
 }
 
 function greatestCommonDivisor(a, b) {
@@ -287,8 +288,12 @@ function aspectRatioLabel(width, height) {
   return `${Number(width) / divisor}:${Number(height) / divisor}`;
 }
 
+function resolutionPresetDimensionsLabel(width, height) {
+  return `${Number(width)} × ${Number(height)}`;
+}
+
 function resolutionPresetLabel(preset) {
-  return `${preset.width} x ${preset.height} - ${preset.label} (${aspectRatioLabel(preset.width, preset.height)}; ${formatMegapixels(preset.width, preset.height)})`;
+  return `${resolutionPresetDimensionsLabel(preset.width, preset.height)} - ${preset.label} (${aspectRatioLabel(preset.width, preset.height)}; ${formatMegapixels(preset.width, preset.height)})`;
 }
 
 function numericInputValue(selector) {
@@ -304,10 +309,122 @@ function matchedResolutionPresetValue(widthSelector, heightSelector, orientation
   return match ? resolutionPresetOptionValue(match) : '';
 }
 
+function resolutionPresetPickerParts(selectSelector) {
+  const select = $(selectSelector);
+  const picker = select?.closest?.('[data-resolution-preset-picker]') || null;
+  return {
+    select,
+    picker,
+    toggle: picker?.querySelector?.('[data-resolution-preset-toggle]') || null,
+    current: picker?.querySelector?.('[data-resolution-preset-current]') || null,
+    currentMeta: picker?.querySelector?.('[data-resolution-preset-current-meta]') || null,
+    menu: picker?.querySelector?.('.image-lab-resolution-preset-menu') || null,
+    list: picker?.querySelector?.('[data-resolution-preset-list]') || null
+  };
+}
+
+function resolutionPresetConfigFromSelector(selectSelector) {
+  for (const configs of Object.values(RESOLUTION_PRESET_SELECTS)) {
+    const match = configs.find((config) => config.selector === selectSelector);
+    if (match) return match;
+  }
+  return null;
+}
+
+function resolutionPresetSelectorFromElement(element) {
+  const picker = element?.closest?.('[data-resolution-preset-picker]') || null;
+  const select = picker?.querySelector?.('select') || null;
+  return select?.id ? `#${select.id}` : '';
+}
+
+function currentResolutionSummary(widthSelector, heightSelector) {
+  const width = numericInputValue(widthSelector);
+  const height = numericInputValue(heightSelector);
+  if (!width || !height) return 'Manual dimensions';
+  return `${resolutionPresetDimensionsLabel(width, height)} · ${aspectRatioLabel(width, height)} · ${formatMegapixels(width, height)}`;
+}
+
+function resolutionPresetMetaText(preset) {
+  return `${resolutionPresetDimensionsLabel(preset.width, preset.height)} · ${aspectRatioLabel(preset.width, preset.height)} · ${formatMegapixels(preset.width, preset.height)}`;
+}
+
+function resolutionPresetSelectedPillHtml(selected) {
+  return selected ? '<span class="image-lab-resolution-preset-selected-pill">Selected</span>' : '';
+}
+
+function resolutionPresetRowHtml(preset, selected) {
+  const value = resolutionPresetOptionValue(preset);
+  const dimensions = resolutionPresetDimensionsLabel(preset.width, preset.height);
+  const ratio = aspectRatioLabel(preset.width, preset.height);
+  const megapixels = formatMegapixels(preset.width, preset.height);
+  const ariaLabel = `${preset.label}, ${dimensions}, ${ratio}, ${megapixels}`;
+  return `<button type="button" class="image-lab-resolution-preset-row${selected ? ' is-selected' : ''}" role="option" aria-selected="${selected ? 'true' : 'false'}" data-resolution-preset-value="${escapeHtml(value)}" aria-label="${escapeHtml(ariaLabel)}">
+    <span class="image-lab-resolution-preset-cell image-lab-resolution-preset-name"><span>${escapeHtml(preset.label)}</span>${resolutionPresetSelectedPillHtml(selected)}</span>
+    <span class="image-lab-resolution-preset-cell image-lab-resolution-preset-dimensions">${escapeHtml(dimensions)}</span>
+    <span class="image-lab-resolution-preset-cell image-lab-resolution-preset-ratio">${escapeHtml(ratio)}</span>
+    <span class="image-lab-resolution-preset-cell image-lab-resolution-preset-megapixels">${escapeHtml(megapixels)}</span>
+  </button>`;
+}
+
+function resolutionPresetCustomRowHtml(customLabel, selected, widthSelector, heightSelector) {
+  const width = numericInputValue(widthSelector);
+  const height = numericInputValue(heightSelector);
+  const dimensions = width && height ? resolutionPresetDimensionsLabel(width, height) : 'Manual';
+  const ratio = width && height ? aspectRatioLabel(width, height) : '—';
+  const megapixels = width && height ? formatMegapixels(width, height) : '—';
+  const ariaLabel = `${customLabel}, ${dimensions}, ${ratio}, ${megapixels}`;
+  return `<button type="button" class="image-lab-resolution-preset-row image-lab-resolution-preset-row-custom${selected ? ' is-selected' : ''}" role="option" aria-selected="${selected ? 'true' : 'false'}" data-resolution-preset-value="" aria-label="${escapeHtml(ariaLabel)}">
+    <span class="image-lab-resolution-preset-cell image-lab-resolution-preset-name"><span>${escapeHtml(customLabel)}</span>${resolutionPresetSelectedPillHtml(selected)}</span>
+    <span class="image-lab-resolution-preset-cell image-lab-resolution-preset-dimensions">${escapeHtml(dimensions)}</span>
+    <span class="image-lab-resolution-preset-cell image-lab-resolution-preset-ratio">${escapeHtml(ratio)}</span>
+    <span class="image-lab-resolution-preset-cell image-lab-resolution-preset-megapixels">${escapeHtml(megapixels)}</span>
+  </button>`;
+}
+
+function resolutionPresetPickerListHtml(selectedValue, orientation, customLabel, widthSelector, heightSelector) {
+  let activeCategory = '';
+  let html = `<div class="image-lab-resolution-preset-list-header" aria-hidden="true">
+    <span>Name</span><span>Dimensions</span><span>Ratio</span><span>MP</span>
+  </div>${resolutionPresetCustomRowHtml(customLabel, selectedValue === '', widthSelector, heightSelector)}`;
+  for (const preset of RESOLUTION_PRESETS) {
+    if (!resolutionPresetMatchesOrientation(preset, orientation)) continue;
+    if (preset.category !== activeCategory) {
+      if (activeCategory) html += '</div></section>';
+      activeCategory = preset.category;
+      html += `<section class="image-lab-resolution-preset-section" aria-label="${escapeHtml(activeCategory)}">
+        <div class="image-lab-resolution-preset-section-title">${escapeHtml(activeCategory)}</div>
+        <div class="image-lab-resolution-preset-section-list">`;
+    }
+    html += resolutionPresetRowHtml(preset, selectedValue === resolutionPresetOptionValue(preset));
+  }
+  if (activeCategory) html += '</div></section>';
+  return html;
+}
+
+function renderResolutionPresetPicker(selectSelector, widthSelector, heightSelector, orientation, customLabel = 'Custom/manual size') {
+  const { select, picker, toggle, current, currentMeta, menu, list } = resolutionPresetPickerParts(selectSelector);
+  if (!select || !toggle || !current || !currentMeta || !menu || !list) return;
+  const selectedValue = select.value || '';
+  const selectedPreset = selectedValue ? resolutionPresetFromValue(selectedValue, orientation) : null;
+  const isOpen = state.resolutionPresetPickerOpenSelector === selectSelector;
+  toggle.classList.toggle('is-empty', !selectedPreset);
+  toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  current.textContent = selectedPreset ? selectedPreset.label : customLabel;
+  currentMeta.textContent = selectedPreset ? resolutionPresetMetaText(selectedPreset) : currentResolutionSummary(widthSelector, heightSelector);
+  toggle.title = `${current.textContent}${currentMeta.textContent ? ` (${currentMeta.textContent})` : ''}`;
+  list.innerHTML = resolutionPresetPickerListHtml(selectedValue, orientation, customLabel, widthSelector, heightSelector);
+  picker?.classList.toggle('is-open', isOpen);
+  menu.classList.toggle('is-open', isOpen);
+  menu.hidden = !isOpen;
+  if (isOpen) positionResolutionPresetPicker(selectSelector);
+}
+
 function syncResolutionPresetToDimensions(selectSelector, widthSelector, heightSelector, orientation) {
   const select = $(selectSelector);
   if (!select) return;
   select.value = matchedResolutionPresetValue(widthSelector, heightSelector, orientation);
+  const config = resolutionPresetConfigFromSelector(selectSelector);
+  renderResolutionPresetPicker(selectSelector, widthSelector, heightSelector, orientation, config?.customLabel || 'Custom/manual size');
 }
 
 function syncResolutionPresetGroup(selectConfigs, widthSelector, heightSelector) {
@@ -358,14 +475,96 @@ function applyResolutionPreset(selectSelector, widthSelector, heightSelector, or
   return true;
 }
 
+function positionResolutionPresetPicker(selectSelector = state.resolutionPresetPickerOpenSelector) {
+  if (!selectSelector) return;
+  const { toggle, menu } = resolutionPresetPickerParts(selectSelector);
+  if (!toggle || !menu || menu.hidden) return;
+  const rect = toggle.getBoundingClientRect();
+  const margin = 12;
+  const gap = 6;
+  const viewportWidth = Math.max(window.innerWidth || 0, 320);
+  const viewportHeight = Math.max(window.innerHeight || 0, 320);
+  const availableWidth = viewportWidth - (margin * 2);
+  const targetWidth = viewportWidth < 700 ? availableWidth : Math.min(760, Math.max(520, rect.width * 3.4));
+  const width = Math.max(Math.min(targetWidth, availableWidth), Math.min(rect.width, availableWidth));
+  const left = Math.min(Math.max(margin, rect.left), Math.max(margin, viewportWidth - width - margin));
+  const below = viewportHeight - rect.bottom - margin - gap;
+  const above = rect.top - margin - gap;
+  const openAbove = below < 280 && above > below;
+  const maxHeight = Math.max(220, Math.min(Math.round(viewportHeight * 0.72), openAbove ? above : below));
+  const top = openAbove
+    ? Math.max(margin, rect.top - maxHeight - gap)
+    : Math.min(rect.bottom + gap, viewportHeight - maxHeight - margin);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${Math.max(margin, top)}px`;
+  menu.style.width = `${width}px`;
+  menu.style.setProperty('--image-lab-resolution-preset-menu-max-height', `${maxHeight}px`);
+}
+
+function focusResolutionPresetRow(selectSelector) {
+  const { menu } = resolutionPresetPickerParts(selectSelector);
+  if (!menu || menu.hidden) return;
+  const selected = menu.querySelector('.image-lab-resolution-preset-row.is-selected');
+  const fallback = menu.querySelector('.image-lab-resolution-preset-row');
+  window.setTimeout(() => (selected || fallback)?.focus?.(), 0);
+}
+
+function openResolutionPresetPicker(selectSelector) {
+  const config = resolutionPresetConfigFromSelector(selectSelector);
+  if (!config) return;
+  const previousSelector = state.resolutionPresetPickerOpenSelector;
+  state.resolutionPresetPickerOpenSelector = selectSelector;
+  if (previousSelector && previousSelector !== selectSelector) {
+    const previousConfig = resolutionPresetConfigFromSelector(previousSelector);
+    if (previousConfig) renderResolutionPresetPicker(previousConfig.selector, previousConfig.widthSelector, previousConfig.heightSelector, previousConfig.orientation, previousConfig.customLabel);
+  }
+  renderResolutionPresetPicker(config.selector, config.widthSelector, config.heightSelector, config.orientation, config.customLabel);
+  focusResolutionPresetRow(selectSelector);
+}
+
+function closeResolutionPresetPicker(options = {}) {
+  const selectSelector = state.resolutionPresetPickerOpenSelector;
+  if (!selectSelector) return;
+  state.resolutionPresetPickerOpenSelector = '';
+  const config = resolutionPresetConfigFromSelector(selectSelector);
+  if (config) renderResolutionPresetPicker(config.selector, config.widthSelector, config.heightSelector, config.orientation, config.customLabel);
+  if (options.focusToggle) resolutionPresetPickerParts(selectSelector).toggle?.focus?.();
+}
+
+function toggleResolutionPresetPicker(selectSelector) {
+  if (!selectSelector) return;
+  if (state.resolutionPresetPickerOpenSelector === selectSelector) closeResolutionPresetPicker();
+  else openResolutionPresetPicker(selectSelector);
+}
+
+function selectResolutionPresetFromPicker(selectSelector, value) {
+  const select = $(selectSelector);
+  if (!select) return;
+  select.value = value || '';
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  closeResolutionPresetPicker({ focusToggle: true });
+}
+
+function moveResolutionPresetFocus(direction) {
+  const { menu } = resolutionPresetPickerParts(state.resolutionPresetPickerOpenSelector);
+  if (!menu || menu.hidden) return;
+  const rows = Array.from(menu.querySelectorAll('.image-lab-resolution-preset-row'));
+  if (!rows.length) return;
+  const currentIndex = rows.indexOf(document.activeElement);
+  const nextIndex = currentIndex < 0
+    ? (direction > 0 ? 0 : rows.length - 1)
+    : (currentIndex + direction + rows.length) % rows.length;
+  rows[nextIndex]?.focus?.();
+}
+
 const RESOLUTION_PRESET_SELECTS = {
   imageLab: [
-    { selector: '#image-lab-portrait-size-preset', orientation: 'portrait', customLabel: 'Custom/manual portrait size' },
-    { selector: '#image-lab-landscape-size-preset', orientation: 'landscape', customLabel: 'Custom/manual landscape size' }
+    { selector: '#image-lab-portrait-size-preset', widthSelector: '#image-lab-width', heightSelector: '#image-lab-height', orientation: 'portrait', customLabel: 'Custom/manual portrait size' },
+    { selector: '#image-lab-landscape-size-preset', widthSelector: '#image-lab-width', heightSelector: '#image-lab-height', orientation: 'landscape', customLabel: 'Custom/manual landscape size' }
   ],
   playground: [
-    { selector: '#playground-portrait-size-preset', orientation: 'portrait', customLabel: 'Custom/manual portrait size' },
-    { selector: '#playground-landscape-size-preset', orientation: 'landscape', customLabel: 'Custom/manual landscape size' }
+    { selector: '#playground-portrait-size-preset', widthSelector: '#playground-width', heightSelector: '#playground-height', orientation: 'portrait', customLabel: 'Custom/manual portrait size' },
+    { selector: '#playground-landscape-size-preset', widthSelector: '#playground-width', heightSelector: '#playground-height', orientation: 'landscape', customLabel: 'Custom/manual landscape size' }
   ]
 };
 
@@ -1807,8 +2006,107 @@ async function handleDownloadSubmit(event) {
   }
 }
 
+function handleResolutionPresetToggleClick(event) {
+  const selectSelector = resolutionPresetSelectorFromElement(event.currentTarget || event.target);
+  toggleResolutionPresetPicker(selectSelector);
+}
+
+function handleResolutionPresetToggleKeydown(event) {
+  if (event.key === 'ArrowDown') {
+    const selectSelector = resolutionPresetSelectorFromElement(event.currentTarget || event.target);
+    event.preventDefault();
+    openResolutionPresetPicker(selectSelector);
+  }
+}
+
+function handleResolutionPresetListClick(event) {
+  const row = event.target.closest?.('[data-resolution-preset-value]');
+  if (!row) return;
+  const selectSelector = resolutionPresetSelectorFromElement(row);
+  if (!selectSelector) return;
+  event.preventDefault();
+  selectResolutionPresetFromPicker(selectSelector, row.dataset.resolutionPresetValue || '');
+}
+
+function handleResolutionPresetListKeydown(event) {
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    moveResolutionPresetFocus(1);
+    return;
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    moveResolutionPresetFocus(-1);
+    return;
+  }
+  if (event.key === 'Home') {
+    const { menu } = resolutionPresetPickerParts(state.resolutionPresetPickerOpenSelector);
+    event.preventDefault();
+    menu?.querySelector?.('.image-lab-resolution-preset-row')?.focus?.();
+    return;
+  }
+  if (event.key === 'End') {
+    const { menu } = resolutionPresetPickerParts(state.resolutionPresetPickerOpenSelector);
+    const rows = menu?.querySelectorAll?.('.image-lab-resolution-preset-row') || [];
+    event.preventDefault();
+    rows[rows.length - 1]?.focus?.();
+    return;
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeResolutionPresetPicker({ focusToggle: true });
+    return;
+  }
+  if (event.key === 'Enter' || event.key === ' ') {
+    const row = event.target.closest?.('[data-resolution-preset-value]');
+    if (!row) return;
+    const selectSelector = resolutionPresetSelectorFromElement(row);
+    if (!selectSelector) return;
+    event.preventDefault();
+    selectResolutionPresetFromPicker(selectSelector, row.dataset.resolutionPresetValue || '');
+  }
+}
+
+function handleResolutionPresetDocumentClick(event) {
+  if (!state.resolutionPresetPickerOpenSelector) return;
+  const { picker } = resolutionPresetPickerParts(state.resolutionPresetPickerOpenSelector);
+  if (picker && picker.contains(event.target)) return;
+  closeResolutionPresetPicker();
+}
+
+function handleResolutionPresetDocumentKeydown(event) {
+  if (!state.resolutionPresetPickerOpenSelector) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeResolutionPresetPicker({ focusToggle: true });
+  }
+}
+
+function bindResolutionPresetPickers(selectConfigs, onChange) {
+  for (const config of selectConfigs) {
+    $(config.selector)?.addEventListener('change', () => {
+      const applied = applyResolutionPreset(config.selector, config.widthSelector, config.heightSelector, config.orientation, selectConfigs);
+      if (!applied) renderResolutionPresetPicker(config.selector, config.widthSelector, config.heightSelector, config.orientation, config.customLabel);
+      onChange?.();
+    });
+    const { toggle, list } = resolutionPresetPickerParts(config.selector);
+    toggle?.addEventListener('click', handleResolutionPresetToggleClick);
+    toggle?.addEventListener('keydown', handleResolutionPresetToggleKeydown);
+    list?.addEventListener('click', handleResolutionPresetListClick);
+    list?.addEventListener('keydown', handleResolutionPresetListKeydown);
+  }
+}
+
+function wireResolutionPresetPickerDismissal() {
+  document.addEventListener('click', handleResolutionPresetDocumentClick);
+  document.addEventListener('keydown', handleResolutionPresetDocumentKeydown);
+  window.addEventListener('resize', () => positionResolutionPresetPicker());
+  window.addEventListener('scroll', () => positionResolutionPresetPicker(), true);
+}
+
 function wireEvents() {
   $('#refresh-button').addEventListener('click', refresh);
+  wireResolutionPresetPickerDismissal();
 
   $('#llm-image-prompt-form')?.addEventListener('submit', handleLlmImagePromptSettingsSubmit);
   $('#llm-image-prompt-test')?.addEventListener('click', handleLlmImagePromptTest);
@@ -1848,12 +2146,9 @@ function wireEvents() {
     applyWorkflowDefaults(true);
     updatePlaygroundPreview();
   });
-  for (const config of RESOLUTION_PRESET_SELECTS.playground) {
-    $(config.selector)?.addEventListener('change', () => {
-      applyResolutionPreset(config.selector, '#playground-width', '#playground-height', config.orientation, RESOLUTION_PRESET_SELECTS.playground);
-      updatePlaygroundPreview();
-    });
-  }
+  bindResolutionPresetPickers(RESOLUTION_PRESET_SELECTS.playground, () => {
+    updatePlaygroundPreview();
+  });
   $('#playground-load-selected').addEventListener('click', () => handlePlaygroundModelButton('load'));
   $('#playground-set-selected-default').addEventListener('click', () => handlePlaygroundModelButton('default'));
   $('#playground-preload-selected-startup').addEventListener('click', () => handlePlaygroundModelButton('startup'));

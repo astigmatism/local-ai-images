@@ -2381,14 +2381,38 @@ function renderImageGeneratorHtml(): string {
                 <span class="field-label">Height <span class="field-help" tabindex="0" title="Larger height increases image size and VRAM/memory use. Reduce it if the image is too large, slow, or causing memory failures.">?</span></span>
                 <input id="image-lab-height" type="number" min="64" max="4096" step="16" required>
               </label>
-              <label class="image-lab-resolution-preset-label">
-                <span class="field-label">Portrait preset <span class="field-help" tabindex="0" title="Height-greater-than-width preset suggestions, grouped by the same tier ladder. Width and height stay editable for custom workflow sizes.">?</span></span>
-                <select id="image-lab-portrait-size-preset" aria-label="Portrait image size preset"></select>
-              </label>
-              <label class="image-lab-resolution-preset-label">
-                <span class="field-label">Landscape preset <span class="field-help" tabindex="0" title="Width-greater-than-height preset suggestions, grouped by the same tier ladder. Width and height stay editable for custom workflow sizes.">?</span></span>
-                <select id="image-lab-landscape-size-preset" aria-label="Landscape image size preset"></select>
-              </label>
+              <div class="image-lab-resolution-preset-label" role="group" aria-labelledby="image-lab-portrait-size-preset-label">
+                <span id="image-lab-portrait-size-preset-label" class="field-label">Portrait preset <span class="field-help" tabindex="0" title="Height-greater-than-width preset suggestions, grouped by the same tier ladder. Width and height stay editable for custom workflow sizes.">?</span></span>
+                <div class="image-lab-resolution-preset-picker" data-resolution-preset-picker>
+                  <select id="image-lab-portrait-size-preset" class="visually-hidden image-lab-resolution-preset-native" tabindex="-1" aria-hidden="true" aria-label="Portrait image size preset"></select>
+                  <button class="image-lab-resolution-preset-toggle" type="button" data-resolution-preset-toggle aria-haspopup="listbox" aria-expanded="false" aria-controls="image-lab-portrait-size-preset-menu" aria-label="Select portrait image size preset">
+                    <span class="image-lab-resolution-preset-current-wrap">
+                      <span class="image-lab-resolution-preset-current" data-resolution-preset-current>Custom/manual portrait size</span>
+                      <span class="image-lab-resolution-preset-current-meta" data-resolution-preset-current-meta></span>
+                    </span>
+                    <span class="image-lab-resolution-preset-caret" aria-hidden="true">▾</span>
+                  </button>
+                  <div id="image-lab-portrait-size-preset-menu" class="image-lab-resolution-preset-menu" role="listbox" aria-label="Portrait image size presets" hidden>
+                    <div class="image-lab-resolution-preset-list" data-resolution-preset-list></div>
+                  </div>
+                </div>
+              </div>
+              <div class="image-lab-resolution-preset-label" role="group" aria-labelledby="image-lab-landscape-size-preset-label">
+                <span id="image-lab-landscape-size-preset-label" class="field-label">Landscape preset <span class="field-help" tabindex="0" title="Width-greater-than-height preset suggestions, grouped by the same tier ladder. Width and height stay editable for custom workflow sizes.">?</span></span>
+                <div class="image-lab-resolution-preset-picker" data-resolution-preset-picker>
+                  <select id="image-lab-landscape-size-preset" class="visually-hidden image-lab-resolution-preset-native" tabindex="-1" aria-hidden="true" aria-label="Landscape image size preset"></select>
+                  <button class="image-lab-resolution-preset-toggle" type="button" data-resolution-preset-toggle aria-haspopup="listbox" aria-expanded="false" aria-controls="image-lab-landscape-size-preset-menu" aria-label="Select landscape image size preset">
+                    <span class="image-lab-resolution-preset-current-wrap">
+                      <span class="image-lab-resolution-preset-current" data-resolution-preset-current>Custom/manual landscape size</span>
+                      <span class="image-lab-resolution-preset-current-meta" data-resolution-preset-current-meta></span>
+                    </span>
+                    <span class="image-lab-resolution-preset-caret" aria-hidden="true">▾</span>
+                  </button>
+                  <div id="image-lab-landscape-size-preset-menu" class="image-lab-resolution-preset-menu" role="listbox" aria-label="Landscape image size presets" hidden>
+                    <div class="image-lab-resolution-preset-list" data-resolution-preset-list></div>
+                  </div>
+                </div>
+              </div>
               <label>
                 <span class="field-label">Steps <span class="field-help" tabindex="0" title="More steps can refine detail but increase generation time. Lower steps are useful for fast exploration.">?</span></span>
                 <input id="image-lab-steps" type="number" min="1" max="150" step="1" required>
@@ -2725,8 +2749,38 @@ function renderPortalHtml(): string {
           <div class="form-grid three">
             <label>Width <input id="playground-width" type="number" min="64" max="4096" step="64"></label>
             <label>Height <input id="playground-height" type="number" min="64" max="4096" step="64"></label>
-            <label>Portrait preset <select id="playground-portrait-size-preset" aria-label="Portrait image size preset"></select></label>
-            <label>Landscape preset <select id="playground-landscape-size-preset" aria-label="Landscape image size preset"></select></label>
+            <div class="image-lab-resolution-preset-label playground-resolution-preset-label" role="group" aria-labelledby="playground-portrait-size-preset-label">
+              <span id="playground-portrait-size-preset-label" class="field-label">Portrait preset</span>
+              <div class="image-lab-resolution-preset-picker" data-resolution-preset-picker>
+                <select id="playground-portrait-size-preset" class="visually-hidden image-lab-resolution-preset-native" tabindex="-1" aria-hidden="true" aria-label="Portrait image size preset"></select>
+                <button class="image-lab-resolution-preset-toggle" type="button" data-resolution-preset-toggle aria-haspopup="listbox" aria-expanded="false" aria-controls="playground-portrait-size-preset-menu" aria-label="Select portrait image size preset">
+                  <span class="image-lab-resolution-preset-current-wrap">
+                    <span class="image-lab-resolution-preset-current" data-resolution-preset-current>Custom/manual portrait size</span>
+                    <span class="image-lab-resolution-preset-current-meta" data-resolution-preset-current-meta></span>
+                  </span>
+                  <span class="image-lab-resolution-preset-caret" aria-hidden="true">▾</span>
+                </button>
+                <div id="playground-portrait-size-preset-menu" class="image-lab-resolution-preset-menu" role="listbox" aria-label="Portrait image size presets" hidden>
+                  <div class="image-lab-resolution-preset-list" data-resolution-preset-list></div>
+                </div>
+              </div>
+            </div>
+            <div class="image-lab-resolution-preset-label playground-resolution-preset-label" role="group" aria-labelledby="playground-landscape-size-preset-label">
+              <span id="playground-landscape-size-preset-label" class="field-label">Landscape preset</span>
+              <div class="image-lab-resolution-preset-picker" data-resolution-preset-picker>
+                <select id="playground-landscape-size-preset" class="visually-hidden image-lab-resolution-preset-native" tabindex="-1" aria-hidden="true" aria-label="Landscape image size preset"></select>
+                <button class="image-lab-resolution-preset-toggle" type="button" data-resolution-preset-toggle aria-haspopup="listbox" aria-expanded="false" aria-controls="playground-landscape-size-preset-menu" aria-label="Select landscape image size preset">
+                  <span class="image-lab-resolution-preset-current-wrap">
+                    <span class="image-lab-resolution-preset-current" data-resolution-preset-current>Custom/manual landscape size</span>
+                    <span class="image-lab-resolution-preset-current-meta" data-resolution-preset-current-meta></span>
+                  </span>
+                  <span class="image-lab-resolution-preset-caret" aria-hidden="true">▾</span>
+                </button>
+                <div id="playground-landscape-size-preset-menu" class="image-lab-resolution-preset-menu" role="listbox" aria-label="Landscape image size presets" hidden>
+                  <div class="image-lab-resolution-preset-list" data-resolution-preset-list></div>
+                </div>
+              </div>
+            </div>
             <label>Steps <input id="playground-steps" type="number" min="1" max="150" step="1"></label>
             <label>CFG scale <input id="playground-cfg-scale" type="number" min="0" max="30" step="0.5"></label>
             <label>Seed <input id="playground-seed" type="number" step="1" value="-1"></label>
