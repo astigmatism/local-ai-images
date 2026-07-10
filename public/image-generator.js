@@ -6,11 +6,14 @@ const GALLERY_LIMIT_STEP = 48;
 const DEFAULT_TILE_SIZE = 300;
 const GALLERY_SIZE_STORAGE_KEY = 'local-ai-images-gallery-size';
 const CONTROLS_HEIGHT_STORAGE_KEY = 'local-ai-images-controls-height';
+const CONTROLS_COLUMN_RATIOS_STORAGE_KEY = 'local-ai-images-controls-column-ratios-v1';
 const IMAGE_LAB_FORM_STORAGE_KEY = 'local-ai-images-image-lab-form-values-v1';
 const GENERATION_SOURCE_FAVORITES_STORAGE_KEY = 'local-ai-images-generation-source-favorites-v1';
 const CONTROLS_MIN_HEIGHT = 240;
 const CONTROLS_DEFAULT_HEIGHT = 320;
 const CONTROLS_MAX_VIEWPORT_RATIO = 0.58;
+const CONTROLS_COLUMN_DEFAULT_RATIOS = [1.45, 0.95, 0.6];
+const CONTROLS_COLUMN_MIN_WIDTHS = [260, 190, 180];
 const GENERATION_POLL_INTERVAL_MS = 1500;
 const GENERATION_POLL_ATTEMPTS = 1200;
 const GENERATION_POLL_FAILURE_LIMIT = 5;
@@ -100,6 +103,7 @@ const state = {
   galleryLimit: DEFAULT_GALLERY_LIMIT,
   galleryTileSize: readStoredGallerySize(),
   controlsHeight: readStoredControlsHeight(),
+  controlsColumnRatios: readStoredControlsColumnRatios(),
   lastResult: null
 };
 
@@ -165,6 +169,25 @@ function readStoredControlsHeight() {
   const raw = window.localStorage.getItem(CONTROLS_HEIGHT_STORAGE_KEY);
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeControlsColumnRatios(value) {
+  const source = Array.isArray(value) && value.length === 3 ? value : CONTROLS_COLUMN_DEFAULT_RATIOS;
+  const numbers = source.map((item) => Number(item));
+  if (numbers.some((item) => !Number.isFinite(item) || item <= 0)) return [...CONTROLS_COLUMN_DEFAULT_RATIOS];
+  const total = numbers.reduce((sum, item) => sum + item, 0);
+  if (!Number.isFinite(total) || total <= 0) return [...CONTROLS_COLUMN_DEFAULT_RATIOS];
+  return numbers.map((item) => item / total);
+}
+
+function readStoredControlsColumnRatios() {
+  try {
+    const raw = window.localStorage.getItem(CONTROLS_COLUMN_RATIOS_STORAGE_KEY);
+    if (!raw) return [...CONTROLS_COLUMN_DEFAULT_RATIOS];
+    return normalizeControlsColumnRatios(JSON.parse(raw));
+  } catch {
+    return [...CONTROLS_COLUMN_DEFAULT_RATIOS];
+  }
 }
 
 function readStoredGenerationSourceFavoriteIds() {
@@ -462,6 +485,138 @@ function applyControlsHeight(height = state.controlsHeight, persist = false) {
     handle.setAttribute('aria-valuenow', String(nextHeight));
   }
   if (persist) window.localStorage.setItem(CONTROLS_HEIGHT_STORAGE_KEY, String(nextHeight));
+}
+
+function controlsColumnsAreStacked() {
+  return window.matchMedia?.('(max-width: 780px)')?.matches === true;
+}
+
+function controlsColumnHandles() {
+  return Array.from(document.querySelectorAll('[data-controls-column-resize]'));
+}
+
+function controlsColumnHandleWidth() {
+  const stacked = controlsColumnsAreStacked();
+  return controlsColumnHandles().reduce((sum, handle) => {
+    const width = handle.getBoundingClientRect?.().width || 0;
+    return sum + (width > 0 ? width : stacked ? 0 : 10);
+  }, 0);
+}
+
+function controlsColumnAvailableWidth() {
+  const grid = $('#image-lab-main-grid');
+  if (!grid) return 0;
+  const width = grid.getBoundingClientRect().width;
+  return Math.max(0, width - controlsColumnHandleWidth());
+}
+
+function controlsColumnWidthsFromRatios(ratios = state.controlsColumnRatios) {
+  const normalized = normalizeControlsColumnRatios(ratios);
+  const available = controlsColumnAvailableWidth();
+  if (available <= 0) return CONTROLS_COLUMN_MIN_WIDTHS.map(() => 0);
+  const minTotal = CONTROLS_COLUMN_MIN_WIDTHS.reduce((sum, width) => sum + width, 0);
+  if (available <= minTotal) {
+    const scale = available / minTotal;
+    return CONTROLS_COLUMN_MIN_WIDTHS.map((width) => Math.max(0, width * scale));
+  }
+
+  const widths = new Array(3).fill(0);
+  const locked = new Array(3).fill(false);
+  let remainingWidth = available;
+  let remainingRatio = normalized.reduce((sum, ratio) => sum + ratio, 0);
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    let changed = false;
+    for (let index = 0; index < 3; index += 1) {
+      if (locked[index]) continue;
+      const candidate = remainingRatio > 0 ? remainingWidth * normalized[index] / remainingRatio : 0;
+      if (candidate < CONTROLS_COLUMN_MIN_WIDTHS[index]) {
+        widths[index] = CONTROLS_COLUMN_MIN_WIDTHS[index];
+        locked[index] = true;
+        remainingWidth -= widths[index];
+        remainingRatio -= normalized[index];
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  for (let index = 0; index < 3; index += 1) {
+    if (locked[index]) continue;
+    widths[index] = remainingRatio > 0 ? remainingWidth * normalized[index] / remainingRatio : remainingWidth / 3;
+  }
+  return widths;
+}
+
+function clearControlsColumnVariables(grid = $('#image-lab-main-grid')) {
+  if (!grid) return;
+  grid.style.removeProperty('--image-lab-column-prompts');
+  grid.style.removeProperty('--image-lab-column-parameters');
+  grid.style.removeProperty('--image-lab-column-actions');
+}
+
+function syncControlsColumnHandleAttributes(ratios = state.controlsColumnRatios) {
+  const normalized = normalizeControlsColumnRatios(ratios);
+  controlsColumnHandles().forEach((handle, index) => {
+    const leftPercent = Math.round(normalized.slice(0, index + 1).reduce((sum, ratio) => sum + ratio, 0) * 100);
+    handle.setAttribute('aria-valuemin', '0');
+    handle.setAttribute('aria-valuemax', '100');
+    handle.setAttribute('aria-valuenow', String(leftPercent));
+    handle.setAttribute('aria-valuetext', `Left columns use ${leftPercent}% of the controls width`);
+  });
+}
+
+function applyControlsColumnWidths(widths, persist = false) {
+  const grid = $('#image-lab-main-grid');
+  if (!grid) return;
+  if (controlsColumnsAreStacked()) {
+    clearControlsColumnVariables(grid);
+    syncControlsColumnHandleAttributes();
+    return;
+  }
+
+  const total = widths.reduce((sum, width) => sum + Math.max(0, width), 0);
+  const ratios = total > 0 ? widths.map((width) => Math.max(0.0001, width) / total) : [...CONTROLS_COLUMN_DEFAULT_RATIOS];
+  const normalized = normalizeControlsColumnRatios(ratios);
+  state.controlsColumnRatios = normalized;
+  const nextWidths = controlsColumnWidthsFromRatios(normalized);
+  grid.style.setProperty('--image-lab-column-prompts', `${Math.round(nextWidths[0])}px`);
+  grid.style.setProperty('--image-lab-column-parameters', `${Math.round(nextWidths[1])}px`);
+  grid.style.setProperty('--image-lab-column-actions', `${Math.round(nextWidths[2])}px`);
+  syncControlsColumnHandleAttributes(normalized);
+
+  if (persist) window.localStorage.setItem(CONTROLS_COLUMN_RATIOS_STORAGE_KEY, JSON.stringify(normalized));
+}
+
+function applyControlsColumnLayout(persist = false) {
+  if (controlsColumnsAreStacked()) {
+    clearControlsColumnVariables();
+    syncControlsColumnHandleAttributes();
+    return;
+  }
+  applyControlsColumnWidths(controlsColumnWidthsFromRatios(), persist);
+}
+
+function controlsColumnResizeIndex(handle) {
+  const value = handle?.dataset?.controlsColumnResize || '';
+  return value === 'parameters-actions' ? 1 : 0;
+}
+
+function resizeControlsColumnsFromStart(startWidths, handleIndex, delta, persist = false) {
+  const previousIndex = handleIndex;
+  const nextIndex = handleIndex + 1;
+  const minDelta = CONTROLS_COLUMN_MIN_WIDTHS[previousIndex] - startWidths[previousIndex];
+  const maxDelta = startWidths[nextIndex] - CONTROLS_COLUMN_MIN_WIDTHS[nextIndex];
+  const safeDelta = maxDelta < minDelta ? 0 : clampNumber(delta, minDelta, maxDelta);
+  const nextWidths = [...startWidths];
+  nextWidths[previousIndex] += safeDelta;
+  nextWidths[nextIndex] -= safeDelta;
+  applyControlsColumnWidths(nextWidths, persist);
+}
+
+function nudgeControlsColumns(handleIndex, delta, persist = true) {
+  const startWidths = controlsColumnWidthsFromRatios();
+  resizeControlsColumnsFromStart(startWidths, handleIndex, delta, persist);
 }
 
 function syncPromptDrawerLayout() {
@@ -2333,6 +2488,7 @@ function renderControlChrome() {
       : 'Turn on Auto-Generate or LLM Auto to enable slideshow.';
   }
   applyControlsHeight();
+  applyControlsColumnLayout();
   updatePayloadPreview();
   refreshImageLabSlideshowStatus();
   if (state.autoGenerateEnabled) queueAutoGenerationCheck();
@@ -4164,6 +4320,23 @@ function favoriteDetailsHtml(favorite, model, seed, dimensions, updated) {
   </dl>`;
 }
 
+function favoriteHasText(value) {
+  return String(value || '').trim().length > 0;
+}
+
+function favoritePromptBadge(label, present) {
+  const stateLabel = present ? 'present' : 'not saved';
+  return `<span class="image-lab-favorite-prompt-badge${present ? ' is-present' : ' is-missing'}" title="${escapeHtml(`${label} prompt ${stateLabel}`)}">${escapeHtml(label)}</span>`;
+}
+
+function favoritePromptBadgesHtml(positivePresent, negativePresent, llmPresent) {
+  return `<div class="image-lab-favorite-prompt-badges" aria-label="Prompt fields saved on this favorite">
+    ${favoritePromptBadge('Positive', positivePresent)}
+    ${favoritePromptBadge('Negative', negativePresent)}
+    ${favoritePromptBadge('LLM', llmPresent)}
+  </div>`;
+}
+
 function favoriteTextBlock(label, value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -4219,9 +4392,14 @@ function renderFavorites() {
   target.innerHTML = `${errorHtml}${favorites.map((favorite) => {
     const imageUrl = favoriteImageUrl(favorite);
     const caption = favorite.title || favorite.promptPreview || favorite.jobId || 'Image favorite';
-    const promptText = favorite.prompt || favorite.promptPreview || caption;
-    const negativeText = favorite.negativePrompt || favorite.negativePromptPreview || '';
-    const llmGuidance = favorite.llmImagePromptGuidance || favorite.llmImagePromptGuidancePreview || llmGuidanceFromPayload(favoritePayload(favorite));
+    const payload = favoritePayload(favorite);
+    const savedPositiveText = favorite.prompt || favorite.promptPreview || payloadString(payload, ['prompt', 'positive_prompt', 'positivePrompt']);
+    const promptText = savedPositiveText || caption;
+    const negativeText = favorite.negativePrompt || favorite.negativePromptPreview || payloadString(payload, ['negative_prompt', 'negativePrompt']);
+    const llmGuidance = favorite.llmImagePromptGuidance || favorite.llmImagePromptGuidancePreview || llmGuidanceFromPayload(payload);
+    const positivePromptPresent = favoriteHasText(savedPositiveText);
+    const negativePromptPresent = favoriteHasText(negativeText);
+    const llmGuidancePresent = favoriteHasText(llmGuidance);
     const model = favoriteModelLabel(favorite);
     const seed = favoriteSeedLabel(favorite);
     const dimensions = favoriteDimensions(favorite);
@@ -4232,7 +4410,10 @@ function renderFavorites() {
       </button>
       <div class="image-lab-favorite-body">
         <div class="image-lab-favorite-details">
-          <strong title="${escapeHtml(caption)}">${escapeHtml(previewText(caption, 120))}</strong>
+          <div class="image-lab-favorite-heading">
+            <strong title="${escapeHtml(caption)}">${escapeHtml(previewText(caption, 120))}</strong>
+            ${favoritePromptBadgesHtml(positivePromptPresent, negativePromptPresent, llmGuidancePresent)}
+          </div>
           ${favoriteDetailsHtml(favorite, model, seed, dimensions, updated)}
           ${favoriteTextBlock('Prompt', promptText)}
           ${favoriteTextBlock('Negative', negativeText)}
@@ -4962,6 +5143,70 @@ function initResizableControls() {
   window.addEventListener('resize', () => applyControlsHeight());
 }
 
+function initResizableControlColumns() {
+  const handles = controlsColumnHandles();
+  if (handles.length === 0) return;
+  applyControlsColumnLayout();
+
+  handles.forEach((handle) => {
+    let dragStartX = 0;
+    let dragStartWidths = null;
+    let isDragging = false;
+    const handleIndex = controlsColumnResizeIndex(handle);
+
+    const finishDrag = (event) => {
+      if (!isDragging) return;
+      isDragging = false;
+      document.body.classList.remove('image-lab-column-resizing');
+      try {
+        handle.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture may already be released if the drag ended outside the handle.
+      }
+      applyControlsColumnLayout(true);
+    };
+
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || controlsColumnsAreStacked()) return;
+      event.preventDefault();
+      isDragging = true;
+      dragStartX = event.clientX;
+      dragStartWidths = controlsColumnWidthsFromRatios();
+      document.body.classList.add('image-lab-column-resizing');
+      handle.setPointerCapture(event.pointerId);
+    });
+
+    handle.addEventListener('pointermove', (event) => {
+      if (!isDragging || !dragStartWidths) return;
+      event.preventDefault();
+      resizeControlsColumnsFromStart(dragStartWidths, handleIndex, event.clientX - dragStartX);
+    });
+
+    handle.addEventListener('pointerup', finishDrag);
+    handle.addEventListener('pointercancel', finishDrag);
+    handle.addEventListener('lostpointercapture', () => {
+      if (!isDragging) return;
+      isDragging = false;
+      document.body.classList.remove('image-lab-column-resizing');
+      applyControlsColumnLayout(true);
+    });
+
+    handle.addEventListener('keydown', (event) => {
+      const step = event.shiftKey ? 48 : 24;
+      let delta = null;
+      if (event.key === 'ArrowLeft') delta = -step;
+      if (event.key === 'ArrowRight') delta = step;
+      if (event.key === 'Home') delta = -10000;
+      if (event.key === 'End') delta = 10000;
+      if (delta === null || controlsColumnsAreStacked()) return;
+      event.preventDefault();
+      nudgeControlsColumns(handleIndex, delta, true);
+    });
+  });
+
+  window.addEventListener('resize', () => applyControlsColumnLayout());
+}
+
 
 function handleGenerationSourcePickerClick(event) {
   const favoriteButton = event.target.closest?.('[data-source-favorite-id]');
@@ -5060,6 +5305,7 @@ function handleGenerationSourceDocumentKeydown(event) {
 
 function wireEvents() {
   initResizableControls();
+  initResizableControlColumns();
   $('#image-lab-source-toggle')?.addEventListener('click', toggleGenerationSourcePicker);
   $('#image-lab-source-list')?.addEventListener('click', handleGenerationSourcePickerClick);
   $('#image-lab-source-list')?.addEventListener('input', handleGenerationSourcePickerInput);

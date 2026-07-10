@@ -2369,6 +2369,8 @@ function renderImageGeneratorHtml(): string {
             </details>
           </section>
 
+          <div class="image-lab-column-resize-handle" data-controls-column-resize="prompts-parameters" role="separator" aria-label="Resize prompt and input columns" aria-orientation="vertical" tabindex="0"></div>
+
           <div class="image-lab-parameter-column" aria-label="Generation parameters">
             <div class="image-lab-parameter-grid">
               <label>
@@ -2401,33 +2403,35 @@ function renderImageGeneratorHtml(): string {
                 <span class="hint image-lab-seed-note">blank = random</span>
               </label>
             </div>
-
-            <div class="image-lab-action-panel">
-              <div class="image-lab-auto-generate-row">
-                <button id="image-lab-slideshow-start" class="secondary image-lab-slideshow-start is-disabled" type="button" disabled aria-disabled="true" title="Turn on Auto-Generate or LLM Auto to enable slideshow.">Slideshow</button>
-                <div class="image-lab-auto-generate-controls">
-                  <label class="image-lab-auto-generate-switch" data-state="off" title="When enabled, starts the next image automatically after the current active generation finishes.">
-                    <input id="image-lab-auto-generate" class="image-lab-auto-generate-input" type="checkbox" role="switch" aria-checked="false" aria-describedby="image-lab-auto-generate-state">
-                    <span class="image-lab-auto-generate-shell">
-                      <span class="image-lab-auto-generate-label">Auto-Generate</span>
-                      <span class="image-lab-auto-generate-track" aria-hidden="true"><span class="image-lab-auto-generate-thumb"></span></span>
-                      <span id="image-lab-auto-generate-state" class="image-lab-auto-generate-state">Off</span>
-                    </span>
-                  </label>
-                  <label class="image-lab-auto-generate-switch image-lab-llm-auto-generate-switch" data-state="off" title="Build each positive prompt with the local LLM before automatically generating an image.">
-                    <input id="image-lab-llm-auto-generate" class="image-lab-auto-generate-input" type="checkbox" role="switch" aria-checked="false" aria-describedby="image-lab-llm-auto-generate-state image-lab-llm-auto-status">
-                    <span class="image-lab-auto-generate-shell">
-                      <span class="image-lab-auto-generate-label">LLM Auto</span>
-                      <span class="image-lab-auto-generate-track" aria-hidden="true"><span class="image-lab-auto-generate-thumb"></span></span>
-                      <span id="image-lab-llm-auto-generate-state" class="image-lab-auto-generate-state">Off</span>
-                    </span>
-                  </label>
-                  <div id="image-lab-llm-auto-status" class="image-lab-llm-auto-status" aria-live="polite">Off</div>
-                </div>
-              </div>
-              <button id="image-lab-generate" type="submit" title="Submit the current generation request. Repeated clicks queue separate jobs with their own pending gallery cards.">Generate!</button>
-            </div>
           </div>
+
+          <div class="image-lab-column-resize-handle" data-controls-column-resize="parameters-actions" role="separator" aria-label="Resize input and generation action columns" aria-orientation="vertical" tabindex="0"></div>
+
+          <section class="image-lab-action-panel" aria-label="Generation actions">
+            <div class="image-lab-auto-generate-row">
+              <button id="image-lab-slideshow-start" class="secondary image-lab-slideshow-start is-disabled" type="button" disabled aria-disabled="true" title="Turn on Auto-Generate or LLM Auto to enable slideshow.">Slideshow</button>
+              <div class="image-lab-auto-generate-controls">
+                <label class="image-lab-auto-generate-switch" data-state="off" title="When enabled, starts the next image automatically after the current active generation finishes.">
+                  <input id="image-lab-auto-generate" class="image-lab-auto-generate-input" type="checkbox" role="switch" aria-checked="false" aria-describedby="image-lab-auto-generate-state">
+                  <span class="image-lab-auto-generate-shell">
+                    <span class="image-lab-auto-generate-label">Auto-Generate</span>
+                    <span class="image-lab-auto-generate-track" aria-hidden="true"><span class="image-lab-auto-generate-thumb"></span></span>
+                    <span id="image-lab-auto-generate-state" class="image-lab-auto-generate-state">Off</span>
+                  </span>
+                </label>
+                <label class="image-lab-auto-generate-switch image-lab-llm-auto-generate-switch" data-state="off" title="Build each positive prompt with the local LLM before automatically generating an image.">
+                  <input id="image-lab-llm-auto-generate" class="image-lab-auto-generate-input" type="checkbox" role="switch" aria-checked="false" aria-describedby="image-lab-llm-auto-generate-state image-lab-llm-auto-status">
+                  <span class="image-lab-auto-generate-shell">
+                    <span class="image-lab-auto-generate-label">LLM Auto</span>
+                    <span class="image-lab-auto-generate-track" aria-hidden="true"><span class="image-lab-auto-generate-thumb"></span></span>
+                    <span id="image-lab-llm-auto-generate-state" class="image-lab-auto-generate-state">Off</span>
+                  </span>
+                </label>
+                <div id="image-lab-llm-auto-status" class="image-lab-llm-auto-status" aria-live="polite">Off</div>
+              </div>
+            </div>
+            <button id="image-lab-generate" type="submit" title="Submit the current generation request. Repeated clicks queue separate jobs with their own pending gallery cards.">Generate!</button>
+          </section>
         </div>
 
         <details class="image-lab-advanced compact-details">
